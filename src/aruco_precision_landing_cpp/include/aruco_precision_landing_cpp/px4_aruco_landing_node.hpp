@@ -1,0 +1,168 @@
+// Copyright 2026 user
+// SPDX-License-Identifier: Apache-2.0
+
+#ifndef ARUCO_PRECISION_LANDING_CPP__PX4_ARUCO_LANDING_NODE_HPP_
+#define ARUCO_PRECISION_LANDING_CPP__PX4_ARUCO_LANDING_NODE_HPP_
+
+#include <cstdint>
+#include <memory>
+#include <string>
+
+#include <geometry_msgs/msg/pose_stamped.hpp>
+#include <px4_msgs/msg/offboard_control_mode.hpp>
+#include <px4_msgs/msg/trajectory_setpoint.hpp>
+#include <px4_msgs/msg/vehicle_command.hpp>
+#include <px4_msgs/msg/vehicle_local_position.hpp>
+#include <px4_msgs/msg/vehicle_odometry.hpp>
+#include <px4_msgs/msg/vehicle_status.hpp>
+#include <rclcpp/rclcpp.hpp>
+#include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/int32.hpp>
+#include <std_msgs/msg/string.hpp>
+
+namespace aruco_precision_landing_cpp
+{
+
+enum class LandingState
+{
+  INIT,
+  WAIT_FOR_PX4,
+  OFFBOARD_PRE_STREAM,
+  ARM_AND_TAKEOFF,
+  GOTO_ARUCO_AREA,
+  WAIT_ARUCO,
+  CENTER_ABOVE_MARKER,
+  DESCEND_WITH_TRACKING,
+  FINAL_LAND,
+  DONE,
+  ABORT
+};
+
+class Px4ArucoLandingNode : public rclcpp::Node
+{
+public:
+  Px4ArucoLandingNode();
+
+private:
+  void declare_and_load_parameters();
+  void validate_parameters() const;
+  void create_ros_interfaces();
+
+  void aruco_pose_callback(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
+  void aruco_visible_callback(const std_msgs::msg::Bool::SharedPtr msg);
+  void aruco_id_callback(const std_msgs::msg::Int32::SharedPtr msg);
+  void vehicle_status_callback(const px4_msgs::msg::VehicleStatus::SharedPtr msg);
+  void vehicle_local_position_callback(
+    const px4_msgs::msg::VehicleLocalPosition::SharedPtr msg);
+  void vehicle_odometry_callback(const px4_msgs::msg::VehicleOdometry::SharedPtr msg);
+
+  void control_timer_callback();
+  void run_state_machine(const rclcpp::Time & now, double dt);
+  void transition_to(LandingState new_state);
+
+  bool px4_data_ready() const;
+  bool marker_is_fresh(const rclcpp::Time & now) const;
+  bool should_retry_command(const rclcpp::Time & now) const;
+  bool compute_local_marker_error(double & error_north, double & error_east) const;
+
+  void set_target(double x, double y, double z, double yaw);
+  void publish_offboard_control_mode();
+  void publish_trajectory_setpoint();
+  void publish_vehicle_command(
+    uint32_t command,
+    float param1 = 0.0F,
+    float param2 = 0.0F,
+    float param3 = 0.0F,
+    float param4 = 0.0F,
+    double param5 = 0.0,
+    double param6 = 0.0,
+    float param7 = 0.0F);
+  void publish_landing_state();
+  void publish_target_pose();
+
+  static const char * state_name(LandingState state);
+  static double quaternion_to_yaw(const float q[4]);
+  static bool quaternion_is_valid(const float q[4]);
+
+  double control_rate_hz_{20.0};
+  double takeoff_alt_{3.0};
+  double search_x_{0.0};
+  double search_y_{0.0};
+  double search_alt_{3.0};
+  double abort_hover_alt_{3.0};
+  int offboard_prestream_count_{20};
+  int stable_detect_count_{10};
+  double camera_x_to_body_y_sign_{1.0};
+  double camera_y_to_body_x_sign_{-1.0};
+  double max_xy_step_{0.20};
+  double center_xy_threshold_{0.15};
+  double max_descent_rate_{0.20};
+  double final_alt_{0.30};
+  double marker_lost_timeout_{1.0};
+  double aruco_pose_timeout_{0.5};
+  double takeoff_z_threshold_{0.20};
+  double search_xy_threshold_{0.25};
+  double search_z_threshold_{0.20};
+  double command_retry_interval_{1.0};
+  bool enable_auto_land_{true};
+  std::string target_pose_frame_id_{"local_ned"};
+
+  LandingState state_{LandingState::INIT};
+
+  bool have_vehicle_status_{false};
+  bool have_local_position_{false};
+  bool have_vehicle_odometry_{false};
+  bool have_aruco_pose_{false};
+  bool aruco_visible_{false};
+  bool have_aruco_id_{false};
+  int32_t aruco_id_{-1};
+
+  px4_msgs::msg::VehicleStatus vehicle_status_{};
+  px4_msgs::msg::VehicleLocalPosition local_position_{};
+  px4_msgs::msg::VehicleOdometry vehicle_odometry_{};
+  geometry_msgs::msg::PoseStamped aruco_pose_{};
+
+  rclcpp::Time last_aruco_pose_time_;
+  rclcpp::Time last_aruco_visible_time_;
+  rclcpp::Time last_marker_seen_time_;
+  rclcpp::Time last_command_time_;
+  rclcpp::Time last_control_time_;
+  bool have_last_marker_seen_time_{false};
+  bool have_last_command_time_{false};
+
+  int stable_visible_count_{0};
+  int prestream_setpoint_count_{0};
+  bool final_land_command_sent_{false};
+
+  double takeoff_start_x_{0.0};
+  double takeoff_start_y_{0.0};
+  double initial_yaw_{0.0};
+  double current_yaw_{0.0};
+
+  bool target_valid_{false};
+  double target_x_{0.0};
+  double target_y_{0.0};
+  double target_z_{0.0};
+  double target_yaw_{0.0};
+
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr aruco_pose_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr aruco_visible_sub_;
+  rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr aruco_id_sub_;
+  rclcpp::Subscription<px4_msgs::msg::VehicleStatus>::SharedPtr vehicle_status_sub_;
+  rclcpp::Subscription<px4_msgs::msg::VehicleLocalPosition>::SharedPtr
+    vehicle_local_position_sub_;
+  rclcpp::Subscription<px4_msgs::msg::VehicleOdometry>::SharedPtr vehicle_odometry_sub_;
+
+  rclcpp::Publisher<px4_msgs::msg::OffboardControlMode>::SharedPtr
+    offboard_control_mode_pub_;
+  rclcpp::Publisher<px4_msgs::msg::TrajectorySetpoint>::SharedPtr trajectory_setpoint_pub_;
+  rclcpp::Publisher<px4_msgs::msg::VehicleCommand>::SharedPtr vehicle_command_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr landing_state_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr target_pose_pub_;
+
+  rclcpp::TimerBase::SharedPtr control_timer_;
+};
+
+}  // namespace aruco_precision_landing_cpp
+
+#endif  // ARUCO_PRECISION_LANDING_CPP__PX4_ARUCO_LANDING_NODE_HPP_
