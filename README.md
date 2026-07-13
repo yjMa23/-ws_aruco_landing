@@ -54,7 +54,20 @@ PX4_GZ_WORLD=aruco make px4_sitl gz_x500_mono_cam_down
 
 ### 3. 启动相机桥接和 ArUco 检测
 
-先启动 Gazebo 相机到 ROS 2 的桥接，再运行：
+先启动 Gazebo 相机到 ROS 2 的桥接，
+```
+source /opt/ros/humble/setup.bash
+
+ros2 run ros_gz_bridge parameter_bridge \
+  '/world/aruco/model/x500_mono_cam_down_0/link/camera_link/sensor/camera/image@sensor_msgs/msg/Image[gz.msgs.Image' \
+  '/world/aruco/model/x500_mono_cam_down_0/link/camera_link/sensor/camera/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo'
+```
+验证：
+```
+ros2 topic hz /world/aruco/model/x500_mono_cam_down_0/link/camera_link/sensor/camera/image
+```
+
+再运行：
 
 ```bash
 cd ~/ws_aruco_landing
