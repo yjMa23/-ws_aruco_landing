@@ -1,0 +1,11 @@
+aruco_detector:
+  ros__parameters:
+    image_topic: /world/aruco/model/x500_mono_cam_down_0/link/camera_link/sensor/camera/image
+    camera_info_topic: /world/aruco/model/x500_mono_cam_down_0/link/camera_link/sensor/camera/camera_info
+    # marker_length 决定位姿尺度，单位为米，应填写 marker 外边框的实际边长。
+    marker_length: 0.5
+    dictionary: DICT_4X4_50
+    # 仅为该 ID 估计位姿，检测到其他 marker 时不会发布其位姿。
+    target_id: 0
+    # 近似时间同步队列用于容纳图像与 CameraInfo 的小幅时间戳偏差。
+    sync_queue_size: 10
