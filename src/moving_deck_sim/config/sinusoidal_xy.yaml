@@ -1,0 +1,11 @@
+moving_deck_controller:
+  ros__parameters:
+    world_name: aruco
+    model_name: moving_deck
+    scenario: S2_SINUSOIDAL_XY
+    initial_position_enu: [0.0, 0.0, 2.0]
+    velocity_xy: [0.0, 0.0]
+    amplitude_xy: [1.0, 0.5]
+    period_xy: [10.0, 6.0]
+    update_rate_hz: 50.0
+    random_seed: 1
