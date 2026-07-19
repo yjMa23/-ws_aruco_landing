@@ -12,6 +12,7 @@
 | --- | --- |
 | [`src/aruco_detector`](src/aruco_detector/README.md) | 从相机图像中检测指定 ArUco marker，并发布 `/aruco/pose`、`/aruco/visible` 和调试图像。 |
 | [`src/aruco_precision_landing_cpp`](src/aruco_precision_landing_cpp/README.md) | 订阅 ArUco 位姿结果，通过 PX4 Offboard setpoint 控制无人机执行精准降落流程。 |
+| [`src/moving_deck_sim`](src/moving_deck_sim/README.md) | 提供静止、水平匀速和水平正弦移动甲板，以及仅供评测使用的 Gazebo Ground Truth。 |
 
 ## 环境要求
 
@@ -100,10 +101,21 @@ ros2 topic echo /landing/state
 ros2 topic echo /landing/target_pose
 ```
 
+## P1 水平移动甲板
+
+水平移动甲板由独立仿真包启动，PX4 使用 standalone 模式连接。完整的环境准备、三种
+场景配置、无界面运行和重置方法见：
+
+- [moving_deck_sim README](src/moving_deck_sim/README.md)
+
+移动甲板 world 仍命名为 `aruco`，因此现有相机桥接话题和 ArUco 检测器默认配置保持
+不变。`/simulation/deck/ground_truth` 使用 Gazebo world ENU，禁止输入降落控制器。
+
 ## 详细文档
 
 - [ArUco 检测节点 README](src/aruco_detector/README.md)
 - [PX4 ArUco 精准降落控制节点 README](src/aruco_precision_landing_cpp/README.md)
+- [水平移动甲板仿真 README](src/moving_deck_sim/README.md)
 
 ## 安全提示
 
