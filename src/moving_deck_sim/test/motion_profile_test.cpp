@@ -61,6 +61,25 @@ TEST(MotionProfileTest, SinusoidalProfileMatchesQuarterAndFullPeriod)
   EXPECT_NEAR(full.velocity_enu[1], std::acos(-1.0) / 10.0, kTolerance);
 }
 
+TEST(MotionProfileTest, ResetReturnsToDeterministicInitialState)
+{
+  MotionParameters parameters;
+  parameters.scenario = Scenario::kSinusoidalXy;
+  parameters.initial_position_enu = {1.0, -2.0, 2.0};
+  parameters.amplitude_xy = {1.0, 0.5};
+  parameters.period_xy = {10.0, 6.0};
+  const MotionProfile profile(parameters);
+
+  const MotionSample first_start = profile.sample(0.0);
+  const MotionSample reset_start = profile.sample(0.0);
+
+  EXPECT_EQ(first_start.position_enu, parameters.initial_position_enu);
+  EXPECT_EQ(reset_start.position_enu, first_start.position_enu);
+  EXPECT_EQ(reset_start.velocity_enu, first_start.velocity_enu);
+  EXPECT_NEAR(first_start.velocity_enu[0], 2.0 * std::acos(-1.0) / 10.0, kTolerance);
+  EXPECT_NEAR(first_start.velocity_enu[1], std::acos(-1.0) / 6.0, kTolerance);
+}
+
 TEST(MotionProfileTest, RejectsInvalidInputs)
 {
   EXPECT_THROW(MotionProfile::parse_scenario("UNKNOWN"), std::invalid_argument);

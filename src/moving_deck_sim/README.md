@@ -96,7 +96,9 @@ Gazebo 实际甲板状态发布到：
 ```
 
 `header.frame_id` 为 `world`，`child_frame_id` 为 `moving_deck`，位置和速度均采用
-Gazebo ENU。该话题只能由后续评测器使用，禁止接入降落控制器。
+Gazebo ENU。启动或重置成功时会立即发布确定的初始状态；随后 `0.1 s` 内使用解析轨迹
+速度替换 Gazebo 位姿差分产生的瞬时尖峰，之后透传 Gazebo 原始里程计。该话题只能由
+后续评测器使用，禁止接入降落控制器。
 
 重置甲板：
 

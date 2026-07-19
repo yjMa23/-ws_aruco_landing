@@ -8,6 +8,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(gz-msgs10 REQUIRED)
 find_package(gz-transport13 REQUIRED)
+find_package(nav_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_srvs REQUIRED)
 
@@ -28,7 +29,7 @@ target_link_libraries(
   gz-msgs10::gz-msgs10
   gz-transport13::gz-transport13
 )
-ament_target_dependencies(moving_deck_controller rclcpp std_srvs)
+ament_target_dependencies(moving_deck_controller nav_msgs rclcpp std_srvs)
 
 install(
   TARGETS moving_deck_motion moving_deck_controller

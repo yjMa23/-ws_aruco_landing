@@ -42,7 +42,7 @@ def generate_launch_description():
         name="moving_deck_bridge",
         arguments=[
             "/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock",
-            "/simulation/deck/ground_truth@nav_msgs/msg/Odometry[gz.msgs.Odometry",
+            "/simulation/deck/ground_truth_raw@nav_msgs/msg/Odometry[gz.msgs.Odometry",
         ],
         output="screen",
     )

@@ -116,6 +116,7 @@ ros2 topic echo /landing/target_pose
 - [ArUco 检测节点 README](src/aruco_detector/README.md)
 - [PX4 ArUco 精准降落控制节点 README](src/aruco_precision_landing_cpp/README.md)
 - [水平移动甲板仿真 README](src/moving_deck_sim/README.md)
+- [P1 水平移动甲板仿真验收记录](docs/P1_MOVING_DECK_VALIDATION.md)
 
 ## 安全提示
 

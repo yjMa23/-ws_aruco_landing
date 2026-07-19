@@ -82,7 +82,7 @@
       <robot_base_frame>moving_deck</robot_base_frame>
       <dimensions>3</dimensions>
       <odom_publish_frequency>50</odom_publish_frequency>
-      <odom_topic>/simulation/deck/ground_truth</odom_topic>
+      <odom_topic>/simulation/deck/ground_truth_raw</odom_topic>
     </plugin>
   </model>
 </sdf>

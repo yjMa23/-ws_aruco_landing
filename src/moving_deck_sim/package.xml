@@ -10,13 +10,13 @@
 
   <depend>gz-msgs10</depend>
   <depend>gz-transport13</depend>
+  <depend>nav_msgs</depend>
   <depend>rclcpp</depend>
   <depend>std_srvs</depend>
 
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
-  <exec_depend>nav_msgs</exec_depend>
   <exec_depend>ros_gz_bridge</exec_depend>
   <exec_depend>ros_gz_sim</exec_depend>
   <exec_depend>rosgraph_msgs</exec_depend>

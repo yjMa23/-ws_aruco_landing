@@ -5,6 +5,7 @@
 #include <gz/msgs/twist.pb.h>
 #include <gz/msgs/world_control.pb.h>
 #include <gz/transport/Node.hh>
+#include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <std_srvs/srv/trigger.hpp>
 
@@ -25,6 +26,7 @@ namespace
 {
 
 constexpr unsigned int kGazeboServiceTimeoutMs = 1000;
+constexpr double kResetOdometryGuardDurationS = 0.1;
 
 template<std::size_t Size>
 std::array<double, Size> to_array(
@@ -96,6 +98,11 @@ public:
 
     velocity_publisher_ = gz_node_.Advertise<gz::msgs::Twist>(
       "/model/" + model_name_ + "/cmd_vel");
+    ground_truth_publisher_ = create_publisher<nav_msgs::msg::Odometry>(
+      "/simulation/deck/ground_truth", 10);
+    raw_ground_truth_subscription_ = create_subscription<nav_msgs::msg::Odometry>(
+      "/simulation/deck/ground_truth_raw", 10,
+      std::bind(&MovingDeckController::on_raw_ground_truth, this, std::placeholders::_1));
     reset_service_ = create_service<std_srvs::srv::Trigger>(
       "/simulation/episode/reset",
       [this](const std_srvs::srv::Trigger::Request::SharedPtr,
@@ -156,6 +163,23 @@ private:
     }
   }
 
+  void publish_initial_ground_truth()
+  {
+    const MotionSample sample = motion_profile_->sample(0.0);
+    nav_msgs::msg::Odometry ground_truth;
+    ground_truth.header.stamp = trajectory_start_;
+    ground_truth.header.frame_id = "world";
+    ground_truth.child_frame_id = model_name_;
+    ground_truth.pose.pose.position.x = sample.position_enu[0];
+    ground_truth.pose.pose.position.y = sample.position_enu[1];
+    ground_truth.pose.pose.position.z = sample.position_enu[2];
+    ground_truth.pose.pose.orientation.w = 1.0;
+    ground_truth.twist.twist.linear.x = sample.velocity_enu[0];
+    ground_truth.twist.twist.linear.y = sample.velocity_enu[1];
+    ground_truth.twist.twist.linear.z = sample.velocity_enu[2];
+    ground_truth_publisher_->publish(ground_truth);
+  }
+
   bool initialize_deck()
   {
     publish_velocity({0.0, 0.0, 0.0});
@@ -167,6 +191,7 @@ private:
     trajectory_start_ = now();
     initialized_ = true;
     publish_velocity(motion_profile_->sample(0.0).velocity_enu);
+    publish_initial_ground_truth();
     return true;
   }
 
@@ -195,6 +220,33 @@ private:
     publish_velocity(motion_profile_->sample(elapsed_s).velocity_enu);
   }
 
+  void on_raw_ground_truth(const nav_msgs::msg::Odometry::SharedPtr message)
+  {
+    if (!initialized_) {
+      return;
+    }
+
+    const rclcpp::Time sample_time(message->header.stamp, RCL_ROS_TIME);
+    if (sample_time < trajectory_start_) {
+      return;
+    }
+
+    nav_msgs::msg::Odometry ground_truth = *message;
+    const double elapsed_s = (sample_time - trajectory_start_).seconds();
+    if (elapsed_s <= kResetOdometryGuardDurationS) {
+      // Gazebo OdometryPublisher 使用 10 个位姿差分样本计算速度；teleport
+      // 后短时使用同一解析轨迹速度，避免旧位姿污染 reset 后的 Ground Truth。
+      const MotionSample sample = motion_profile_->sample(elapsed_s);
+      ground_truth.twist.twist.linear.x = sample.velocity_enu[0];
+      ground_truth.twist.twist.linear.y = sample.velocity_enu[1];
+      ground_truth.twist.twist.linear.z = sample.velocity_enu[2];
+      ground_truth.twist.twist.angular.x = 0.0;
+      ground_truth.twist.twist.angular.y = 0.0;
+      ground_truth.twist.twist.angular.z = 0.0;
+    }
+    ground_truth_publisher_->publish(ground_truth);
+  }
+
   std::string world_name_;
   std::string model_name_;
   double update_rate_hz_{50.0};
@@ -204,6 +256,8 @@ private:
 
   gz::transport::Node gz_node_;
   gz::transport::Node::Publisher velocity_publisher_;
+  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr ground_truth_publisher_;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr raw_ground_truth_subscription_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reset_service_;
   rclcpp::TimerBase::SharedPtr timer_;
   rclcpp::Time trajectory_start_{0, 0, RCL_ROS_TIME};
