@@ -1,0 +1,23 @@
+{
+  "configurations": [
+    {
+      "name": "ROS 2 Humble",
+      "compilerPath": "/usr/bin/g++",
+      "cStandard": "c17",
+      "cppStandard": "c++17",
+      "intelliSenseMode": "linux-gcc-x64",
+      "includePath": [
+        "${workspaceFolder}/src/**",
+        "${workspaceFolder}/install/**",
+        "/opt/ros/humble/include/**",
+        "/usr/include/opencv4",
+        "${env:HOME}/ws_sensor_combined/install/**"
+      ],
+      "compileCommands": [
+        "${workspaceFolder}/build/aruco_detector/compile_commands.json",
+        "${workspaceFolder}/build/aruco_precision_landing_cpp/compile_commands.json"
+      ]
+    }
+  ],
+  "version": 4
+}

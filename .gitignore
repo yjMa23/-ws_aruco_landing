@@ -1,7 +1,8 @@
 build/
 install/
 log/
-.vscode/
+.vscode/*
+!.vscode/c_cpp_properties.json
 .idea/
 __pycache__/
 *.pyc
