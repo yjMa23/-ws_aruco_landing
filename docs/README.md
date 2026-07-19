@@ -114,3 +114,21 @@ Launch 默认将节点的 `vehicle_status` 和 `vehicle_local_position` 输入�
 - `enable_auto_land=false` 只会阻止发送 `VEHICLE_CMD_NAV_LAND`；状态机仍从 `FINAL_LAND` 进入 `DONE` 并保留最后位置目标。
 - `ABORT` 没有自动回到搜索或对中状态，也不会自动解除电机锁定。
 - 控制器只使用 ArUco 位姿的 `position.x/y`；检测器发布的 Marker 姿态和 `position.z` 当前不参与降落控制。
+
+## 7. P0 静态基线验证
+
+验证日期：2026-07-19。检测器和控制器分别使用现有
+[`aruco_detector.yaml`](../src/aruco_detector/config/aruco_detector.yaml) 与
+[`px4_aruco_landing.yaml`](../src/aruco_precision_landing_cpp/config/px4_aruco_landing.yaml)，未覆盖运行参数。
+
+- 从 Git 索引导出的无历史、无构建缓存快照能够发现并构建两个包。
+- `colcon test` 结果为 `0 tests, 0 errors, 0 failures, 0 skipped`；当前两个包尚无实际测试用例。
+- 验证环境为 PX4 `v1.18.0-alpha1-371-g6f5be87b4c-dirty`、`px4_msgs 1.17.0`。
+- Gazebo 相机输入和 `/aruco/debug_image` 均约为 30 Hz；控制器成功完成
+  `ARM_AND_TAKEOFF → GOTO_ARUCO_AREA → WAIT_ARUCO → CENTER_ABOVE_MARKER → DESCEND_WITH_TRACKING → FINAL_LAND → DONE`。
+- 无 GCS 心跳时 PX4 预飞检查不会通过；启动 QGroundControl 后正常解锁，未修改 PX4 参数或强制解锁。
+- 状态机进入 `DONE` 后，PX4 已处于自动降落且垂直速度接近零，但
+  `/fmu/out/vehicle_land_detected` 在额外 20 秒确认窗口内仍为 `landed=false`。
+
+因此 P0 仓库结构、干净构建和现有视觉控制流程验证通过；静态基线的“确认触地”验收未通过。
+该结果按当前 V0 行为冻结，P0 不修改控制逻辑。
