@@ -7,6 +7,7 @@
 #include <gz/transport/Node.hh>
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <std_msgs/msg/u_int32.hpp>
 #include <std_srvs/srv/trigger.hpp>
 
 #include <array>
@@ -100,6 +101,9 @@ public:
       "/model/" + model_name_ + "/cmd_vel");
     ground_truth_publisher_ = create_publisher<nav_msgs::msg::Odometry>(
       "/simulation/deck/ground_truth", 10);
+    auto reset_count_qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local();
+    reset_count_publisher_ = create_publisher<std_msgs::msg::UInt32>(
+      "/simulation/episode/reset_count", reset_count_qos);
     raw_ground_truth_subscription_ = create_subscription<nav_msgs::msg::Odometry>(
       "/simulation/deck/ground_truth_raw", 10,
       std::bind(&MovingDeckController::on_raw_ground_truth, this, std::placeholders::_1));
@@ -190,6 +194,11 @@ private:
 
     trajectory_start_ = now();
     initialized_ = true;
+
+    std_msgs::msg::UInt32 reset_count;
+    reset_count.data = ++reset_count_;
+    reset_count_publisher_->publish(reset_count);
+
     publish_velocity(motion_profile_->sample(0.0).velocity_enu);
     publish_initial_ground_truth();
     return true;
@@ -257,11 +266,13 @@ private:
   gz::transport::Node gz_node_;
   gz::transport::Node::Publisher velocity_publisher_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr ground_truth_publisher_;
+  rclcpp::Publisher<std_msgs::msg::UInt32>::SharedPtr reset_count_publisher_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr raw_ground_truth_subscription_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reset_service_;
   rclcpp::TimerBase::SharedPtr timer_;
   rclcpp::Time trajectory_start_{0, 0, RCL_ROS_TIME};
   std::chrono::steady_clock::time_point next_initialization_attempt_{};
+  std::uint32_t reset_count_{0};
   bool initialized_{false};
 };
 

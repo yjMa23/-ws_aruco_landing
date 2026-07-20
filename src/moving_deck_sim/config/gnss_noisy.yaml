@@ -1,0 +1,15 @@
+deck_gnss_simulator:
+  ros__parameters:
+    publish_rate_hz: 5.0
+    horizontal_noise_std_m: 0.8
+    vertical_noise_std_m: 1.5
+    velocity_noise_std_mps: 0.1
+    latency_ms: 100.0
+    packet_drop_probability: 0.0
+    random_seed: 1
+    world_origin.latitude_deg: 47.397971057728974
+    world_origin.longitude_deg: 8.546163739800146
+    world_origin.elevation_m: 0.0
+    gps_frame_id: moving_deck_gps
+    velocity_frame_id: world_enu
+    expected_ground_truth_frame_id: world

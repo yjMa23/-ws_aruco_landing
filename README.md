@@ -110,6 +110,7 @@ ros2 topic echo /landing/target_pose
 
 移动甲板 world 仍命名为 `aruco`，因此现有相机桥接话题和 ArUco 检测器默认配置保持
 不变。`/simulation/deck/ground_truth` 使用 Gazebo world ENU，禁止输入降落控制器。
+仿真传感器节点会将其处理为 `/deck/gps/fix` 和 `/deck/gps/velocity`，用于下一阶段 GNSS 会合。
 
 ## 详细文档
 
@@ -120,6 +121,7 @@ ros2 topic echo /landing/target_pose
 - [PX4 ArUco 精准降落控制节点 README](src/aruco_precision_landing_cpp/README.md)
 - [水平移动甲板仿真 README](src/moving_deck_sim/README.md)
 - [P1 水平移动甲板仿真验收记录](docs/P1_MOVING_DECK_VALIDATION.md)
+- [P2B 船舶 GNSS 传感器仿真验收记录](docs/P2B_DECK_GNSS_VALIDATION.md)
 
 ## 安全提示
 

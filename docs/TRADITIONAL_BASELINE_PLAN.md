@@ -45,17 +45,19 @@
    - 已实现静止、水平匀速和 XY 正弦移动甲板。
    - 发布仅供评测使用的 `/simulation/deck/ground_truth`。
    - 支持固定随机种子和确定性 reset。
+   - 已实现理想/含噪船舶 GNSS、ENU 速度、固定延迟、丢包和 reset 后随机序列复现。
 
 4. 阶段状态：
    - `P0` 仓库整理与静态基线冻结已完成，标签 `baseline-static-v0.1`。
    - `P1` 水平移动甲板仿真已完成，标签 `baseline-moving-deck-v0.1`。
    - `P2.0` 项目状态和设计文档同步已完成。
    - `P2A` 坐标契约、刚体变换和 WGS84 / ENU / NED 纯数学模块已完成。
-   - 当前进入 `P2B` 船舶 GNSS 传感器仿真阶段。
+   - `P2B` 船舶 GNSS 传感器仿真已完成，验收记录见 `docs/P2B_DECK_GNSS_VALIDATION.md`。
+   - 当前进入 `P2C` GNSS 会合与移动甲板上方粗跟踪阶段。
 
 5. 当前控制器仍属于“静态标志物降落 V0”，主要缺口如下：
    - 搜索点是固定 NED 坐标，不能根据船舶 GNSS 会合或跟踪移动甲板。
-   - 没有船舶 GNSS 传感器仿真、移动搜索和 GNSS 到视觉接管。
+   - 尚未将船舶 GNSS 接入控制器，也没有移动搜索和 GNSS 到视觉接管。
    - 只使用 ArUco `position.x/y`，没有利用高度和甲板姿态。
    - 运行控制器仍使用两个符号参数，尚未接入已完成的完整刚体变换模块。
    - 已有 WGS84、ENU、NED 纯数学转换，但尚未用于船舶 GNSS 和控制器。
@@ -1057,15 +1059,15 @@ colcon test-result --verbose
 
 ## 16. Codex 下一步默认任务
 
-`P0`、`P1`、`P2.0` 和 `P2A` 纯数学模块已完成。当前从 `P2B` 开始，不直接实现 MPC 或强化学习。
+`P0`、`P1`、`P2.0`、`P2A` 和 `P2B` 已完成。当前从 `P2C` 开始，不直接实现 MPC 或强化学习。
 
 下一项任务：
 
 ```text
-在 moving_deck_sim 内实现独立 deck_gnss_simulator 和纯数学 GNSS 传感器模型，
-先完成理想 GNSS 的 WGS84 位置、ENU/NED 速度与降频发布，
-再增加固定种子噪声、延迟、丢包和异常输入测试。
-控制器禁止订阅 Ground Truth，本任务暂不修改下降状态机。
+在 aruco_precision_landing_cpp 中订阅船舶 NavSatFix、ENU 速度和 PX4 local/global 参考，
+使用 geodetic_converter 将船舶 WGS84 转换到 PX4 local NED，
+实现 WAIT_DECK_GNSS、RENDEZVOUS_GNSS 和 ACQUIRE_ARUCO，
+只完成安全高度会合、粗跟踪和移动搜索，不下降，不接入视觉精降。
 ```
 
-完成 GNSS 仿真验收后，再进入 `P2C：GNSS 会合与移动甲板上方粗跟踪`。
+完成 GNSS 会合验收后，再进入 `P2D：GNSS 到视觉接管与下降前恢复`。

@@ -17,9 +17,12 @@ def generate_launch_description():
     default_config = os.path.join(
         package_share, "config", "constant_velocity.yaml"
     )
+    default_gnss_config = os.path.join(package_share, "config", "gnss_ideal.yaml")
     gz_launch = os.path.join(ros_gz_sim_share, "launch", "gz_sim.launch.py")
 
     config_file = LaunchConfiguration("config_file")
+    gnss_config_file = LaunchConfiguration("gnss_config_file")
+    enable_gnss = LaunchConfiguration("enable_gnss")
     headless = LaunchConfiguration("headless")
     existing_resource_path = os.environ.get("GZ_SIM_RESOURCE_PATH", "")
     resource_path = os.pathsep.join(
@@ -53,6 +56,14 @@ def generate_launch_description():
         parameters=[config_file, {"use_sim_time": True}],
         output="screen",
     )
+    gnss_simulator = Node(
+        package="moving_deck_sim",
+        executable="deck_gnss_simulator",
+        name="deck_gnss_simulator",
+        parameters=[gnss_config_file, {"use_sim_time": True}],
+        condition=IfCondition(enable_gnss),
+        output="screen",
+    )
 
     return LaunchDescription(
         [
@@ -60,6 +71,16 @@ def generate_launch_description():
                 "config_file",
                 default_value=default_config,
                 description="Path to a moving-deck scenario YAML file.",
+            ),
+            DeclareLaunchArgument(
+                "gnss_config_file",
+                default_value=default_gnss_config,
+                description="Path to a deck GNSS sensor YAML file.",
+            ),
+            DeclareLaunchArgument(
+                "enable_gnss",
+                default_value="true",
+                description="Publish simulated deck GNSS position and ENU velocity.",
             ),
             DeclareLaunchArgument(
                 "headless",
@@ -73,5 +94,6 @@ def generate_launch_description():
             gazebo_headless,
             bridge,
             controller,
+            gnss_simulator,
         ]
     )

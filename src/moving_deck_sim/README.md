@@ -56,6 +56,21 @@ ros2 launch moving_deck_sim moving_deck_sim.launch.py \
   config_file:=$SHARE/config/sinusoidal_xy.yaml
 ```
 
+主 launch 默认同时启动理想船舶 GNSS。切换为含噪、延迟配置，或临时关闭 GNSS：
+
+```bash
+ros2 launch moving_deck_sim moving_deck_sim.launch.py \
+  gnss_config_file:=$SHARE/config/gnss_noisy.yaml
+ros2 launch moving_deck_sim moving_deck_sim.launch.py enable_gnss:=false
+```
+
+只启动 GNSS 传感器节点时使用：
+
+```bash
+ros2 launch moving_deck_sim deck_gnss_sim.launch.py \
+  config_file:=$SHARE/config/gnss_ideal.yaml
+```
+
 world 内部名称仍为 `aruco`，PX4 生成的相机话题继续使用：
 
 ```text
@@ -107,14 +122,54 @@ ros2 service call /simulation/episode/reset std_srvs/srv/Trigger '{}'
 ```
 
 重置会恢复甲板初始位姿、运动相位和随机种子，不重置 PX4，也不回拨 Gazebo 时钟。
+每次成功初始化或重置还会通过瞬态本地话题发布递增序号：
+
+```text
+/simulation/episode/reset_count  std_msgs/msg/UInt32
+```
+
+GNSS 节点收到新序号后会清空延迟队列、重置采样相位和随机数引擎，使固定种子实验可重复。
+
+## 船舶 GNSS / 遥测仿真
+
+`deck_gnss_simulator` 是仿真传感器层，允许订阅甲板 Ground Truth，并仅向控制器暴露：
+
+```text
+/deck/gps/fix       sensor_msgs/msg/NavSatFix
+/deck/gps/velocity  geometry_msgs/msg/TwistStamped
+```
+
+`NavSatFix` 使用 WGS84，`header.stamp` 保留原始采样时刻，位置协方差按 ENU
+`East/North/Up` 排列。速度话题 `frame_id=world_enu`，线速度依次为 East、North、Up。
+控制器可以使用这两个传感器话题进行远距离会合，但仍禁止订阅 Ground Truth。
+
+地理转换使用 Gazebo `SphericalCoordinates::LOCAL2 → SPHERICAL`，world 原点参数必须与
+`aruco_moving_deck.sdf` 的 `<spherical_coordinates>` 保持一致。
+
+| GNSS 参数 | 说明 |
+| --- | --- |
+| `publish_rate_hz` | GNSS 采样频率，默认 `5 Hz`。 |
+| `horizontal_noise_std_m` | ENU 水平位置高斯噪声标准差。 |
+| `vertical_noise_std_m` | Up 方向位置高斯噪声标准差。 |
+| `velocity_noise_std_mps` | 三轴 ENU 速度噪声标准差。 |
+| `latency_ms` | 固定发布延迟；消息时间戳仍为采样时间。 |
+| `packet_drop_probability` | 单帧独立丢包概率，范围 `[0,1]`。 |
+| `random_seed` | 噪声和丢包随机种子。 |
+| `world_origin.latitude_deg` | Gazebo world WGS84 原点纬度。 |
+| `world_origin.longitude_deg` | Gazebo world WGS84 原点经度。 |
+| `world_origin.elevation_m` | Gazebo world WGS84 原点海拔。 |
 
 ## 验证
 
 ```bash
 ros2 topic hz /simulation/deck/ground_truth
 ros2 topic echo /simulation/deck/ground_truth
+ros2 topic hz /deck/gps/fix
+ros2 topic echo /deck/gps/fix --qos-reliability best_effort --once
+ros2 topic echo /deck/gps/velocity --qos-reliability best_effort --once
 colcon test --packages-select moving_deck_sim
 colcon test-result --verbose
 ```
 
-P1 只实现水平运动，不包含升沉、横摇、纵摇、风扰、随机相位或视觉噪声。
+P1/P2B 当前只覆盖水平甲板运动与 GNSS 传感器特性，不包含升沉、横摇、纵摇、风扰、
+随机相位或视觉噪声。

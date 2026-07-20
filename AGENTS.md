@@ -49,6 +49,11 @@ docs/COORDINATE_FRAMES.md
   * 已覆盖刚体变换、ENU/NED、WGS84/ENU、异常输入和局部范围测试。
   * 新模块尚未接入现有降落控制器。
 
+* `P2B` 船舶 GNSS 传感器仿真。
+  * 已实现 `/deck/gps/fix` 和 `/deck/gps/velocity`。
+  * 支持理想/含噪配置、固定频率、固定延迟、丢包和固定种子复现。
+  * reset 后清空延迟队列并重置采样相位与随机序列。
+
 现有运行包：
 
 * `aruco_detector`
@@ -61,11 +66,11 @@ docs/COORDINATE_FRAMES.md
 
 * `moving_deck_sim`
   * 驱动水平移动甲板并发布 `/simulation/deck/ground_truth`。
+  * 仿真传感器节点将真值处理为船舶 GNSS 位置和 ENU 速度。
   * Ground Truth 禁止进入降落控制器。
 
 当前缺少：
 
-* 船舶 GNSS / 遥测传感器仿真。
 * GNSS 会合、移动搜索和 GNSS 到视觉接管。
 * 将完整相机外参和新坐标模块接入视觉控制链。
 * 甲板速度估计、运动预测和速度前馈。
@@ -83,7 +88,7 @@ Codex 必须按以下顺序推进，除非用户明确改变优先级：
 2. `P1`：水平移动甲板仿真，已完成。
 3. `P2.0`：同步项目状态和总体设计文档，已完成。
 4. `P2A`：完整刚体坐标与 WGS84 / ENU / NED 转换，纯数学模块已完成。
-5. `P2B`：船舶 GNSS 传感器仿真。
+5. `P2B`：船舶 GNSS 传感器仿真，已完成。
 6. `P2C`：GNSS 会合和移动甲板上方粗跟踪，不下降。
 7. `P2D`：ArUco 捕获、GNSS 到视觉接管和下降前恢复。
 8. `P3`：甲板视觉状态估计和短时预测。
@@ -328,11 +333,11 @@ colcon test-result --verbose
 
 ## 默认下一任务
 
-`P0`、`P1`、`P2.0` 和 `P2A` 纯数学模块已完成。没有额外指令时，从 `P2B` 开始：
+`P0`、`P1`、`P2.0`、`P2A` 和 `P2B` 已完成。没有额外指令时，从 `P2C` 开始：
 
 ```text
-在 moving_deck_sim 内实现独立 deck_gnss_simulator 和纯数学 GNSS 传感器模型，
-先完成理想 GNSS 的 WGS84 位置、NED/ENU 速度与降频发布，
-再增加固定种子噪声、延迟和丢包测试。
-控制器禁止订阅 Ground Truth，本阶段不修改下降状态机。
+在 aruco_precision_landing_cpp 中接入船舶 NavSatFix、ENU 速度和 PX4 local/global 参考，
+使用 geodetic_converter 将船舶 WGS84 转到 PX4 local NED，
+实现 WAIT_DECK_GNSS、RENDEZVOUS_GNSS 和 ACQUIRE_ARUCO，
+只完成安全高度会合与移动搜索，不下降，不接入视觉精降。
 ```
