@@ -54,15 +54,21 @@ docs/COORDINATE_FRAMES.md
   * 支持理想/含噪配置、固定频率、固定延迟、丢包和固定种子复现。
   * reset 后清空延迟队列并重置采样相位与随机序列。
 
+* `P2C` GNSS 会合与移动甲板上方粗跟踪。
+  * 已实现 `WAIT_DECK_GNSS`、`RENDEZVOUS_GNSS` 和 `ACQUIRE_ARUCO`。
+  * 已实现船舶 WGS84 转 PX4 local NED、跳变拒绝、超时回退和目标限幅。
+  * 搜索中心随实时船舶 GNSS 移动；稳定识别后只在安全高度悬停，不下降。
+  * 验收记录见 `docs/P2C_GNSS_RENDEZVOUS_VALIDATION.md`。
+
 现有运行包：
 
 * `aruco_detector`
   * 输出 `/aruco/pose`、`/aruco/visible`、`/aruco/debug_image`。
 
 * `aruco_precision_landing_cpp`
-  * 订阅 PX4 状态和 ArUco 位姿。
-  * 通过 PX4 Offboard 位置设定点完成起飞、固定点搜索、对中、下降和降落。
-  * 当前仍属于静态 Marker 降落 V0。
+  * 订阅 PX4 状态、船舶 GNSS 和 ArUco 可见性。
+  * 通过 PX4 Offboard 位置设定点完成起飞、GNSS 会合、移动中心搜索和安全高度悬停。
+  * 当前 P2C 主路径不会下降；旧静态下降代码仅作为历史基线保留且从主路径不可达。
 
 * `moving_deck_sim`
   * 驱动水平移动甲板并发布 `/simulation/deck/ground_truth`。
@@ -71,7 +77,7 @@ docs/COORDINATE_FRAMES.md
 
 当前缺少：
 
-* GNSS 会合、移动搜索和 GNSS 到视觉接管。
+* ArUco 完整位姿转换和 GNSS 到视觉平滑接管。
 * 将完整相机外参和新坐标模块接入视觉控制链。
 * 甲板速度估计、运动预测和速度前馈。
 * 规则式着陆窗口和相对高度下降。
@@ -89,8 +95,8 @@ Codex 必须按以下顺序推进，除非用户明确改变优先级：
 3. `P2.0`：同步项目状态和总体设计文档，已完成。
 4. `P2A`：完整刚体坐标与 WGS84 / ENU / NED 转换，纯数学模块已完成。
 5. `P2B`：船舶 GNSS 传感器仿真，已完成。
-6. `P2C`：GNSS 会合和移动甲板上方粗跟踪，不下降。
-7. `P2D`：ArUco 捕获、GNSS 到视觉接管和下降前恢复。
+6. `P2C`：GNSS 会合和移动甲板上方粗跟踪，已完成，不下降。
+7. `P2D`：ArUco 完整变换、GNSS 到视觉接管和下降前恢复。
 8. `P3`：甲板视觉状态估计和短时预测。
 9. `P4`：移动甲板视觉水平跟踪。
 10. `P5`：规则式着陆窗口和分阶段下降。
@@ -333,11 +339,11 @@ colcon test-result --verbose
 
 ## 默认下一任务
 
-`P0`、`P1`、`P2.0`、`P2A` 和 `P2B` 已完成。没有额外指令时，从 `P2C` 开始：
+`P0`、`P1`、`P2.0`、`P2A`、`P2B` 和 `P2C` 已完成。没有额外指令时，从 `P2D` 开始：
 
 ```text
-在 aruco_precision_landing_cpp 中接入船舶 NavSatFix、ENU 速度和 PX4 local/global 参考，
-使用 geodetic_converter 将船舶 WGS84 转到 PX4 local NED，
-实现 WAIT_DECK_GNSS、RENDEZVOUS_GNSS 和 ACQUIRE_ARUCO，
-只完成安全高度会合与移动搜索，不下降，不接入视觉精降。
+将 ArUco PoseStamped 通过完整外参和 PX4 VehicleOdometry 转换到 local NED，
+实现 VISUAL_HANDOVER、TRACK_TARGET 和 RECOVER_TO_GNSS，
+限制 GNSS 与视觉目标差值和接管跳变，接管期间保持安全高度，
+视觉长时丢失时在下降前回退到 GNSS，不实现下降。
 ```

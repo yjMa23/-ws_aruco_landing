@@ -26,20 +26,17 @@
      - `/aruco/debug_image`
 
 2. `aruco_precision_landing_cpp`
-   - 订阅 PX4 状态、局部位置、里程计和 ArUco 位姿。
-   - 发布 PX4 Offboard 模式、轨迹设定点和飞行命令。
-   - 已实现状态：
+   - 订阅 PX4 状态、局部位置、里程计、船舶 GNSS 和 ArUco 可见性。
+   - 发布 PX4 Offboard 模式、轨迹设定点、飞行命令和 GNSS 引导调试状态。
+   - 当前 P2C 主路径已实现状态：
      - `INIT`
      - `WAIT_FOR_PX4`
      - `OFFBOARD_PRE_STREAM`
      - `ARM_AND_TAKEOFF`
-     - `GOTO_ARUCO_AREA`
-     - `WAIT_ARUCO`
-     - `CENTER_ABOVE_MARKER`
-     - `DESCEND_WITH_TRACKING`
-     - `FINAL_LAND`
-     - `DONE`
-     - `ABORT`
+     - `WAIT_DECK_GNSS`
+     - `RENDEZVOUS_GNSS`
+     - `ACQUIRE_ARUCO`
+   - 旧静态 `GOTO_ARUCO_AREA`、`WAIT_ARUCO`、对中、下降和 Land 状态代码仍保留用于历史基线，但从当前主路径不可达。
 
 3. `moving_deck_sim`
    - 已实现静止、水平匀速和 XY 正弦移动甲板。
@@ -53,15 +50,15 @@
    - `P2.0` 项目状态和设计文档同步已完成。
    - `P2A` 坐标契约、刚体变换和 WGS84 / ENU / NED 纯数学模块已完成。
    - `P2B` 船舶 GNSS 传感器仿真已完成，验收记录见 `docs/P2B_DECK_GNSS_VALIDATION.md`。
-   - 当前进入 `P2C` GNSS 会合与移动甲板上方粗跟踪阶段。
+   - `P2C` GNSS 会合与移动甲板上方粗跟踪已完成，验收记录见 `docs/P2C_GNSS_RENDEZVOUS_VALIDATION.md`。
+   - 当前进入 `P2D` ArUco 完整变换与 GNSS—视觉接管阶段。
 
-5. 当前控制器仍属于“静态标志物降落 V0”，主要缺口如下：
-   - 搜索点是固定 NED 坐标，不能根据船舶 GNSS 会合或跟踪移动甲板。
-   - 尚未将船舶 GNSS 接入控制器，也没有移动搜索和 GNSS 到视觉接管。
-   - 只使用 ArUco `position.x/y`，没有利用高度和甲板姿态。
-   - 运行控制器仍使用两个符号参数，尚未接入已完成的完整刚体变换模块。
-   - 已有 WGS84、ENU、NED 纯数学转换，但尚未用于船舶 GNSS 和控制器。
-   - 没有甲板位置、速度、升沉速度和姿态的状态估计。
+5. 当前控制器主要缺口如下：
+   - 稳定识别 ArUco 后仍由 GNSS 中心悬停，没有视觉位置控制接管。
+   - 只检查 ArUco 可见性，尚未使用完整 Marker 位置和姿态。
+   - 运行控制器尚未接入已完成的完整刚体变换模块和相机外参。
+   - 没有 GNSS 与视觉目标一致性检查、平滑接管和下降前视觉丢失恢复。
+   - 没有甲板视觉位置、速度、升沉速度和姿态的状态估计。
    - 没有目标运动预测和速度前馈。
    - 下降速度固定，没有基于相对速度、甲板倾角和可见性的着陆窗口。
    - `FINAL_LAND` 过早切换 PX4 自动降落，移动甲板继续运动时可能失去水平跟踪。
@@ -303,7 +300,6 @@ ws_aruco_landing/
 | --- | --- | --- |
 | `/fmu/out/vehicle_status` | `px4_msgs/msg/VehicleStatus` | 模式和解锁状态 |
 | `/fmu/out/vehicle_local_position` | `px4_msgs/msg/VehicleLocalPosition` | NED 位置、速度和 WGS84 参考原点 |
-| `/fmu/out/vehicle_global_position` | `px4_msgs/msg/VehicleGlobalPosition` | 无人机全局位置和 GNSS 会合校验 |
 | `/fmu/out/vehicle_odometry` | `px4_msgs/msg/VehicleOdometry` | FRD 到 NED 的完整姿态 |
 | `/fmu/out/vehicle_land_detected` | `px4_msgs/msg/VehicleLandDetected` | 触地检测 |
 
@@ -812,16 +808,18 @@ colcon test-result --verbose
 
 任务：
 
-- 订阅船舶 GNSS 和 PX4 全局参考。
+- 订阅船舶 GNSS 和 PX4 local/global 参考。
 - 实现 `WAIT_DECK_GNSS`、`RENDEZVOUS_GNSS` 和 `ACQUIRE_ARUCO`。
 - 搜索中心跟随实时船舶 GNSS，而不是固定世界坐标。
 - 对 GNSS 超时、跳变和目标变化率进行限制。
+- 稳定 ArUco 后停止搜索偏移并回到 GNSS 中心安全悬停。
 
 验收：
 
 - ArUco 不可见时仍能到达并粗跟踪移动甲板上方。
 - GNSS 过期或跳变不会继续追踪错误目标。
-- 本阶段不下降。
+- 稳定 ArUco 后保持安全高度，不接入视觉控制、不下降。
+- 纯逻辑和合成 PX4 消息验收见 `docs/P2C_GNSS_RENDEZVOUS_VALIDATION.md`；真实飞行闭环仍待环境完整后验证。
 
 ### P2D：GNSS 到视觉接管与下降前恢复
 
@@ -1059,15 +1057,15 @@ colcon test-result --verbose
 
 ## 16. Codex 下一步默认任务
 
-`P0`、`P1`、`P2.0`、`P2A` 和 `P2B` 已完成。当前从 `P2C` 开始，不直接实现 MPC 或强化学习。
+`P0`、`P1`、`P2.0`、`P2A`、`P2B` 和 `P2C` 已完成。当前从 `P2D` 开始，不直接实现 MPC 或强化学习。
 
 下一项任务：
 
 ```text
-在 aruco_precision_landing_cpp 中订阅船舶 NavSatFix、ENU 速度和 PX4 local/global 参考，
-使用 geodetic_converter 将船舶 WGS84 转换到 PX4 local NED，
-实现 WAIT_DECK_GNSS、RENDEZVOUS_GNSS 和 ACQUIRE_ARUCO，
-只完成安全高度会合、粗跟踪和移动搜索，不下降，不接入视觉精降。
+将 ArUco PoseStamped 通过 T_body_frd_camera_optical 和 VehicleOdometry
+转换到 PX4 local NED，发布 /landing/marker_pose_ned，
+实现 VISUAL_HANDOVER、TRACK_TARGET 和 RECOVER_TO_GNSS，
+平滑切换 GNSS 与视觉目标并限制目标跳变，保持安全高度，不下降。
 ```
 
-完成 GNSS 会合验收后，再进入 `P2D：GNSS 到视觉接管与下降前恢复`。
+完成视觉接管和下降前恢复验收后，再进入 `P3：甲板视觉状态估计与短时预测`。

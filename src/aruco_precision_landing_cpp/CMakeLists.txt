@@ -13,12 +13,14 @@ find_package(Eigen3 REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(px4_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 
 add_library(
   aruco_landing_math
   src/coordinate_transform.cpp
   src/geodetic_converter.cpp
+  src/gnss_rendezvous_guidance.cpp
 )
 target_compile_features(aruco_landing_math PUBLIC cxx_std_17)
 target_include_directories(
@@ -34,6 +36,7 @@ add_executable(
   src/px4_aruco_landing_node.cpp
 )
 target_compile_features(px4_aruco_landing_node PUBLIC cxx_std_17)
+target_link_libraries(px4_aruco_landing_node aruco_landing_math)
 target_include_directories(
   px4_aruco_landing_node
   PUBLIC
@@ -45,6 +48,7 @@ ament_target_dependencies(
   rclcpp
   px4_msgs
   geometry_msgs
+  sensor_msgs
   std_msgs
 )
 
@@ -85,6 +89,12 @@ if(BUILD_TESTING)
     test/geodetic_converter_test.cpp
   )
   target_link_libraries(geodetic_converter_test aruco_landing_math)
+
+  ament_add_gtest(
+    gnss_rendezvous_guidance_test
+    test/gnss_rendezvous_guidance_test.cpp
+  )
+  target_link_libraries(gnss_rendezvous_guidance_test aruco_landing_math)
 endif()
 
 ament_export_dependencies(Eigen3)

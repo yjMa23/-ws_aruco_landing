@@ -98,7 +98,9 @@ ros2 launch aruco_precision_landing_cpp px4_aruco_landing.launch.py
 
 ```bash
 ros2 topic echo /landing/state
+ros2 topic echo /landing/guidance_source
 ros2 topic echo /landing/target_pose
+ros2 topic echo /landing/deck_gnss_pose_ned
 ```
 
 ## P1 水平移动甲板
@@ -110,7 +112,7 @@ ros2 topic echo /landing/target_pose
 
 移动甲板 world 仍命名为 `aruco`，因此现有相机桥接话题和 ArUco 检测器默认配置保持
 不变。`/simulation/deck/ground_truth` 使用 Gazebo world ENU，禁止输入降落控制器。
-仿真传感器节点会将其处理为 `/deck/gps/fix` 和 `/deck/gps/velocity`，用于下一阶段 GNSS 会合。
+仿真传感器节点会将其处理为 `/deck/gps/fix` 和 `/deck/gps/velocity`。控制器已在 P2C 中使用这些传感器输出完成安全高度 GNSS 会合、移动中心 ArUco 搜索和 GNSS 超时回退。当前稳定识别 ArUco 后仍保持 GNSS 中心悬停，不下降。
 
 ## 详细文档
 
@@ -122,8 +124,8 @@ ros2 topic echo /landing/target_pose
 - [水平移动甲板仿真 README](src/moving_deck_sim/README.md)
 - [P1 水平移动甲板仿真验收记录](docs/P1_MOVING_DECK_VALIDATION.md)
 - [P2B 船舶 GNSS 传感器仿真验收记录](docs/P2B_DECK_GNSS_VALIDATION.md)
+- [P2C GNSS 会合与移动搜索验收记录](docs/P2C_GNSS_RENDEZVOUS_VALIDATION.md)
 
 ## 安全提示
 
-精准降落控制节点会自动发送 Offboard、Arm 和 Land 命令。建议先在 SITL 中验证完整流程；
-实机测试前请确认 PX4 估计器、解锁检查、failsafe、通信链路和人工接管手段都已准备好。
+控制节点会自动发送 Offboard 和 Arm 命令。P2C 默认 `enable_auto_land=false`，当前主路径不会下降或发送 Land 命令。建议只在 SITL 中验证；实机测试前请确认 PX4 估计器、解锁检查、failsafe、通信链路和人工接管手段都已准备好。

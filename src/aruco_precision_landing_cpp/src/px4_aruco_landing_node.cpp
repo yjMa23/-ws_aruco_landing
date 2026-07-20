@@ -32,6 +32,19 @@ Px4ArucoLandingNode::Px4ArucoLandingNode()
 {
   declare_and_load_parameters();
   validate_parameters();
+
+  GnssRendezvousParameters gnss_parameters;
+  gnss_parameters.fix_timeout_s = gnss_fix_timeout_s_;
+  gnss_parameters.velocity_timeout_s = gnss_velocity_timeout_s_;
+  gnss_parameters.stable_duration_s = gnss_stable_duration_s_;
+  gnss_parameters.max_fix_jump_m = max_gnss_jump_m_;
+  gnss_parameters.max_target_step_m = max_target_step_m_;
+  gnss_parameters.max_target_speed_mps = max_rendezvous_speed_mps_;
+  gnss_parameters.search_offset_m = search_offset_m_;
+  gnss_parameters.search_point_hold_s = search_point_hold_s_;
+  gnss_parameters.max_geodetic_range_m = gnss_max_geodetic_range_m_;
+  gnss_guidance_ = std::make_unique<GnssRendezvousGuidance>(gnss_parameters);
+
   create_ros_interfaces();
 
   last_control_time_ = get_clock()->now();
@@ -43,12 +56,11 @@ Px4ArucoLandingNode::Px4ArucoLandingNode()
 
   RCLCPP_INFO(
     get_logger(),
-    "PX4 ArUco landing controller started at %.1f Hz; search target NED "
-    "(%.2f, %.2f, %.2f)",
+    "PX4 landing controller started at %.1f Hz; GNSS rendezvous altitude %.2f m, "
+    "radius %.2f m",
     control_rate_hz_,
-    search_x_,
-    search_y_,
-    -search_alt_);
+    rendezvous_altitude_m_,
+    rendezvous_radius_m_);
 }
 
 void Px4ArucoLandingNode::declare_and_load_parameters()
@@ -59,6 +71,21 @@ void Px4ArucoLandingNode::declare_and_load_parameters()
   search_y_ = declare_parameter<double>("search_y", 0.0);
   search_alt_ = declare_parameter<double>("search_alt", 3.0);
   abort_hover_alt_ = declare_parameter<double>("abort_hover_alt", 3.0);
+  rendezvous_altitude_m_ = declare_parameter<double>("rendezvous_altitude_m", 5.0);
+  rendezvous_radius_m_ = declare_parameter<double>("rendezvous_radius_m", 2.0);
+  gnss_fix_timeout_s_ = declare_parameter<double>("gnss_fix_timeout_s", 1.0);
+  gnss_velocity_timeout_s_ = declare_parameter<double>("gnss_velocity_timeout_s", 1.0);
+  gnss_stable_duration_s_ = declare_parameter<double>("gnss_stable_duration_s", 1.0);
+  max_gnss_jump_m_ = declare_parameter<double>("max_gnss_jump_m", 5.0);
+  max_rendezvous_speed_mps_ =
+    declare_parameter<double>("max_rendezvous_speed_mps", 2.0);
+  max_target_step_m_ = declare_parameter<double>("max_target_step_m", 0.20);
+  search_offset_m_ = declare_parameter<double>("search_offset_m", 1.0);
+  search_point_hold_s_ = declare_parameter<double>("search_point_hold_s", 1.0);
+  aruco_acquire_duration_s_ =
+    declare_parameter<double>("aruco_acquire_duration_s", 0.5);
+  gnss_max_geodetic_range_m_ =
+    declare_parameter<double>("gnss_max_geodetic_range_m", 10000.0);
   offboard_prestream_count_ = declare_parameter<int>("offboard_prestream_count", 20);
   stable_detect_count_ = declare_parameter<int>("stable_detect_count", 10);
   camera_x_to_body_y_sign_ =
@@ -75,9 +102,11 @@ void Px4ArucoLandingNode::declare_and_load_parameters()
   search_xy_threshold_ = declare_parameter<double>("search_xy_threshold", 0.25);
   search_z_threshold_ = declare_parameter<double>("search_z_threshold", 0.20);
   command_retry_interval_ = declare_parameter<double>("command_retry_interval", 1.0);
-  enable_auto_land_ = declare_parameter<bool>("enable_auto_land", true);
+  enable_auto_land_ = declare_parameter<bool>("enable_auto_land", false);
   target_pose_frame_id_ =
     declare_parameter<std::string>("target_pose_frame_id", "local_ned");
+  deck_gnss_velocity_frame_id_ =
+    declare_parameter<std::string>("deck_gnss_velocity_frame_id", "world_enu");
 }
 
 void Px4ArucoLandingNode::validate_parameters() const
@@ -93,6 +122,15 @@ void Px4ArucoLandingNode::validate_parameters() const
   require_positive("takeoff_alt", takeoff_alt_);
   require_positive("search_alt", search_alt_);
   require_positive("abort_hover_alt", abort_hover_alt_);
+  require_positive("rendezvous_altitude_m", rendezvous_altitude_m_);
+  require_positive("rendezvous_radius_m", rendezvous_radius_m_);
+  require_positive("gnss_fix_timeout_s", gnss_fix_timeout_s_);
+  require_positive("gnss_velocity_timeout_s", gnss_velocity_timeout_s_);
+  require_positive("max_gnss_jump_m", max_gnss_jump_m_);
+  require_positive("max_rendezvous_speed_mps", max_rendezvous_speed_mps_);
+  require_positive("max_target_step_m", max_target_step_m_);
+  require_positive("search_point_hold_s", search_point_hold_s_);
+  require_positive("gnss_max_geodetic_range_m", gnss_max_geodetic_range_m_);
   require_positive("max_xy_step", max_xy_step_);
   require_positive("center_xy_threshold", center_xy_threshold_);
   require_positive("max_descent_rate", max_descent_rate_);
@@ -106,6 +144,18 @@ void Px4ArucoLandingNode::validate_parameters() const
 
   if (!std::isfinite(search_x_) || !std::isfinite(search_y_)) {
     throw std::invalid_argument("Parameters 'search_x' and 'search_y' must be finite");
+  }
+  if (!std::isfinite(gnss_stable_duration_s_) || gnss_stable_duration_s_ < 0.0) {
+    throw std::invalid_argument(
+            "Parameter 'gnss_stable_duration_s' must be finite and non-negative");
+  }
+  if (!std::isfinite(search_offset_m_) || search_offset_m_ < 0.0) {
+    throw std::invalid_argument(
+            "Parameter 'search_offset_m' must be finite and non-negative");
+  }
+  if (!std::isfinite(aruco_acquire_duration_s_) || aruco_acquire_duration_s_ < 0.0) {
+    throw std::invalid_argument(
+            "Parameter 'aruco_acquire_duration_s' must be finite and non-negative");
   }
   if (offboard_prestream_count_ < 1) {
     throw std::invalid_argument("Parameter 'offboard_prestream_count' must be at least 1");
@@ -126,11 +176,16 @@ void Px4ArucoLandingNode::validate_parameters() const
   if (target_pose_frame_id_.empty()) {
     throw std::invalid_argument("Parameter 'target_pose_frame_id' must not be empty");
   }
+  if (deck_gnss_velocity_frame_id_.empty()) {
+    throw std::invalid_argument(
+            "Parameter 'deck_gnss_velocity_frame_id' must not be empty");
+  }
 }
 
 void Px4ArucoLandingNode::create_ros_interfaces()
 {
   const auto aruco_qos = rclcpp::QoS(rclcpp::KeepLast(10)).reliable();
+  const auto deck_gnss_qos = rclcpp::SensorDataQoS();
   const auto px4_qos =
     rclcpp::QoS(rclcpp::KeepLast(1)).best_effort().transient_local();
 
@@ -153,6 +208,20 @@ void Px4ArucoLandingNode::create_ros_interfaces()
     aruco_qos,
     std::bind(
       &Px4ArucoLandingNode::aruco_id_callback,
+      this,
+      std::placeholders::_1));
+  deck_gps_fix_sub_ = create_subscription<sensor_msgs::msg::NavSatFix>(
+    "/deck/gps/fix",
+    deck_gnss_qos,
+    std::bind(
+      &Px4ArucoLandingNode::deck_gps_fix_callback,
+      this,
+      std::placeholders::_1));
+  deck_gps_velocity_sub_ = create_subscription<geometry_msgs::msg::TwistStamped>(
+    "/deck/gps/velocity",
+    deck_gnss_qos,
+    std::bind(
+      &Px4ArucoLandingNode::deck_gps_velocity_callback,
       this,
       std::placeholders::_1));
   vehicle_status_sub_ = create_subscription<px4_msgs::msg::VehicleStatus>(
@@ -194,6 +263,12 @@ void Px4ArucoLandingNode::create_ros_interfaces()
   target_pose_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>(
     "/landing/target_pose",
     rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  deck_gnss_pose_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>(
+    "/landing/deck_gnss_pose_ned",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  guidance_source_pub_ = create_publisher<std_msgs::msg::String>(
+    "/landing/guidance_source",
+    rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
 }
 
 void Px4ArucoLandingNode::aruco_pose_callback(
@@ -207,15 +282,21 @@ void Px4ArucoLandingNode::aruco_pose_callback(
 void Px4ArucoLandingNode::aruco_visible_callback(
   const std_msgs::msg::Bool::SharedPtr msg)
 {
+  const bool was_visible = aruco_visible_;
   aruco_visible_ = msg->data;
   last_aruco_visible_time_ = get_clock()->now();
 
   if (aruco_visible_) {
+    if (!was_visible || !have_aruco_visible_since_) {
+      aruco_visible_since_ = last_aruco_visible_time_;
+      have_aruco_visible_since_ = true;
+    }
     if (stable_visible_count_ < stable_detect_count_) {
       ++stable_visible_count_;
     }
   } else {
     stable_visible_count_ = 0;
+    have_aruco_visible_since_ = false;
   }
 }
 
@@ -224,6 +305,46 @@ void Px4ArucoLandingNode::aruco_id_callback(
 {
   aruco_id_ = msg->data;
   have_aruco_id_ = true;
+}
+
+void Px4ArucoLandingNode::deck_gps_fix_callback(
+  const sensor_msgs::msg::NavSatFix::SharedPtr msg)
+{
+  if (msg->status.status < sensor_msgs::msg::NavSatStatus::STATUS_FIX) {
+    return;
+  }
+
+  const Wgs84Position fix{msg->latitude, msg->longitude, msg->altitude};
+  if (!gnss_guidance_->ingest_fix(fix, get_clock()->now().seconds())) {
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 5000,
+      "Rejected deck GNSS fix: invalid, out of range, or excessive jump");
+  }
+}
+
+void Px4ArucoLandingNode::deck_gps_velocity_callback(
+  const geometry_msgs::msg::TwistStamped::SharedPtr msg)
+{
+  if (!msg->header.frame_id.empty() &&
+    msg->header.frame_id != deck_gnss_velocity_frame_id_)
+  {
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 5000,
+      "Rejected deck GNSS velocity frame '%s'; expected '%s'",
+      msg->header.frame_id.c_str(), deck_gnss_velocity_frame_id_.c_str());
+    return;
+  }
+
+  const Eigen::Vector3d velocity_enu{
+    msg->twist.linear.x,
+    msg->twist.linear.y,
+    msg->twist.linear.z};
+  if (!gnss_guidance_->ingest_velocity_enu(
+      velocity_enu, get_clock()->now().seconds()))
+  {
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 5000, "Rejected invalid deck GNSS velocity");
+  }
 }
 
 void Px4ArucoLandingNode::vehicle_status_callback(
@@ -238,6 +359,21 @@ void Px4ArucoLandingNode::vehicle_local_position_callback(
 {
   local_position_ = *msg;
   have_local_position_ = true;
+
+  if (local_position_.xy_global && local_position_.z_global &&
+    std::isfinite(local_position_.ref_lat) &&
+    std::isfinite(local_position_.ref_lon) &&
+    std::isfinite(local_position_.ref_alt))
+  {
+    const Wgs84Position reference{
+      local_position_.ref_lat,
+      local_position_.ref_lon,
+      local_position_.ref_alt};
+    if (!gnss_guidance_->set_local_reference(reference)) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 5000, "Rejected invalid PX4 local geodetic reference");
+    }
+  }
 }
 
 void Px4ArucoLandingNode::vehicle_odometry_callback(
@@ -267,13 +403,15 @@ void Px4ArucoLandingNode::control_timer_callback()
   publish_trajectory_setpoint();
   publish_landing_state();
   publish_target_pose();
+  publish_deck_gnss_pose(now);
+  publish_guidance_source();
 }
 
 void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
 {
   switch (state_) {
     case LandingState::INIT:
-      transition_to(LandingState::WAIT_FOR_PX4);
+      transition_to(LandingState::WAIT_FOR_PX4, "controller initialized");
       break;
 
     case LandingState::WAIT_FOR_PX4:
@@ -281,7 +419,9 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
         takeoff_start_x_ = local_position_.x;
         takeoff_start_y_ = local_position_.y;
         initial_yaw_ = current_yaw_;
-        transition_to(LandingState::OFFBOARD_PRE_STREAM);
+        transition_to(
+          LandingState::OFFBOARD_PRE_STREAM,
+          "PX4 status, local position, and attitude are valid");
       }
       break;
 
@@ -296,7 +436,9 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
           1.0F);
         last_command_time_ = now;
         have_last_command_time_ = true;
-        transition_to(LandingState::ARM_AND_TAKEOFF);
+        transition_to(
+          LandingState::ARM_AND_TAKEOFF,
+          "offboard pre-stream complete; mode and arm commands sent");
       } else {
         ++prestream_setpoint_count_;
       }
@@ -330,8 +472,126 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
         if (in_offboard && armed &&
           std::abs(local_position_.z + takeoff_alt_) <= takeoff_z_threshold_)
         {
-          transition_to(LandingState::GOTO_ARUCO_AREA);
+          transition_to(
+            LandingState::WAIT_DECK_GNSS,
+            "takeoff complete; wait for stable deck GNSS");
         }
+        break;
+      }
+
+    case LandingState::WAIT_DECK_GNSS:
+      if (gnss_guidance_->ready(now.seconds())) {
+        transition_to(
+          LandingState::RENDEZVOUS_GNSS,
+          "deck GNSS and PX4 geodetic reference are stable");
+      }
+      break;
+
+    case LandingState::RENDEZVOUS_GNSS:
+      {
+        if (!gnss_guidance_->ready(now.seconds())) {
+          transition_to(
+            LandingState::WAIT_DECK_GNSS,
+            "deck GNSS became stale or unstable during rendezvous");
+          break;
+        }
+
+        const auto estimate = gnss_guidance_->estimate(now.seconds());
+        if (!estimate.has_value()) {
+          transition_to(
+            LandingState::WAIT_DECK_GNSS,
+            "deck GNSS estimate unavailable during rendezvous");
+          break;
+        }
+
+        const Eigen::Vector2d current_target = target_valid_ ?
+          Eigen::Vector2d{target_x_, target_y_} :
+          Eigen::Vector2d{local_position_.x, local_position_.y};
+        const Eigen::Vector2d desired_target = estimate->position_ned.head<2>();
+        const auto limited_target = gnss_guidance_->limit_target_xy(
+          current_target, desired_target, dt);
+        if (!limited_target.has_value()) {
+          transition_to(LandingState::ABORT, "invalid GNSS rendezvous target");
+          break;
+        }
+
+        set_target(
+          limited_target->x(),
+          limited_target->y(),
+          -rendezvous_altitude_m_,
+          current_yaw_);
+
+        const double horizontal_distance = std::hypot(
+          local_position_.x - estimate->position_ned.x(),
+          local_position_.y - estimate->position_ned.y());
+        const double vertical_error =
+          std::abs(local_position_.z + rendezvous_altitude_m_);
+        if (horizontal_distance <= rendezvous_radius_m_ &&
+          vertical_error <= search_z_threshold_)
+        {
+          transition_to(
+            LandingState::ACQUIRE_ARUCO,
+            "UAV reached GNSS rendezvous region above moving deck");
+        }
+        break;
+      }
+
+    case LandingState::ACQUIRE_ARUCO:
+      {
+        if (!gnss_guidance_->ready(now.seconds())) {
+          transition_to(
+            LandingState::WAIT_DECK_GNSS,
+            "deck GNSS became stale while acquiring ArUco");
+          break;
+        }
+
+        const auto estimate = gnss_guidance_->estimate(now.seconds());
+        if (!estimate.has_value()) {
+          transition_to(
+            LandingState::WAIT_DECK_GNSS,
+            "deck GNSS estimate unavailable while acquiring ArUco");
+          break;
+        }
+
+        Eigen::Vector2d desired_target = estimate->position_ned.head<2>();
+        if (marker_is_stably_visible(now)) {
+          if (!aruco_acquired_hold_) {
+            RCLCPP_INFO(
+              get_logger(),
+              "ArUco acquired at safe altitude; holding GNSS center until P2D handover");
+          }
+          aruco_acquired_hold_ = true;
+        } else {
+          if (aruco_acquired_hold_ || !have_search_pattern_start_time_) {
+            search_pattern_start_time_ = now;
+            have_search_pattern_start_time_ = true;
+          }
+          aruco_acquired_hold_ = false;
+          const double elapsed_s =
+            (now - search_pattern_start_time_).seconds();
+          const auto offset = gnss_guidance_->search_offset(elapsed_s);
+          if (!offset.has_value()) {
+            transition_to(LandingState::ABORT, "invalid GNSS-centered search offset");
+            break;
+          }
+          desired_target += *offset;
+        }
+
+        const Eigen::Vector2d current_target = target_valid_ ?
+          Eigen::Vector2d{target_x_, target_y_} :
+          Eigen::Vector2d{local_position_.x, local_position_.y};
+        const auto limited_target = gnss_guidance_->limit_target_xy(
+          current_target, desired_target, dt);
+        if (!limited_target.has_value()) {
+          transition_to(LandingState::ABORT, "invalid ArUco acquisition target");
+          break;
+        }
+
+        set_target(
+          limited_target->x(),
+          limited_target->y(),
+          -rendezvous_altitude_m_,
+          current_yaw_);
         break;
       }
 
@@ -345,7 +605,9 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
         if (horizontal_distance <= search_xy_threshold_ &&
           vertical_error <= search_z_threshold_)
         {
-          transition_to(LandingState::WAIT_ARUCO);
+          transition_to(
+            LandingState::WAIT_ARUCO,
+            "legacy fixed search point reached");
         }
         break;
       }
@@ -354,7 +616,9 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
       if (marker_is_fresh(now) && stable_visible_count_ >= stable_detect_count_) {
         last_marker_seen_time_ = now;
         have_last_marker_seen_time_ = true;
-        transition_to(LandingState::CENTER_ABOVE_MARKER);
+        transition_to(
+          LandingState::CENTER_ABOVE_MARKER,
+          "legacy ArUco visibility became stable");
       }
       break;
 
@@ -375,7 +639,9 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
             current_yaw_);
 
           if (std::hypot(error_north, error_east) < center_xy_threshold_) {
-            transition_to(LandingState::DESCEND_WITH_TRACKING);
+            transition_to(
+              LandingState::DESCEND_WITH_TRACKING,
+              "legacy horizontal centering threshold satisfied");
           }
         }
       } else {
@@ -383,14 +649,18 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
           have_last_marker_seen_time_ &&
           (now - last_marker_seen_time_).seconds() > marker_lost_timeout_)
         {
-          transition_to(LandingState::WAIT_ARUCO);
+          transition_to(
+            LandingState::WAIT_ARUCO,
+            "legacy ArUco lost during centering");
         }
       }
       break;
 
     case LandingState::DESCEND_WITH_TRACKING:
       if (local_position_.z >= -final_alt_) {
-        transition_to(LandingState::FINAL_LAND);
+        transition_to(
+          LandingState::FINAL_LAND,
+          "legacy final altitude reached");
         break;
       }
 
@@ -417,7 +687,9 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
           have_last_marker_seen_time_ &&
           (now - last_marker_seen_time_).seconds() > marker_lost_timeout_)
         {
-          transition_to(LandingState::ABORT);
+          transition_to(
+            LandingState::ABORT,
+            "legacy ArUco lost during descent");
         }
       }
       break;
@@ -427,7 +699,9 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
         publish_vehicle_command(px4_msgs::msg::VehicleCommand::VEHICLE_CMD_NAV_LAND);
         final_land_command_sent_ = true;
       }
-      transition_to(LandingState::DONE);
+      transition_to(
+        LandingState::DONE,
+        "legacy final land action completed");
       break;
 
     case LandingState::DONE:
@@ -436,7 +710,9 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
   }
 }
 
-void Px4ArucoLandingNode::transition_to(LandingState new_state)
+void Px4ArucoLandingNode::transition_to(
+  LandingState new_state,
+  const char * reason)
 {
   if (state_ == new_state) {
     return;
@@ -444,9 +720,10 @@ void Px4ArucoLandingNode::transition_to(LandingState new_state)
 
   RCLCPP_INFO(
     get_logger(),
-    "Landing state: %s -> %s",
+    "Landing state: %s -> %s; reason: %s",
     state_name(state_),
-    state_name(new_state));
+    state_name(new_state),
+    reason);
   state_ = new_state;
 
   switch (state_) {
@@ -465,6 +742,37 @@ void Px4ArucoLandingNode::transition_to(LandingState new_state)
         takeoff_start_y_,
         -takeoff_alt_,
         initial_yaw_);
+      break;
+
+    case LandingState::WAIT_DECK_GNSS:
+      stable_visible_count_ = 0;
+      have_aruco_visible_since_ = false;
+      have_search_pattern_start_time_ = false;
+      aruco_acquired_hold_ = false;
+      set_target(
+        local_position_.x,
+        local_position_.y,
+        -rendezvous_altitude_m_,
+        current_yaw_);
+      break;
+
+    case LandingState::RENDEZVOUS_GNSS:
+      set_target(
+        target_valid_ ? target_x_ : local_position_.x,
+        target_valid_ ? target_y_ : local_position_.y,
+        -rendezvous_altitude_m_,
+        current_yaw_);
+      break;
+
+    case LandingState::ACQUIRE_ARUCO:
+      search_pattern_start_time_ = get_clock()->now();
+      have_search_pattern_start_time_ = true;
+      aruco_acquired_hold_ = false;
+      set_target(
+        target_valid_ ? target_x_ : local_position_.x,
+        target_valid_ ? target_y_ : local_position_.y,
+        -rendezvous_altitude_m_,
+        current_yaw_);
       break;
 
     case LandingState::GOTO_ARUCO_AREA:
@@ -516,6 +824,8 @@ bool Px4ArucoLandingNode::px4_data_ready() const
          std::isfinite(local_position_.x) &&
          std::isfinite(local_position_.y) &&
          std::isfinite(local_position_.z) &&
+         vehicle_odometry_.pose_frame ==
+         px4_msgs::msg::VehicleOdometry::POSE_FRAME_NED &&
          quaternion_is_valid(vehicle_odometry_.q.data());
 }
 
@@ -529,6 +839,14 @@ bool Px4ArucoLandingNode::marker_is_fresh(const rclcpp::Time & now) const
          (now - last_aruco_visible_time_).seconds() <= aruco_pose_timeout_ &&
          std::isfinite(aruco_pose_.pose.position.x) &&
          std::isfinite(aruco_pose_.pose.position.y);
+}
+
+bool Px4ArucoLandingNode::marker_is_stably_visible(const rclcpp::Time & now) const
+{
+  return marker_is_fresh(now) &&
+         have_aruco_visible_since_ &&
+         now >= aruco_visible_since_ &&
+         (now - aruco_visible_since_).seconds() >= aruco_acquire_duration_s_;
 }
 
 bool Px4ArucoLandingNode::should_retry_command(const rclcpp::Time & now) const
@@ -659,6 +977,47 @@ void Px4ArucoLandingNode::publish_target_pose()
   target_pose_pub_->publish(msg);
 }
 
+void Px4ArucoLandingNode::publish_deck_gnss_pose(const rclcpp::Time & now)
+{
+  const auto estimate = gnss_guidance_->estimate(now.seconds());
+  if (!estimate.has_value()) {
+    return;
+  }
+
+  geometry_msgs::msg::PoseStamped msg;
+  msg.header.stamp = now;
+  msg.header.frame_id = target_pose_frame_id_;
+  msg.pose.position.x = estimate->position_ned.x();
+  msg.pose.position.y = estimate->position_ned.y();
+  msg.pose.position.z = estimate->position_ned.z();
+  msg.pose.orientation.w = 1.0;
+  deck_gnss_pose_pub_->publish(msg);
+}
+
+void Px4ArucoLandingNode::publish_guidance_source()
+{
+  std_msgs::msg::String msg;
+  switch (state_) {
+    case LandingState::WAIT_DECK_GNSS:
+      msg.data = "GNSS_WAIT";
+      break;
+    case LandingState::RENDEZVOUS_GNSS:
+      msg.data = "GNSS_RENDEZVOUS";
+      break;
+    case LandingState::ACQUIRE_ARUCO:
+      msg.data = aruco_acquired_hold_ ? "GNSS_ARUCO_ACQUIRED_HOLD" : "GNSS_SEARCH";
+      break;
+    case LandingState::CENTER_ABOVE_MARKER:
+    case LandingState::DESCEND_WITH_TRACKING:
+      msg.data = "LEGACY_VISION";
+      break;
+    default:
+      msg.data = "NONE";
+      break;
+  }
+  guidance_source_pub_->publish(msg);
+}
+
 const char * Px4ArucoLandingNode::state_name(LandingState state)
 {
   switch (state) {
@@ -670,6 +1029,12 @@ const char * Px4ArucoLandingNode::state_name(LandingState state)
       return "OFFBOARD_PRE_STREAM";
     case LandingState::ARM_AND_TAKEOFF:
       return "ARM_AND_TAKEOFF";
+    case LandingState::WAIT_DECK_GNSS:
+      return "WAIT_DECK_GNSS";
+    case LandingState::RENDEZVOUS_GNSS:
+      return "RENDEZVOUS_GNSS";
+    case LandingState::ACQUIRE_ARUCO:
+      return "ACQUIRE_ARUCO";
     case LandingState::GOTO_ARUCO_AREA:
       return "GOTO_ARUCO_AREA";
     case LandingState::WAIT_ARUCO:

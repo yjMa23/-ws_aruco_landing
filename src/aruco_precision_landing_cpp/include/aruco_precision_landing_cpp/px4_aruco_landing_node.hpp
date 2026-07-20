@@ -4,11 +4,14 @@
 #ifndef ARUCO_PRECISION_LANDING_CPP__PX4_ARUCO_LANDING_NODE_HPP_
 #define ARUCO_PRECISION_LANDING_CPP__PX4_ARUCO_LANDING_NODE_HPP_
 
+#include "aruco_precision_landing_cpp/gnss_rendezvous_guidance.hpp"
+
 #include <cstdint>
 #include <memory>
 #include <string>
 
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/twist_stamped.hpp>
 #include <px4_msgs/msg/offboard_control_mode.hpp>
 #include <px4_msgs/msg/trajectory_setpoint.hpp>
 #include <px4_msgs/msg/vehicle_command.hpp>
@@ -16,6 +19,7 @@
 #include <px4_msgs/msg/vehicle_odometry.hpp>
 #include <px4_msgs/msg/vehicle_status.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/int32.hpp>
 #include <std_msgs/msg/string.hpp>
@@ -29,6 +33,9 @@ enum class LandingState
   WAIT_FOR_PX4,
   OFFBOARD_PRE_STREAM,
   ARM_AND_TAKEOFF,
+  WAIT_DECK_GNSS,
+  RENDEZVOUS_GNSS,
+  ACQUIRE_ARUCO,
   GOTO_ARUCO_AREA,
   WAIT_ARUCO,
   CENTER_ABOVE_MARKER,
@@ -51,6 +58,8 @@ private:
   void aruco_pose_callback(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
   void aruco_visible_callback(const std_msgs::msg::Bool::SharedPtr msg);
   void aruco_id_callback(const std_msgs::msg::Int32::SharedPtr msg);
+  void deck_gps_fix_callback(const sensor_msgs::msg::NavSatFix::SharedPtr msg);
+  void deck_gps_velocity_callback(const geometry_msgs::msg::TwistStamped::SharedPtr msg);
   void vehicle_status_callback(const px4_msgs::msg::VehicleStatus::SharedPtr msg);
   void vehicle_local_position_callback(
     const px4_msgs::msg::VehicleLocalPosition::SharedPtr msg);
@@ -58,10 +67,11 @@ private:
 
   void control_timer_callback();
   void run_state_machine(const rclcpp::Time & now, double dt);
-  void transition_to(LandingState new_state);
+  void transition_to(LandingState new_state, const char * reason = "unspecified");
 
   bool px4_data_ready() const;
   bool marker_is_fresh(const rclcpp::Time & now) const;
+  bool marker_is_stably_visible(const rclcpp::Time & now) const;
   bool should_retry_command(const rclcpp::Time & now) const;
   bool compute_local_marker_error(double & error_north, double & error_east) const;
 
@@ -79,6 +89,8 @@ private:
     float param7 = 0.0F);
   void publish_landing_state();
   void publish_target_pose();
+  void publish_deck_gnss_pose(const rclcpp::Time & now);
+  void publish_guidance_source();
 
   static const char * state_name(LandingState state);
   static double quaternion_to_yaw(const float q[4]);
@@ -90,6 +102,18 @@ private:
   double search_y_{0.0};
   double search_alt_{3.0};
   double abort_hover_alt_{3.0};
+  double rendezvous_altitude_m_{5.0};
+  double rendezvous_radius_m_{2.0};
+  double gnss_fix_timeout_s_{1.0};
+  double gnss_velocity_timeout_s_{1.0};
+  double gnss_stable_duration_s_{1.0};
+  double max_gnss_jump_m_{5.0};
+  double max_rendezvous_speed_mps_{2.0};
+  double max_target_step_m_{0.20};
+  double search_offset_m_{1.0};
+  double search_point_hold_s_{1.0};
+  double aruco_acquire_duration_s_{0.5};
+  double gnss_max_geodetic_range_m_{10000.0};
   int offboard_prestream_count_{20};
   int stable_detect_count_{10};
   double camera_x_to_body_y_sign_{1.0};
@@ -104,8 +128,9 @@ private:
   double search_xy_threshold_{0.25};
   double search_z_threshold_{0.20};
   double command_retry_interval_{1.0};
-  bool enable_auto_land_{true};
+  bool enable_auto_land_{false};
   std::string target_pose_frame_id_{"local_ned"};
+  std::string deck_gnss_velocity_frame_id_{"world_enu"};
 
   LandingState state_{LandingState::INIT};
 
@@ -115,6 +140,9 @@ private:
   bool have_aruco_pose_{false};
   bool aruco_visible_{false};
   bool have_aruco_id_{false};
+  bool have_aruco_visible_since_{false};
+  bool have_search_pattern_start_time_{false};
+  bool aruco_acquired_hold_{false};
   int32_t aruco_id_{-1};
 
   px4_msgs::msg::VehicleStatus vehicle_status_{};
@@ -124,6 +152,8 @@ private:
 
   rclcpp::Time last_aruco_pose_time_;
   rclcpp::Time last_aruco_visible_time_;
+  rclcpp::Time aruco_visible_since_;
+  rclcpp::Time search_pattern_start_time_;
   rclcpp::Time last_marker_seen_time_;
   rclcpp::Time last_command_time_;
   rclcpp::Time last_control_time_;
@@ -145,9 +175,13 @@ private:
   double target_z_{0.0};
   double target_yaw_{0.0};
 
+  std::unique_ptr<GnssRendezvousGuidance> gnss_guidance_;
+
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr aruco_pose_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr aruco_visible_sub_;
   rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr aruco_id_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr deck_gps_fix_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr deck_gps_velocity_sub_;
   rclcpp::Subscription<px4_msgs::msg::VehicleStatus>::SharedPtr vehicle_status_sub_;
   rclcpp::Subscription<px4_msgs::msg::VehicleLocalPosition>::SharedPtr
     vehicle_local_position_sub_;
@@ -159,6 +193,8 @@ private:
   rclcpp::Publisher<px4_msgs::msg::VehicleCommand>::SharedPtr vehicle_command_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr landing_state_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr target_pose_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr deck_gnss_pose_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr guidance_source_pub_;
 
   rclcpp::TimerBase::SharedPtr control_timer_;
 };

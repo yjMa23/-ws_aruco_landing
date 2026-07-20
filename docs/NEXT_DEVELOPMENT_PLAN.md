@@ -20,7 +20,7 @@
 → 丢失恢复、安全中止和批量评测
 ```
 
-本文档是下一阶段的执行计划。用户已于 2026-07-20 确认按本计划执行；当前已完成 `P2.0`、`P2A` 和 `P2B`，下一阶段为 `P2C` GNSS 会合与移动甲板上方粗跟踪。新坐标模块和船舶 GNSS 尚未接入现有控制器。
+本文档是下一阶段的执行计划。用户已于 2026-07-20 确认按本计划执行；当前已完成 `P2.0`、`P2A`、`P2B` 和 `P2C`。船舶 GNSS 已接入控制器并完成安全高度会合、移动中心搜索和 GNSS 超时回退，下一阶段为 `P2D` ArUco 完整变换与 GNSS—视觉接管。
 
 ---
 
@@ -36,6 +36,7 @@
 | `P2A-1` 坐标契约确认 | 已完成 | 新增 `docs/COORDINATE_FRAMES.md`，核对 PX4、Gazebo、相机和地理原点语义 |
 | `P2A-2～4` 纯数学模块与测试 | 已完成 | 实现 `coordinate_transform`、`geodetic_converter` 和 GTest；尚未接入控制器 |
 | `P2B` 船舶 GNSS 传感器仿真 | 已完成 | 实现理想/含噪 GNSS、ENU 速度、固定采样/延迟/丢包、确定性 reset 和端到端冒烟验证 |
+| `P2C` GNSS 会合与移动甲板上方粗跟踪 | 已完成 | 实现 WGS84→local NED、GNSS 校验、会合目标限幅、移动中心搜索、稳定 ArUco 后安全悬停和超时回退 |
 
 ### 2.2 当前已有 ROS 2 包
 
@@ -47,28 +48,26 @@ src/moving_deck_sim
 
 ### 2.3 当前控制器能力
 
-`aruco_precision_landing_cpp` 当前属于静态 Marker 降落 V0，已经具备：
+`aruco_precision_landing_cpp` 当前 P2C 主路径已经具备：
 
-- PX4 Offboard 预发布。
-- 自动切换 Offboard。
-- 自动解锁和起飞。
-- 飞往固定搜索区域。
-- 等待 ArUco。
-- 基于相机平面误差进行水平对中。
-- 固定速率下降。
-- 在固定世界高度附近切换 `NAV_LAND`。
-- Marker 长时间丢失后进入 `ABORT`。
+- PX4 Offboard 预发布、自动切换 Offboard、解锁和起飞。
+- 使用 PX4 `VehicleLocalPosition.ref_lat/ref_lon/ref_alt` 建立 local NED 地理参考。
+- 订阅船舶 `NavSatFix` 和 ENU 速度，拒绝非法、超时和大跳变输入。
+- 使用受限位置目标飞到移动甲板 GNSS 上方。
+- 在安全高度围绕实时船舶 GNSS 中心搜索 ArUco。
+- 稳定识别后停止搜索偏移并回到 GNSS 中心悬停。
+- GNSS 超时后锁定当前水平位置并回到 `WAIT_DECK_GNSS`。
+- 发布船舶 GNSS local NED 调试位姿和当前引导来源。
+
+旧静态对中、下降和 `NAV_LAND` 代码仍保留用于历史基线参考，但从当前 P2C 主路径不可达，默认 `enable_auto_land=false`。
 
 ### 2.4 当前核心缺口
 
-- 固定搜索点无法跟随移动甲板。
-- 甲板离开下视相机视野后无法重新捕获。
-- 没有船舶 GNSS / 遥测粗引导。
-- 没有完整相机外参和刚体坐标变换。
-- 没有 GNSS、ENU、NED 之间的统一转换。
-- 没有甲板位置和速度估计。
+- ArUco 位姿尚未通过完整相机外参和机体姿态转换到 local NED。
+- 目前稳定识别后仍由 GNSS 中心悬停，没有 GNSS 到视觉的平滑控制接管。
+- 没有视觉目标位置和速度估计。
 - 没有运动预测和速度前馈。
-- 没有 GNSS 到 ArUco 的安全接管逻辑。
+- 没有下降前视觉丢失恢复路径。
 - 没有基于相对速度和甲板姿态的着陆窗口。
 - 没有相对甲板高度控制。
 - 最终下降阶段过早退出 Offboard 水平跟踪。
@@ -227,14 +226,15 @@ GNSS 转换与状态校验
 /fmu/out/vehicle_odometry
 ```
 
-后续增加：
+P6 触地确认阶段再增加：
 
 ```text
-/fmu/out/vehicle_global_position
 /fmu/out/vehicle_land_detected
 ```
 
-具体 PX4 消息字段必须以当前安装的 `px4_msgs` 版本为准，不在代码中假设字段名称。
+P2C 已确认不需要额外订阅 `VehicleGlobalPosition`；WGS84 参考直接来自
+`VehicleLocalPosition.ref_lat/ref_lon/ref_alt`。具体 PX4 消息字段必须以当前安装的
+`px4_msgs` 版本为准，不在代码中假设字段名称。
 
 ---
 
@@ -823,8 +823,10 @@ src/aruco_precision_landing_cpp/
 ```text
 /deck/gps/fix
 /deck/gps/velocity
-/fmu/out/vehicle_global_position
+/fmu/out/vehicle_local_position
 ```
+
+P2C 实际使用 `VehicleLocalPosition.ref_lat/ref_lon/ref_alt` 作为 local NED 地理参考，不额外订阅 `VehicleGlobalPosition`。
 
 ## 新增状态
 
@@ -927,6 +929,16 @@ aruco_pose_timeout_s: 0.3
 - 不做 Kalman Filter。
 - 不做视觉速度前馈。
 - 不做最终触地。
+
+## 实现与验收状态
+
+P2C 已实现并通过纯逻辑测试和合成 PX4 消息状态机冒烟测试。验收记录：
+
+```text
+docs/P2C_GNSS_RENDEZVOUS_VALIDATION.md
+```
+
+真实 PX4 动力学下的移动甲板飞行闭环仍需在 QGroundControl/心跳和相机插件环境完整后继续验证。
 
 ## 建议标签
 
@@ -1815,26 +1827,26 @@ grep -R "/simulation/deck/ground_truth" \
 
 ---
 
-## 15. 用户确认后的第一项代码任务
+## 15. 当前下一项代码任务
 
-确认本文档后，第一项任务限定为：
+`P2.0`、`P2A`、`P2B` 和 `P2C` 已完成。下一项任务限定为：
 
 ```text
-P2.0 + P2A 的坐标契约确认部分
+P2D：ArUco 完整变换、GNSS—视觉平滑接管和下降前恢复
 ```
 
 具体只做：
 
-1. 更新 `AGENTS.md` 中当前阶段。
-2. 新增 `docs/COORDINATE_FRAMES.md`。
-3. 检查当前 PX4 模型的下视相机安装位姿。
-4. 检查当前 `px4_msgs` 中 VehicleOdometry 四元数和 frame 定义。
-5. 确认 Gazebo spherical origin 与 PX4 home 的关系。
-6. 输出明确的变换方向和参数设计。
-7. 暂不接入控制器。
-8. 暂不实现 GNSS 节点。
-9. 暂不修改状态机。
-10. 等坐标契约再次检查通过后，再实现数学模块。
+1. 使用 `coordinate_transform` 将 `/aruco/pose` 转换为 `local_ned` Marker 位姿。
+2. 从 YAML 加载方向明确的 `T_body_frd_camera_optical` 外参。
+3. 检查 `VehicleOdometry.pose_frame`、四元数、ArUco 新鲜度和所有有限性。
+4. 发布 `/landing/marker_pose_ned`。
+5. 实现 `VISUAL_HANDOVER`、`TRACK_TARGET` 和 `RECOVER_TO_GNSS`。
+6. 接管前检查 GNSS 与视觉水平差值和目标最大跳变。
+7. 接管期间线性平滑 GNSS 与视觉目标，并保持 `rendezvous_altitude_m`。
+8. 尚未下降时视觉长时丢失，回到 GNSS 会合或捕获。
+9. 暂不实现 Kalman Filter、速度前馈、着陆窗口或下降。
+10. 完成纯逻辑单元测试和安全高度消息级状态机验收后，再进入 P3。
 
 ---
 

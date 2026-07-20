@@ -30,6 +30,16 @@ def generate_launch_description():
                 default_value="/fmu/out/vehicle_local_position_v1",
                 description="PX4 VehicleLocalPosition output topic.",
             ),
+            DeclareLaunchArgument(
+                "deck_gps_fix_topic",
+                default_value="/deck/gps/fix",
+                description="Deck GNSS NavSatFix topic.",
+            ),
+            DeclareLaunchArgument(
+                "deck_gps_velocity_topic",
+                default_value="/deck/gps/velocity",
+                description="Deck GNSS ENU velocity topic.",
+            ),
             Node(
                 package="aruco_precision_landing_cpp",
                 executable="px4_aruco_landing_node",
@@ -44,6 +54,14 @@ def generate_launch_description():
                     (
                         "/fmu/out/vehicle_local_position",
                         LaunchConfiguration("vehicle_local_position_topic"),
+                    ),
+                    (
+                        "/deck/gps/fix",
+                        LaunchConfiguration("deck_gps_fix_topic"),
+                    ),
+                    (
+                        "/deck/gps/velocity",
+                        LaunchConfiguration("deck_gps_velocity_topic"),
                     ),
                 ],
             ),

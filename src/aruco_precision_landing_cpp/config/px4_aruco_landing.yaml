@@ -8,6 +8,20 @@ px4_aruco_landing_node:
     search_alt: 3.0
     abort_hover_alt: 3.0
 
+    rendezvous_altitude_m: 5.0
+    rendezvous_radius_m: 2.0
+    gnss_fix_timeout_s: 1.0
+    gnss_velocity_timeout_s: 1.0
+    gnss_stable_duration_s: 1.0
+    max_gnss_jump_m: 5.0
+    max_rendezvous_speed_mps: 2.0
+    max_target_step_m: 0.20
+    search_offset_m: 1.0
+    search_point_hold_s: 1.0
+    aruco_acquire_duration_s: 0.5
+    gnss_max_geodetic_range_m: 10000.0
+    deck_gnss_velocity_frame_id: world_enu
+
     offboard_prestream_count: 20
     stable_detect_count: 10
 
@@ -26,5 +40,5 @@ px4_aruco_landing_node:
     search_z_threshold: 0.20
     command_retry_interval: 1.0
 
-    enable_auto_land: true
+    enable_auto_land: false
     target_pose_frame_id: local_ned
