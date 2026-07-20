@@ -8,10 +8,26 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 find_package(ament_cmake REQUIRED)
+find_package(eigen3_cmake_module REQUIRED)
+find_package(Eigen3 REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(px4_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
+
+add_library(
+  aruco_landing_math
+  src/coordinate_transform.cpp
+  src/geodetic_converter.cpp
+)
+target_compile_features(aruco_landing_math PUBLIC cxx_std_17)
+target_include_directories(
+  aruco_landing_math
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+)
+target_link_libraries(aruco_landing_math PUBLIC Eigen3::Eigen)
 
 add_executable(
   px4_aruco_landing_node
@@ -33,6 +49,14 @@ ament_target_dependencies(
 )
 
 install(
+  TARGETS aruco_landing_math
+  EXPORT export_aruco_landing_math
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
+)
+
+install(
   TARGETS px4_aruco_landing_node
   DESTINATION lib/${PROJECT_NAME}
 )
@@ -47,4 +71,22 @@ install(
   DESTINATION share/${PROJECT_NAME}
 )
 
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+
+  ament_add_gtest(
+    coordinate_transform_test
+    test/coordinate_transform_test.cpp
+  )
+  target_link_libraries(coordinate_transform_test aruco_landing_math)
+
+  ament_add_gtest(
+    geodetic_converter_test
+    test/geodetic_converter_test.cpp
+  )
+  target_link_libraries(geodetic_converter_test aruco_landing_math)
+endif()
+
+ament_export_dependencies(Eigen3)
+ament_export_targets(export_aruco_landing_math HAS_LIBRARY_TARGET)
 ament_package()

@@ -6,7 +6,7 @@
 
 项目目标不是只完成静态 ArUco 精准降落，而是实现一套可重复评测的传统方法基线：
 
-> 无人机在 Gazebo + PX4 SITL + ROS 2 环境中，仅依赖机载状态和视觉 ArUco 观测，对移动、升沉和倾斜的船舶甲板进行目标跟踪、着陆窗口判断、安全下降和最终触地。
+> 无人机在 Gazebo + PX4 SITL + ROS 2 环境中，先使用经过传感器模型处理的船舶 GNSS / 遥测完成远距离会合，再使用机载状态和视觉 ArUco 完成移动、升沉和倾斜甲板的目标跟踪、着陆窗口判断、安全下降和最终触地。
 
 强化学习不是本阶段任务。传统基线完成后，强化学习仅用于替换或增强高层着陆窗口决策、下降速度参考或参数自适应，不能替代 PX4 姿态内环和基础安全逻辑。
 
@@ -41,10 +41,24 @@
      - `DONE`
      - `ABORT`
 
-3. 当前实现仍属于“静态标志物降落 V0”，主要缺口如下：
-   - 搜索点是固定 NED 坐标，不能跟踪移动甲板。
+3. `moving_deck_sim`
+   - 已实现静止、水平匀速和 XY 正弦移动甲板。
+   - 发布仅供评测使用的 `/simulation/deck/ground_truth`。
+   - 支持固定随机种子和确定性 reset。
+
+4. 阶段状态：
+   - `P0` 仓库整理与静态基线冻结已完成，标签 `baseline-static-v0.1`。
+   - `P1` 水平移动甲板仿真已完成，标签 `baseline-moving-deck-v0.1`。
+   - `P2.0` 项目状态和设计文档同步已完成。
+   - `P2A` 坐标契约、刚体变换和 WGS84 / ENU / NED 纯数学模块已完成。
+   - 当前进入 `P2B` 船舶 GNSS 传感器仿真阶段。
+
+5. 当前控制器仍属于“静态标志物降落 V0”，主要缺口如下：
+   - 搜索点是固定 NED 坐标，不能根据船舶 GNSS 会合或跟踪移动甲板。
+   - 没有船舶 GNSS 传感器仿真、移动搜索和 GNSS 到视觉接管。
    - 只使用 ArUco `position.x/y`，没有利用高度和甲板姿态。
-   - 相机到机体仅通过两个符号参数映射，没有完整相机外参和 TF。
+   - 运行控制器仍使用两个符号参数，尚未接入已完成的完整刚体变换模块。
+   - 已有 WGS84、ENU、NED 纯数学转换，但尚未用于船舶 GNSS 和控制器。
    - 没有甲板位置、速度、升沉速度和姿态的状态估计。
    - 没有目标运动预测和速度前馈。
    - 下降速度固定，没有基于相对速度、甲板倾角和可见性的着陆窗口。
@@ -53,11 +67,9 @@
 
 ---
 
-## 3. 仓库整理要求
+## 3. 仓库整理结果
 
-在新增功能前，先完成仓库结构修复。
-
-当前 `src/aruco_detector` 不能继续以不透明的 Gitlink 形式存在。优先采用单仓库方式，将 `aruco_detector` 作为普通 ROS 2 包完整放入本仓库，确保：
+`P0` 已完成仓库结构修复。`src/aruco_detector` 已从 Gitlink 整理为主仓库中的普通 ROS 2 包，目录包括：
 
 ```text
 src/aruco_detector/CMakeLists.txt
@@ -70,7 +82,7 @@ src/aruco_detector/launch/
 
 所有开发者和 Codex 在普通 `git clone` 后都必须能够直接构建全部源码。除非明确要求，不新增嵌套 Git 仓库。
 
-完成整理后创建静态基线标签：
+已创建静态基线标签：
 
 ```text
 baseline-static-v0.1
@@ -87,9 +99,15 @@ baseline-static-v0.1
 ```text
 移动甲板仿真
     ↓
+船舶 GNSS / 遥测传感器模型
+    ↓
+GNSS 粗引导与移动甲板上方会合
+    ↓
 下视相机图像
     ↓
 ArUco 检测与 PnP 位姿
+    ↓
+GNSS 到视觉平滑接管
     ↓
 完整坐标变换
     ↓
@@ -113,9 +131,13 @@ ArUco 检测与 PnP 位姿
 控制器只能使用：
 
 - PX4 飞行状态和无人机估计状态。
+- PX4 local/global 定位参考。
+- 经过传感器模型处理的船舶 GNSS 位置和速度。
 - 相机图像、相机内参和相机外参。
 - ArUco 检测结果。
 - 配置参数和控制器内部估计状态。
+
+普通 GNSS 只用于远距离会合、视觉捕获和下降前恢复，不参与最终精确下降和低高度横向接管。
 
 以下信息只能用于仿真器和评测器，禁止输入控制器：
 
@@ -164,6 +186,7 @@ ws_aruco_landing/
 │   ├── aruco_precision_landing_cpp/
 │   │   ├── include/aruco_precision_landing_cpp/
 │   │   │   ├── coordinate_transform.hpp
+│   │   │   ├── geodetic_converter.hpp
 │   │   │   ├── target_state_estimator.hpp
 │   │   │   ├── motion_predictor.hpp
 │   │   │   ├── landing_guidance.hpp
@@ -171,6 +194,7 @@ ws_aruco_landing/
 │   │   │   └── px4_aruco_landing_node.hpp
 │   │   ├── src/
 │   │   │   ├── coordinate_transform.cpp
+│   │   │   ├── geodetic_converter.cpp
 │   │   │   ├── target_state_estimator.cpp
 │   │   │   ├── motion_predictor.cpp
 │   │   │   ├── landing_guidance.cpp
@@ -185,16 +209,24 @@ ws_aruco_landing/
 │   │   ├── CMakeLists.txt
 │   │   └── package.xml
 │   ├── moving_deck_sim/
+│   │   ├── include/moving_deck_sim/
+│   │   │   └── gnss_sensor_model.hpp
 │   │   ├── config/
 │   │   │   ├── static.yaml
 │   │   │   ├── constant_velocity.yaml
 │   │   │   ├── sinusoidal_xy.yaml
+│   │   │   ├── gnss_ideal.yaml
+│   │   │   ├── gnss_noisy.yaml
 │   │   │   ├── heave_roll_pitch.yaml
 │   │   │   └── combined_motion.yaml
 │   │   ├── launch/
 │   │   ├── models/
 │   │   ├── worlds/
 │   │   ├── src/
+│   │   │   ├── moving_deck_controller.cpp
+│   │   │   ├── gnss_sensor_model.cpp
+│   │   │   └── deck_gnss_simulator.cpp
+│   │   ├── test/
 │   │   ├── CMakeLists.txt
 │   │   └── package.xml
 │   ├── landing_bringup/
@@ -234,7 +266,8 @@ ws_aruco_landing/
 | --- | --- | --- |
 | `aruco_detector_node` | `aruco_detector` | ArUco 检测、PnP 位姿和调试图像 |
 | `moving_deck_controller` | `moving_deck_sim` | 按配置驱动甲板运动，仅仿真使用 |
-| `px4_aruco_landing_node` | `aruco_precision_landing_cpp` | 坐标变换、状态估计、预测、状态机和 Offboard 控制 |
+| `deck_gnss_simulator` | `moving_deck_sim` | 将 Ground Truth 转换为带噪声、延迟和丢包的船舶 GNSS / 遥测输出 |
+| `px4_aruco_landing_node` | `aruco_precision_landing_cpp` | GNSS 会合、视觉接管、坐标变换、状态估计、预测、状态机和 Offboard 控制 |
 | `episode_manager` | `landing_evaluation` | 重置场景、开始和结束单次实验 |
 | `metrics_collector` | `landing_evaluation` | 记录 Ground Truth、控制状态和触地指标 |
 | `failure_classifier` | `landing_evaluation` | 对失败原因进行统一分类 |
@@ -253,13 +286,23 @@ ws_aruco_landing/
 | 输出 | `/aruco/visible` | `std_msgs/msg/Bool` |
 | 输出 | `/aruco/debug_image` | `sensor_msgs/msg/Image` |
 
+#### 船舶 GNSS / 遥测
+
+| 方向 | 话题 | 类型 | 用途 |
+| --- | --- | --- | --- |
+| 输入 | `/deck/gps/fix` | `sensor_msgs/msg/NavSatFix` | 船舶 GNSS 粗位置 |
+| 输入 | `/deck/gps/velocity` | `geometry_msgs/msg/TwistStamped` | 船舶水平速度和会合前馈 |
+
+上述话题由 GNSS 传感器仿真节点从 Ground Truth 生成；降落控制器不得直接订阅 Ground Truth。
+
 #### PX4 输入
 
 | 话题 | 类型 | 用途 |
 | --- | --- | --- |
 | `/fmu/out/vehicle_status` | `px4_msgs/msg/VehicleStatus` | 模式和解锁状态 |
-| `/fmu/out/vehicle_local_position` | `px4_msgs/msg/VehicleLocalPosition` | NED 位置和速度 |
-| `/fmu/out/vehicle_odometry` | `px4_msgs/msg/VehicleOdometry` | 姿态 |
+| `/fmu/out/vehicle_local_position` | `px4_msgs/msg/VehicleLocalPosition` | NED 位置、速度和 WGS84 参考原点 |
+| `/fmu/out/vehicle_global_position` | `px4_msgs/msg/VehicleGlobalPosition` | 无人机全局位置和 GNSS 会合校验 |
+| `/fmu/out/vehicle_odometry` | `px4_msgs/msg/VehicleOdometry` | FRD 到 NED 的完整姿态 |
 | `/fmu/out/vehicle_land_detected` | `px4_msgs/msg/VehicleLandDetected` | 触地检测 |
 
 PX4 带版本后缀的话题必须在 launch 中重映射，业务代码内部保持固定话题名。
@@ -273,6 +316,9 @@ PX4 带版本后缀的话题必须在 launch 中重映射，业务代码内部�
 | `/fmu/in/vehicle_command` | `px4_msgs/msg/VehicleCommand` |
 | `/landing/state` | `std_msgs/msg/String` |
 | `/landing/target_pose` | `geometry_msgs/msg/PoseStamped` |
+| `/landing/deck_gnss_pose_ned` | `geometry_msgs/msg/PoseStamped` |
+| `/landing/marker_pose_ned` | `geometry_msgs/msg/PoseStamped` |
+| `/landing/guidance_source` | `std_msgs/msg/String` |
 | `/landing/estimated_deck_odometry` | `nav_msgs/msg/Odometry` |
 | `/landing/predicted_deck_pose` | `geometry_msgs/msg/PoseStamped` |
 
@@ -288,7 +334,9 @@ PX4 带版本后缀的话题必须在 launch 中重映射，业务代码内部�
 
 ## 7. 坐标系约定
 
-必须在 `docs/COORDINATE_FRAMES.md` 中固定以下坐标系：
+坐标语义、四元数顺序、当前下视相机名义外参、Gazebo spherical origin 与 PX4 local origin 的关系，统一以 [`docs/COORDINATE_FRAMES.md`](COORDINATE_FRAMES.md) 为准。
+
+必须固定以下坐标系：
 
 - `camera_optical`
   - `x`：图像向右。
@@ -305,27 +353,38 @@ PX4 带版本后缀的话题必须在 launch 中重映射，业务代码内部�
   - `y`：East。
   - `z`：Down。
 
+- `world_enu`
+  - `x`：East。
+  - `y`：North。
+  - `z`：Up。
+
+- `WGS84`
+  - 纬度、经度使用 degree。
+  - 海拔使用米。
+
 位姿链统一写为：
 
 ```text
 T_local_ned_marker
 =
-T_local_ned_body
+T_local_ned_body_frd
 *
-T_body_camera
+T_body_frd_camera_optical
 *
-T_camera_marker
+T_camera_optical_marker
 ```
 
 要求：
 
-1. `T_camera_marker` 来自 ArUco PnP。
-2. `T_body_camera` 来自参数或静态 TF，禁止继续只用正负号近似。
-3. `T_local_ned_body` 来自 PX4 里程计。
-4. 所有四元数顺序必须在接口处显式说明。
+1. `T_camera_optical_marker` 来自 ArUco PnP。
+2. `T_body_frd_camera_optical` 来自明确方向的参数或静态 TF，禁止继续只用正负号近似。
+3. `T_local_ned_body_frd` 来自 PX4 `VehicleOdometry`，并检查 `pose_frame`。
+4. 所有四元数顺序必须在接口处显式说明；PX4 当前为 `[w,x,y,z]`。
 5. ENU、FLU、FRD 和 NED 的转换必须集中在 `coordinate_transform` 中。
-6. 业务控制代码中禁止散落手写坐标符号转换。
-7. 对每个坐标变换编写单元测试，至少验证：
+6. WGS84 与局部 ENU / NED 的转换必须集中在 `geodetic_converter` 中。
+7. 船舶 GNSS 转 local NED 时使用 PX4 `VehicleLocalPosition.ref_lat/ref_lon/ref_alt`，不得默认直接使用 Gazebo world 原点。
+8. 业务控制代码中禁止散落手写坐标符号转换。
+9. 对每个坐标变换编写单元测试，至少验证：
    - Marker 位于图像右侧时，控制方向正确。
    - Marker 位于图像前后方向时，控制方向正确。
    - 无人机偏航 `0°、90°、180°、-90°` 时，NED 误差方向正确。
@@ -483,9 +542,13 @@ OFFBOARD_PRE_STREAM
   ↓
 ARM_AND_TAKEOFF
   ↓
-RENDEZVOUS
+WAIT_DECK_GNSS
   ↓
-ACQUIRE_TARGET
+RENDEZVOUS_GNSS
+  ↓
+ACQUIRE_ARUCO
+  ↓
+VISUAL_HANDOVER
   ↓
 TRACK_TARGET
   ↓
@@ -503,19 +566,27 @@ DONE
 异常分支：
 
 ```text
-ACQUIRE_TARGET / TRACK_TARGET
-  └─ 长时间丢失目标 → RECOVER
+WAIT_DECK_GNSS / RENDEZVOUS_GNSS
+  ├─ GNSS 短时过期 → 保持受限目标或悬停
+  └─ GNSS 长时过期或跳变 → ABORT
+
+ACQUIRE_ARUCO / VISUAL_HANDOVER / TRACK_TARGET（尚未下降）
+  └─ 视觉长时间丢失 → RECOVER_TO_GNSS
 
 DESCEND / FINAL_DESCENT
-  ├─ 短时丢失目标 → 保持预测并减小下降速度
-  ├─ 超时或误差过大 → RECOVER
+  ├─ 视觉短时丢失 → 停止或减小下降，使用短时预测
+  ├─ 视觉长时丢失 → RECOVER_CLIMB
   └─ 严重异常 → ABORT
 
-RECOVER
-  ├─ 上升至安全相对高度
-  ├─ 限制水平速度
-  ├─ 重新捕获目标
-  └─ 成功后回到 TRACK_TARGET
+RECOVER_TO_GNSS
+  ├─ 重新使用有效船舶 GNSS 粗跟踪
+  ├─ 回到 RENDEZVOUS_GNSS 或 ACQUIRE_ARUCO
+  └─ 普通 GNSS 不在低高度直接接管最终精降
+
+RECOVER_CLIMB
+  ├─ 停止下降并垂直上升到恢复高度
+  ├─ 到达安全高度后进入 RECOVER_TO_GNSS
+  └─ 恢复失败或次数超限 → ABORT
 
 ABORT
   ├─ 停止下降
@@ -688,20 +759,83 @@ colcon test-result --verbose
 - 重置后初始状态一致。
 - 控制器未订阅 Ground Truth。
 
-### P2：完整坐标变换
+### P2.0：项目状态与设计文档同步
 
 任务：
 
-- 引入相机外参。
-- 使用完整刚体变换替换符号映射。
-- 统一 NED、FRD 和相机光学坐标。
-- 编写变换单元测试。
+- 标记 `P0`、`P1` 已完成。
+- 固化 GNSS 粗引导、视觉接管和恢复总体流程。
+- 明确 Ground Truth 隔离和普通 GNSS 使用边界。
+- 新增坐标系契约文档。
 
 验收：
 
-- 四种典型偏航角测试全部通过。
-- 仿真中无人机水平修正方向无误。
-- 代码中不存在分散的相机坐标正负号映射。
+- 只修改文档。
+- 文档之间不存在阶段和接口冲突。
+- 未创建算法代码。
+
+### P2A：完整坐标变换与地理坐标转换
+
+任务：
+
+- 引入 `T_body_frd_camera_optical` 相机外参。
+- 使用完整刚体变换替换符号映射。
+- 统一 WGS84、ENU、NED、FRD 和相机光学坐标。
+- 实现不依赖 ROS 节点的 `coordinate_transform` 和 `geodetic_converter`。
+- 编写刚体变换、地理转换和异常输入单元测试。
+
+验收：
+
+- 四种典型偏航角以及 roll / pitch 测试全部通过。
+- WGS84 / ENU / NED 正向和逆向测试通过。
+- 无效四元数、NaN 和 Inf 被拒绝。
+- 暂不接入控制器，暂不修改下降逻辑。
+
+### P2B：船舶 GNSS 传感器仿真
+
+任务：
+
+- 将甲板 Ground Truth 转换为 WGS84 GNSS 位置和速度。
+- 实现理想、噪声、延迟和丢包配置。
+- 固定随机种子并支持 reset 后可重复。
+- 发布 `/deck/gps/fix` 和 `/deck/gps/velocity`。
+
+验收：
+
+- 理想模式坐标转换正确。
+- 噪声、延迟、丢包和协方差与配置一致。
+- 控制器仍未订阅 Ground Truth。
+
+### P2C：GNSS 会合与移动甲板上方粗跟踪
+
+任务：
+
+- 订阅船舶 GNSS 和 PX4 全局参考。
+- 实现 `WAIT_DECK_GNSS`、`RENDEZVOUS_GNSS` 和 `ACQUIRE_ARUCO`。
+- 搜索中心跟随实时船舶 GNSS，而不是固定世界坐标。
+- 对 GNSS 超时、跳变和目标变化率进行限制。
+
+验收：
+
+- ArUco 不可见时仍能到达并粗跟踪移动甲板上方。
+- GNSS 过期或跳变不会继续追踪错误目标。
+- 本阶段不下降。
+
+### P2D：GNSS 到视觉接管与下降前恢复
+
+任务：
+
+- 将 ArUco 完整位姿转换到 local NED。
+- 实现 `VISUAL_HANDOVER`、`TRACK_TARGET` 和 `RECOVER_TO_GNSS`。
+- 平滑切换 GNSS 与视觉目标，限制设定点跳变。
+- 视觉丢失时在下降前回退到 GNSS 会合。
+
+验收：
+
+- 单帧误检不触发接管。
+- 接管过程目标连续且高度保持不变。
+- 视觉长时丢失能够回到 GNSS 粗引导。
+- 本阶段仍不下降。
 
 ### P3：甲板状态估计和预测
 
@@ -905,30 +1039,33 @@ colcon test-result --verbose
 1. 普通克隆后能够完整构建。
 2. 静态 ArUco 降落功能保持可用。
 3. 控制器不使用仿真 Ground Truth。
-4. 能够对水平移动甲板进行稳定跟踪。
-5. 能够估计甲板速度并进行短时预测。
-6. 能够根据相对误差、相对速度和甲板倾角判断着陆窗口。
-7. 能够在移动目标上持续跟踪到触地，而不是提前切断跟踪。
-8. 目标丢失时能够减速、恢复或安全中止。
-9. 能够批量运行实验并输出统一指标。
-10. 能够完成 B0 到 B4 的传统方法消融对比。
-11. 所有关键参数、坐标系、状态机和实验配置均有文档。
-12. 核心数学模块具备单元测试。
+4. 船舶 GNSS 能够引导无人机到移动甲板上方。
+5. GPS 误差下仍能通过移动搜索捕获 ArUco。
+6. GNSS 到视觉接管平滑且可恢复。
+7. WGS84、ENU、NED、FRD 和相机光学坐标变换正确并有测试。
+8. 能够对水平移动甲板进行稳定跟踪。
+9. 能够估计甲板速度并进行短时预测。
+10. 能够根据相对误差、相对速度和甲板倾角判断着陆窗口。
+11. 能够在移动目标上持续跟踪到触地，而不是提前切断跟踪。
+12. 目标丢失时能够减速、恢复或安全中止。
+13. 能够批量运行实验并输出统一指标。
+14. 能够完成 B0 到 B4 的传统方法消融对比。
+15. 所有关键参数、坐标系、状态机和实验配置均有文档。
+16. 核心数学模块具备单元测试。
 
 ---
 
 ## 16. Codex 下一步默认任务
 
-当没有额外指令时，Codex 应从 `P0` 开始，不直接实现 MPC 或强化学习。
+`P0`、`P1`、`P2.0` 和 `P2A` 纯数学模块已完成。当前从 `P2B` 开始，不直接实现 MPC 或强化学习。
 
-第一项任务：
+下一项任务：
 
 ```text
-检查并修复 src/aruco_detector 的仓库结构，
-将其作为普通 ROS 2 包纳入当前工作区，
-确保根目录执行 colcon build 能同时构建
-aruco_detector 和 aruco_precision_landing_cpp，
-且不改变现有 ROS 话题和运行行为。
+在 moving_deck_sim 内实现独立 deck_gnss_simulator 和纯数学 GNSS 传感器模型，
+先完成理想 GNSS 的 WGS84 位置、ENU/NED 速度与降频发布，
+再增加固定种子噪声、延迟、丢包和异常输入测试。
+控制器禁止订阅 Ground Truth，本任务暂不修改下降状态机。
 ```
 
-完成第一项任务后，再开始 `P1：水平移动甲板仿真`。
+完成 GNSS 仿真验收后，再进入 `P2C：GNSS 会合与移动甲板上方粗跟踪`。

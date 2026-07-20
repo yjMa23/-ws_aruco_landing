@@ -113,6 +113,9 @@ ros2 topic echo /landing/target_pose
 
 ## 详细文档
 
+- [下一阶段完整开发计划](docs/NEXT_DEVELOPMENT_PLAN.md)
+- [坐标系与变换契约](docs/COORDINATE_FRAMES.md)
+- [传统基线实施计划](docs/TRADITIONAL_BASELINE_PLAN.md)
 - [ArUco 检测节点 README](src/aruco_detector/README.md)
 - [PX4 ArUco 精准降落控制节点 README](src/aruco_precision_landing_cpp/README.md)
 - [水平移动甲板仿真 README](src/moving_deck_sim/README.md)
