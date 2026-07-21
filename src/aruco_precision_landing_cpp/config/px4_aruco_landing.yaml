@@ -22,6 +22,16 @@ px4_aruco_landing_node:
     gnss_max_geodetic_range_m: 10000.0
     deck_gnss_velocity_frame_id: world_enu
 
+    visual_handover_duration_s: 0.5
+    handover_max_horizontal_difference_m: 3.0
+    max_visual_measurement_jump_m: 0.5
+    visual_loss_short_timeout_s: 0.5
+    visual_loss_long_timeout_s: 2.0
+
+    expected_aruco_pose_frame_id: camera_link
+    camera_extrinsic.translation_frd_m: [0.0, 0.0, -0.10]
+    camera_extrinsic.rotation_wxyz: [0.70710678, 0.0, 0.0, 0.70710678]
+
     offboard_prestream_count: 20
     stable_detect_count: 10
 

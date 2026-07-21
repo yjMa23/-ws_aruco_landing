@@ -4,8 +4,11 @@
 #ifndef ARUCO_PRECISION_LANDING_CPP__PX4_ARUCO_LANDING_NODE_HPP_
 #define ARUCO_PRECISION_LANDING_CPP__PX4_ARUCO_LANDING_NODE_HPP_
 
+#include "aruco_precision_landing_cpp/coordinate_transform.hpp"
 #include "aruco_precision_landing_cpp/gnss_rendezvous_guidance.hpp"
+#include "aruco_precision_landing_cpp/visual_handover_guidance.hpp"
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -36,6 +39,9 @@ enum class LandingState
   WAIT_DECK_GNSS,
   RENDEZVOUS_GNSS,
   ACQUIRE_ARUCO,
+  VISUAL_HANDOVER,
+  TRACK_TARGET,
+  RECOVER_TO_GNSS,
   GOTO_ARUCO_AREA,
   WAIT_ARUCO,
   CENTER_ABOVE_MARKER,
@@ -73,6 +79,7 @@ private:
   bool marker_is_fresh(const rclcpp::Time & now) const;
   bool marker_is_stably_visible(const rclcpp::Time & now) const;
   bool should_retry_command(const rclcpp::Time & now) const;
+  bool compute_marker_pose_ned(Pose3d & marker_pose_ned) const;
   bool compute_local_marker_error(double & error_north, double & error_east) const;
 
   void set_target(double x, double y, double z, double yaw);
@@ -90,6 +97,7 @@ private:
   void publish_landing_state();
   void publish_target_pose();
   void publish_deck_gnss_pose(const rclcpp::Time & now);
+  void publish_marker_pose(const rclcpp::Time & now);
   void publish_guidance_source();
 
   static const char * state_name(LandingState state);
@@ -114,6 +122,11 @@ private:
   double search_point_hold_s_{1.0};
   double aruco_acquire_duration_s_{0.5};
   double gnss_max_geodetic_range_m_{10000.0};
+  double visual_handover_duration_s_{0.5};
+  double handover_max_horizontal_difference_m_{3.0};
+  double max_visual_measurement_jump_m_{0.5};
+  double visual_loss_short_timeout_s_{0.5};
+  double visual_loss_long_timeout_s_{2.0};
   int offboard_prestream_count_{20};
   int stable_detect_count_{10};
   double camera_x_to_body_y_sign_{1.0};
@@ -131,6 +144,9 @@ private:
   bool enable_auto_land_{false};
   std::string target_pose_frame_id_{"local_ned"};
   std::string deck_gnss_velocity_frame_id_{"world_enu"};
+  std::string expected_aruco_pose_frame_id_{"camera_link"};
+  std::array<double, 3> camera_translation_frd_m_{{0.0, 0.0, -0.10}};
+  std::array<double, 4> camera_rotation_wxyz_{{0.70710678, 0.0, 0.0, 0.70710678}};
 
   LandingState state_{LandingState::INIT};
 
@@ -142,13 +158,17 @@ private:
   bool have_aruco_id_{false};
   bool have_aruco_visible_since_{false};
   bool have_search_pattern_start_time_{false};
-  bool aruco_acquired_hold_{false};
+  bool have_marker_pose_ned_{false};
+  bool have_last_aruco_sample_stamp_{false};
   int32_t aruco_id_{-1};
+  int64_t last_aruco_sample_stamp_ns_{0};
 
   px4_msgs::msg::VehicleStatus vehicle_status_{};
   px4_msgs::msg::VehicleLocalPosition local_position_{};
   px4_msgs::msg::VehicleOdometry vehicle_odometry_{};
   geometry_msgs::msg::PoseStamped aruco_pose_{};
+  geometry_msgs::msg::PoseStamped marker_pose_ned_{};
+  Pose3d body_camera_pose_{};
 
   rclcpp::Time last_aruco_pose_time_;
   rclcpp::Time last_aruco_visible_time_;
@@ -163,6 +183,7 @@ private:
   int stable_visible_count_{0};
   int prestream_setpoint_count_{0};
   bool final_land_command_sent_{false};
+  double handover_progress_s_{0.0};
 
   double takeoff_start_x_{0.0};
   double takeoff_start_y_{0.0};
@@ -176,6 +197,7 @@ private:
   double target_yaw_{0.0};
 
   std::unique_ptr<GnssRendezvousGuidance> gnss_guidance_;
+  std::unique_ptr<VisualHandoverGuidance> visual_guidance_;
 
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr aruco_pose_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr aruco_visible_sub_;
@@ -194,6 +216,7 @@ private:
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr landing_state_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr target_pose_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr deck_gnss_pose_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr marker_pose_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr guidance_source_pub_;
 
   rclcpp::TimerBase::SharedPtr control_timer_;

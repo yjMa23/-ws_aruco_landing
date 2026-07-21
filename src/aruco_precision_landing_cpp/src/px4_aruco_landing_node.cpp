@@ -11,6 +11,7 @@
 #include <limits>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 namespace aruco_precision_landing_cpp
 {
@@ -23,6 +24,23 @@ constexpr double kMinimumQuaternionNorm = 1.0e-6;
 bool is_positive_finite(double value)
 {
   return std::isfinite(value) && value > 0.0;
+}
+
+template<std::size_t Size>
+std::array<double, Size> to_array(
+  const std::vector<double> & values,
+  const std::string & parameter_name)
+{
+  if (values.size() != Size) {
+    throw std::invalid_argument(
+            parameter_name + " must contain " + std::to_string(Size) + " values");
+  }
+
+  std::array<double, Size> result{};
+  for (std::size_t index = 0; index < Size; ++index) {
+    result[index] = values[index];
+  }
+  return result;
 }
 
 }  // namespace
@@ -44,6 +62,28 @@ Px4ArucoLandingNode::Px4ArucoLandingNode()
   gnss_parameters.search_point_hold_s = search_point_hold_s_;
   gnss_parameters.max_geodetic_range_m = gnss_max_geodetic_range_m_;
   gnss_guidance_ = std::make_unique<GnssRendezvousGuidance>(gnss_parameters);
+
+  VisualHandoverParameters visual_parameters;
+  visual_parameters.handover_duration_s = visual_handover_duration_s_;
+  visual_parameters.max_gnss_visual_difference_m =
+    handover_max_horizontal_difference_m_;
+  visual_parameters.max_visual_measurement_jump_m = max_visual_measurement_jump_m_;
+  visual_parameters.visual_loss_short_timeout_s = visual_loss_short_timeout_s_;
+  visual_parameters.visual_loss_long_timeout_s = visual_loss_long_timeout_s_;
+  visual_parameters.max_target_speed_mps = max_rendezvous_speed_mps_;
+  visual_parameters.max_target_step_m = max_target_step_m_;
+  visual_guidance_ = std::make_unique<VisualHandoverGuidance>(visual_parameters);
+
+  body_camera_pose_.translation = Eigen::Vector3d{
+    camera_translation_frd_m_[0],
+    camera_translation_frd_m_[1],
+    camera_translation_frd_m_[2]};
+  body_camera_pose_.rotation = Eigen::Quaterniond{
+    camera_rotation_wxyz_[0],
+    camera_rotation_wxyz_[1],
+    camera_rotation_wxyz_[2],
+    camera_rotation_wxyz_[3]};
+  body_camera_pose_.rotation.normalize();
 
   create_ros_interfaces();
 
@@ -86,6 +126,16 @@ void Px4ArucoLandingNode::declare_and_load_parameters()
     declare_parameter<double>("aruco_acquire_duration_s", 0.5);
   gnss_max_geodetic_range_m_ =
     declare_parameter<double>("gnss_max_geodetic_range_m", 10000.0);
+  visual_handover_duration_s_ =
+    declare_parameter<double>("visual_handover_duration_s", 0.5);
+  handover_max_horizontal_difference_m_ = declare_parameter<double>(
+    "handover_max_horizontal_difference_m", 3.0);
+  max_visual_measurement_jump_m_ =
+    declare_parameter<double>("max_visual_measurement_jump_m", 0.5);
+  visual_loss_short_timeout_s_ =
+    declare_parameter<double>("visual_loss_short_timeout_s", 0.5);
+  visual_loss_long_timeout_s_ =
+    declare_parameter<double>("visual_loss_long_timeout_s", 2.0);
   offboard_prestream_count_ = declare_parameter<int>("offboard_prestream_count", 20);
   stable_detect_count_ = declare_parameter<int>("stable_detect_count", 10);
   camera_x_to_body_y_sign_ =
@@ -107,6 +157,16 @@ void Px4ArucoLandingNode::declare_and_load_parameters()
     declare_parameter<std::string>("target_pose_frame_id", "local_ned");
   deck_gnss_velocity_frame_id_ =
     declare_parameter<std::string>("deck_gnss_velocity_frame_id", "world_enu");
+  expected_aruco_pose_frame_id_ =
+    declare_parameter<std::string>("expected_aruco_pose_frame_id", "camera_link");
+  camera_translation_frd_m_ = to_array<3>(
+    declare_parameter<std::vector<double>>(
+      "camera_extrinsic.translation_frd_m", {0.0, 0.0, -0.10}),
+    "camera_extrinsic.translation_frd_m");
+  camera_rotation_wxyz_ = to_array<4>(
+    declare_parameter<std::vector<double>>(
+      "camera_extrinsic.rotation_wxyz", {0.70710678, 0.0, 0.0, 0.70710678}),
+    "camera_extrinsic.rotation_wxyz");
 }
 
 void Px4ArucoLandingNode::validate_parameters() const
@@ -131,6 +191,12 @@ void Px4ArucoLandingNode::validate_parameters() const
   require_positive("max_target_step_m", max_target_step_m_);
   require_positive("search_point_hold_s", search_point_hold_s_);
   require_positive("gnss_max_geodetic_range_m", gnss_max_geodetic_range_m_);
+  require_positive("visual_handover_duration_s", visual_handover_duration_s_);
+  require_positive(
+    "handover_max_horizontal_difference_m", handover_max_horizontal_difference_m_);
+  require_positive("max_visual_measurement_jump_m", max_visual_measurement_jump_m_);
+  require_positive("visual_loss_short_timeout_s", visual_loss_short_timeout_s_);
+  require_positive("visual_loss_long_timeout_s", visual_loss_long_timeout_s_);
   require_positive("max_xy_step", max_xy_step_);
   require_positive("center_xy_threshold", center_xy_threshold_);
   require_positive("max_descent_rate", max_descent_rate_);
@@ -173,12 +239,34 @@ void Px4ArucoLandingNode::validate_parameters() const
     throw std::invalid_argument(
             "Parameter 'final_alt' must be lower than takeoff_alt and search_alt");
   }
+  if (visual_loss_long_timeout_s_ <= visual_loss_short_timeout_s_) {
+    throw std::invalid_argument(
+            "visual_loss_long_timeout_s must be greater than visual_loss_short_timeout_s");
+  }
   if (target_pose_frame_id_.empty()) {
     throw std::invalid_argument("Parameter 'target_pose_frame_id' must not be empty");
+  }
+  if (expected_aruco_pose_frame_id_.empty()) {
+    throw std::invalid_argument(
+            "Parameter 'expected_aruco_pose_frame_id' must not be empty");
   }
   if (deck_gnss_velocity_frame_id_.empty()) {
     throw std::invalid_argument(
             "Parameter 'deck_gnss_velocity_frame_id' must not be empty");
+  }
+
+  const Pose3d body_camera_pose{
+    Eigen::Vector3d{
+      camera_translation_frd_m_[0],
+      camera_translation_frd_m_[1],
+      camera_translation_frd_m_[2]},
+    Eigen::Quaterniond{
+      camera_rotation_wxyz_[0],
+      camera_rotation_wxyz_[1],
+      camera_rotation_wxyz_[2],
+      camera_rotation_wxyz_[3]}};
+  if (!make_isometry(body_camera_pose.translation, body_camera_pose.rotation).has_value()) {
+    throw std::invalid_argument("Camera extrinsic contains invalid translation or quaternion");
   }
 }
 
@@ -266,6 +354,9 @@ void Px4ArucoLandingNode::create_ros_interfaces()
   deck_gnss_pose_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>(
     "/landing/deck_gnss_pose_ned",
     rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  marker_pose_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>(
+    "/landing/marker_pose_ned",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
   guidance_source_pub_ = create_publisher<std_msgs::msg::String>(
     "/landing/guidance_source",
     rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
@@ -276,7 +367,81 @@ void Px4ArucoLandingNode::aruco_pose_callback(
 {
   aruco_pose_ = *msg;
   have_aruco_pose_ = true;
-  last_aruco_pose_time_ = get_clock()->now();
+  const rclcpp::Time receipt_time = get_clock()->now();
+  last_aruco_pose_time_ = receipt_time;
+
+  if (msg->header.frame_id != expected_aruco_pose_frame_id_) {
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 5000,
+      "Rejected ArUco frame '%s'; expected '%s' with camera_optical numeric semantics",
+      msg->header.frame_id.c_str(), expected_aruco_pose_frame_id_.c_str());
+    return;
+  }
+
+  const int64_t sample_stamp_ns =
+    static_cast<int64_t>(msg->header.stamp.sec) * 1000000000LL +
+    static_cast<int64_t>(msg->header.stamp.nanosec);
+  if (sample_stamp_ns > 0 && have_last_aruco_sample_stamp_ &&
+    sample_stamp_ns <= last_aruco_sample_stamp_ns_)
+  {
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 5000, "Rejected repeated or out-of-order ArUco sample");
+    return;
+  }
+
+  Pose3d marker_pose_ned;
+  if (!compute_marker_pose_ned(marker_pose_ned)) {
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 5000,
+      "Rejected ArUco pose because full camera-to-NED transform failed");
+    return;
+  }
+
+  const bool visual_state =
+    state_ == LandingState::ACQUIRE_ARUCO ||
+    state_ == LandingState::VISUAL_HANDOVER ||
+    state_ == LandingState::TRACK_TARGET;
+  if (!visual_state) {
+    return;
+  }
+
+  if (state_ != LandingState::TRACK_TARGET) {
+    const auto gnss_estimate = gnss_guidance_->estimate(receipt_time.seconds());
+    if (!gnss_estimate.has_value() ||
+      !visual_guidance_->consistent_with_gnss(
+        marker_pose_ned.translation, gnss_estimate->position_ned))
+    {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 5000,
+        "Rejected visual candidate inconsistent with deck GNSS during handover");
+      return;
+    }
+  }
+
+  if (!visual_guidance_->update_visual_position(
+      marker_pose_ned.translation, receipt_time.seconds()))
+  {
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 5000,
+      "Rejected visual candidate due to invalid time or excessive measurement jump");
+    return;
+  }
+
+  marker_pose_ned_.header.stamp = receipt_time;
+  marker_pose_ned_.header.frame_id = target_pose_frame_id_;
+  marker_pose_ned_.pose.position.x = marker_pose_ned.translation.x();
+  marker_pose_ned_.pose.position.y = marker_pose_ned.translation.y();
+  marker_pose_ned_.pose.position.z = marker_pose_ned.translation.z();
+  marker_pose_ned_.pose.orientation.w = marker_pose_ned.rotation.w();
+  marker_pose_ned_.pose.orientation.x = marker_pose_ned.rotation.x();
+  marker_pose_ned_.pose.orientation.y = marker_pose_ned.rotation.y();
+  marker_pose_ned_.pose.orientation.z = marker_pose_ned.rotation.z();
+  have_marker_pose_ned_ = true;
+
+  if (sample_stamp_ns > 0) {
+    last_aruco_sample_stamp_ns_ = sample_stamp_ns;
+    have_last_aruco_sample_stamp_ = true;
+  }
 }
 
 void Px4ArucoLandingNode::aruco_visible_callback(
@@ -404,6 +569,7 @@ void Px4ArucoLandingNode::control_timer_callback()
   publish_landing_state();
   publish_target_pose();
   publish_deck_gnss_pose(now);
+  publish_marker_pose(now);
   publish_guidance_source();
 }
 
@@ -553,29 +719,29 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
           break;
         }
 
-        Eigen::Vector2d desired_target = estimate->position_ned.head<2>();
-        if (marker_is_stably_visible(now)) {
-          if (!aruco_acquired_hold_) {
-            RCLCPP_INFO(
-              get_logger(),
-              "ArUco acquired at safe altitude; holding GNSS center until P2D handover");
-          }
-          aruco_acquired_hold_ = true;
-        } else {
-          if (aruco_acquired_hold_ || !have_search_pattern_start_time_) {
-            search_pattern_start_time_ = now;
-            have_search_pattern_start_time_ = true;
-          }
-          aruco_acquired_hold_ = false;
-          const double elapsed_s =
-            (now - search_pattern_start_time_).seconds();
-          const auto offset = gnss_guidance_->search_offset(elapsed_s);
-          if (!offset.has_value()) {
-            transition_to(LandingState::ABORT, "invalid GNSS-centered search offset");
-            break;
-          }
-          desired_target += *offset;
+        const auto visual_position = visual_guidance_->visual_position(now.seconds());
+        if (marker_is_stably_visible(now) && visual_position.has_value() &&
+          visual_guidance_->consistent_with_gnss(
+            *visual_position, estimate->position_ned))
+        {
+          transition_to(
+            LandingState::VISUAL_HANDOVER,
+            "stable full-transform ArUco pose is consistent with deck GNSS");
+          break;
         }
+
+        Eigen::Vector2d desired_target = estimate->position_ned.head<2>();
+        if (!have_search_pattern_start_time_) {
+          search_pattern_start_time_ = now;
+          have_search_pattern_start_time_ = true;
+        }
+        const double elapsed_s = (now - search_pattern_start_time_).seconds();
+        const auto offset = gnss_guidance_->search_offset(elapsed_s);
+        if (!offset.has_value()) {
+          transition_to(LandingState::ABORT, "invalid GNSS-centered search offset");
+          break;
+        }
+        desired_target += *offset;
 
         const Eigen::Vector2d current_target = target_valid_ ?
           Eigen::Vector2d{target_x_, target_y_} :
@@ -592,6 +758,163 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
           limited_target->y(),
           -rendezvous_altitude_m_,
           current_yaw_);
+        break;
+      }
+
+    case LandingState::VISUAL_HANDOVER:
+      {
+        if (!gnss_guidance_->ready(now.seconds())) {
+          transition_to(
+            LandingState::WAIT_DECK_GNSS,
+            "deck GNSS became stale during GNSS-to-visual handover");
+          break;
+        }
+
+        const auto estimate = gnss_guidance_->estimate(now.seconds());
+        if (!estimate.has_value()) {
+          transition_to(
+            LandingState::WAIT_DECK_GNSS,
+            "deck GNSS estimate unavailable during GNSS-to-visual handover");
+          break;
+        }
+
+        const auto visual_position = visual_guidance_->visual_position(now.seconds());
+        const bool visual_valid =
+          visual_position.has_value() &&
+          marker_is_fresh(now) &&
+          visual_guidance_->consistent_with_gnss(
+            *visual_position, estimate->position_ned);
+        const VisualLossState loss_state =
+          visual_guidance_->loss_state(visual_valid, now.seconds());
+
+        if (loss_state == VisualLossState::kLongLoss) {
+          transition_to(
+            LandingState::RECOVER_TO_GNSS,
+            "visual pose was lost or inconsistent for the long timeout during handover");
+          break;
+        }
+        if (!visual_valid) {
+          set_target(
+            target_valid_ ? target_x_ : local_position_.x,
+            target_valid_ ? target_y_ : local_position_.y,
+            -rendezvous_altitude_m_,
+            current_yaw_);
+          break;
+        }
+
+        handover_progress_s_ += dt;
+        const auto blended_target = visual_guidance_->blended_target_xy(
+          estimate->position_ned.head<2>(),
+          visual_position->head<2>(),
+          handover_progress_s_);
+        const Eigen::Vector2d current_target = target_valid_ ?
+          Eigen::Vector2d{target_x_, target_y_} :
+          Eigen::Vector2d{local_position_.x, local_position_.y};
+        const auto limited_target = blended_target.has_value() ?
+          visual_guidance_->limit_target_xy(current_target, *blended_target, dt) :
+          std::nullopt;
+        if (!limited_target.has_value()) {
+          transition_to(LandingState::ABORT, "invalid blended visual handover target");
+          break;
+        }
+
+        set_target(
+          limited_target->x(),
+          limited_target->y(),
+          -rendezvous_altitude_m_,
+          current_yaw_);
+
+        const auto alpha = visual_guidance_->handover_alpha(handover_progress_s_);
+        if (alpha.has_value() && *alpha >= 1.0) {
+          transition_to(
+            LandingState::TRACK_TARGET,
+            "GNSS-to-visual handover weight reached one");
+        }
+        break;
+      }
+
+    case LandingState::TRACK_TARGET:
+      {
+        const auto visual_position = visual_guidance_->visual_position(now.seconds());
+        const bool visual_valid = visual_position.has_value() && marker_is_fresh(now);
+        const VisualLossState loss_state =
+          visual_guidance_->loss_state(visual_valid, now.seconds());
+
+        if (loss_state == VisualLossState::kLongLoss) {
+          transition_to(
+            LandingState::RECOVER_TO_GNSS,
+            "visual pose was lost for the long timeout before descent");
+          break;
+        }
+        if (!visual_valid) {
+          set_target(
+            target_valid_ ? target_x_ : local_position_.x,
+            target_valid_ ? target_y_ : local_position_.y,
+            -rendezvous_altitude_m_,
+            current_yaw_);
+          break;
+        }
+
+        const Eigen::Vector2d current_target = target_valid_ ?
+          Eigen::Vector2d{target_x_, target_y_} :
+          Eigen::Vector2d{local_position_.x, local_position_.y};
+        const auto limited_target = visual_guidance_->limit_target_xy(
+          current_target, visual_position->head<2>(), dt);
+        if (!limited_target.has_value()) {
+          transition_to(LandingState::ABORT, "invalid visual tracking target");
+          break;
+        }
+
+        set_target(
+          limited_target->x(),
+          limited_target->y(),
+          -rendezvous_altitude_m_,
+          current_yaw_);
+        break;
+      }
+
+    case LandingState::RECOVER_TO_GNSS:
+      {
+        if (!gnss_guidance_->ready(now.seconds())) {
+          transition_to(
+            LandingState::WAIT_DECK_GNSS,
+            "deck GNSS is unavailable during visual recovery");
+          break;
+        }
+
+        const auto estimate = gnss_guidance_->estimate(now.seconds());
+        if (!estimate.has_value()) {
+          transition_to(
+            LandingState::WAIT_DECK_GNSS,
+            "deck GNSS estimate unavailable during visual recovery");
+          break;
+        }
+
+        const Eigen::Vector2d current_target = target_valid_ ?
+          Eigen::Vector2d{target_x_, target_y_} :
+          Eigen::Vector2d{local_position_.x, local_position_.y};
+        const auto limited_target = gnss_guidance_->limit_target_xy(
+          current_target, estimate->position_ned.head<2>(), dt);
+        if (!limited_target.has_value()) {
+          transition_to(LandingState::ABORT, "invalid GNSS recovery target");
+          break;
+        }
+        set_target(
+          limited_target->x(),
+          limited_target->y(),
+          -rendezvous_altitude_m_,
+          current_yaw_);
+
+        const double horizontal_distance = std::hypot(
+          local_position_.x - estimate->position_ned.x(),
+          local_position_.y - estimate->position_ned.y());
+        const double vertical_error =
+          std::abs(local_position_.z + rendezvous_altitude_m_);
+        transition_to(
+          horizontal_distance <= rendezvous_radius_m_ &&
+          vertical_error <= search_z_threshold_ ?
+          LandingState::ACQUIRE_ARUCO : LandingState::RENDEZVOUS_GNSS,
+          "GNSS recovery target is valid; resume coarse guidance");
         break;
       }
 
@@ -748,7 +1071,9 @@ void Px4ArucoLandingNode::transition_to(
       stable_visible_count_ = 0;
       have_aruco_visible_since_ = false;
       have_search_pattern_start_time_ = false;
-      aruco_acquired_hold_ = false;
+      have_marker_pose_ned_ = false;
+      have_last_aruco_sample_stamp_ = false;
+      visual_guidance_->reset();
       set_target(
         local_position_.x,
         local_position_.y,
@@ -767,7 +1092,41 @@ void Px4ArucoLandingNode::transition_to(
     case LandingState::ACQUIRE_ARUCO:
       search_pattern_start_time_ = get_clock()->now();
       have_search_pattern_start_time_ = true;
-      aruco_acquired_hold_ = false;
+      stable_visible_count_ = 0;
+      have_aruco_visible_since_ = false;
+      have_marker_pose_ned_ = false;
+      have_last_aruco_sample_stamp_ = false;
+      visual_guidance_->reset();
+      set_target(
+        target_valid_ ? target_x_ : local_position_.x,
+        target_valid_ ? target_y_ : local_position_.y,
+        -rendezvous_altitude_m_,
+        current_yaw_);
+      break;
+
+    case LandingState::VISUAL_HANDOVER:
+      handover_progress_s_ = 0.0;
+      set_target(
+        target_valid_ ? target_x_ : local_position_.x,
+        target_valid_ ? target_y_ : local_position_.y,
+        -rendezvous_altitude_m_,
+        current_yaw_);
+      break;
+
+    case LandingState::TRACK_TARGET:
+      set_target(
+        target_valid_ ? target_x_ : local_position_.x,
+        target_valid_ ? target_y_ : local_position_.y,
+        -rendezvous_altitude_m_,
+        current_yaw_);
+      break;
+
+    case LandingState::RECOVER_TO_GNSS:
+      stable_visible_count_ = 0;
+      have_aruco_visible_since_ = false;
+      have_marker_pose_ned_ = false;
+      have_last_aruco_sample_stamp_ = false;
+      visual_guidance_->reset();
       set_target(
         target_valid_ ? target_x_ : local_position_.x,
         target_valid_ ? target_y_ : local_position_.y,
@@ -853,6 +1212,47 @@ bool Px4ArucoLandingNode::should_retry_command(const rclcpp::Time & now) const
 {
   return !have_last_command_time_ ||
          (now - last_command_time_).seconds() >= command_retry_interval_;
+}
+
+bool Px4ArucoLandingNode::compute_marker_pose_ned(Pose3d & marker_pose_ned) const
+{
+  if (!have_vehicle_odometry_ || !have_aruco_pose_ ||
+    vehicle_odometry_.pose_frame != px4_msgs::msg::VehicleOdometry::POSE_FRAME_NED)
+  {
+    return false;
+  }
+
+  const Pose3d local_body_pose{
+    Eigen::Vector3d{
+      vehicle_odometry_.position[0],
+      vehicle_odometry_.position[1],
+      vehicle_odometry_.position[2]},
+    Eigen::Quaterniond{
+      vehicle_odometry_.q[0],
+      vehicle_odometry_.q[1],
+      vehicle_odometry_.q[2],
+      vehicle_odometry_.q[3]}};
+  const Pose3d camera_marker_pose{
+    Eigen::Vector3d{
+      aruco_pose_.pose.position.x,
+      aruco_pose_.pose.position.y,
+      aruco_pose_.pose.position.z},
+    Eigen::Quaterniond{
+      aruco_pose_.pose.orientation.w,
+      aruco_pose_.pose.orientation.x,
+      aruco_pose_.pose.orientation.y,
+      aruco_pose_.pose.orientation.z}};
+
+  const auto transformed = transform_marker_to_local_ned(
+    local_body_pose,
+    PoseReferenceFrame::kLocalNed,
+    body_camera_pose_,
+    camera_marker_pose);
+  if (!transformed.has_value()) {
+    return false;
+  }
+  marker_pose_ned = *transformed;
+  return true;
 }
 
 bool Px4ArucoLandingNode::compute_local_marker_error(
@@ -994,6 +1394,19 @@ void Px4ArucoLandingNode::publish_deck_gnss_pose(const rclcpp::Time & now)
   deck_gnss_pose_pub_->publish(msg);
 }
 
+void Px4ArucoLandingNode::publish_marker_pose(const rclcpp::Time & now)
+{
+  if (!have_marker_pose_ned_ ||
+    !visual_guidance_->visual_position(now.seconds()).has_value())
+  {
+    return;
+  }
+
+  geometry_msgs::msg::PoseStamped msg = marker_pose_ned_;
+  msg.header.stamp = now;
+  marker_pose_pub_->publish(msg);
+}
+
 void Px4ArucoLandingNode::publish_guidance_source()
 {
   std_msgs::msg::String msg;
@@ -1005,7 +1418,16 @@ void Px4ArucoLandingNode::publish_guidance_source()
       msg.data = "GNSS_RENDEZVOUS";
       break;
     case LandingState::ACQUIRE_ARUCO:
-      msg.data = aruco_acquired_hold_ ? "GNSS_ARUCO_ACQUIRED_HOLD" : "GNSS_SEARCH";
+      msg.data = "GNSS_SEARCH";
+      break;
+    case LandingState::VISUAL_HANDOVER:
+      msg.data = "BLENDING";
+      break;
+    case LandingState::TRACK_TARGET:
+      msg.data = "VISION";
+      break;
+    case LandingState::RECOVER_TO_GNSS:
+      msg.data = "GNSS_RECOVERY";
       break;
     case LandingState::CENTER_ABOVE_MARKER:
     case LandingState::DESCEND_WITH_TRACKING:
@@ -1035,6 +1457,12 @@ const char * Px4ArucoLandingNode::state_name(LandingState state)
       return "RENDEZVOUS_GNSS";
     case LandingState::ACQUIRE_ARUCO:
       return "ACQUIRE_ARUCO";
+    case LandingState::VISUAL_HANDOVER:
+      return "VISUAL_HANDOVER";
+    case LandingState::TRACK_TARGET:
+      return "TRACK_TARGET";
+    case LandingState::RECOVER_TO_GNSS:
+      return "RECOVER_TO_GNSS";
     case LandingState::GOTO_ARUCO_AREA:
       return "GOTO_ARUCO_AREA";
     case LandingState::WAIT_ARUCO:

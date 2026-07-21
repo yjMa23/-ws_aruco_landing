@@ -26,9 +26,9 @@
      - `/aruco/debug_image`
 
 2. `aruco_precision_landing_cpp`
-   - 订阅 PX4 状态、局部位置、里程计、船舶 GNSS 和 ArUco 可见性。
-   - 发布 PX4 Offboard 模式、轨迹设定点、飞行命令和 GNSS 引导调试状态。
-   - 当前 P2C 主路径已实现状态：
+   - 订阅 PX4 状态、局部位置、里程计、船舶 GNSS、ArUco 完整位姿和可见性。
+   - 发布 PX4 Offboard 模式、轨迹设定点、飞行命令、GNSS / 视觉调试位姿和引导来源。
+   - 当前 P2D 主路径已实现状态：
      - `INIT`
      - `WAIT_FOR_PX4`
      - `OFFBOARD_PRE_STREAM`
@@ -36,6 +36,9 @@
      - `WAIT_DECK_GNSS`
      - `RENDEZVOUS_GNSS`
      - `ACQUIRE_ARUCO`
+     - `VISUAL_HANDOVER`
+     - `TRACK_TARGET`
+     - `RECOVER_TO_GNSS`
    - 旧静态 `GOTO_ARUCO_AREA`、`WAIT_ARUCO`、对中、下降和 Land 状态代码仍保留用于历史基线，但从当前主路径不可达。
 
 3. `moving_deck_sim`
@@ -51,14 +54,12 @@
    - `P2A` 坐标契约、刚体变换和 WGS84 / ENU / NED 纯数学模块已完成。
    - `P2B` 船舶 GNSS 传感器仿真已完成，验收记录见 `docs/P2B_DECK_GNSS_VALIDATION.md`。
    - `P2C` GNSS 会合与移动甲板上方粗跟踪已完成，验收记录见 `docs/P2C_GNSS_RENDEZVOUS_VALIDATION.md`。
-   - 当前进入 `P2D` ArUco 完整变换与 GNSS—视觉接管阶段。
+   - `P2D` ArUco 完整变换与 GNSS—视觉接管已完成，验收记录见 `docs/P2D_GNSS_VISION_HANDOVER_VALIDATION.md`。
+   - 当前进入 `P3` 甲板视觉状态估计与短时预测阶段。
 
 5. 当前控制器主要缺口如下：
-   - 稳定识别 ArUco 后仍由 GNSS 中心悬停，没有视觉位置控制接管。
-   - 只检查 ArUco 可见性，尚未使用完整 Marker 位置和姿态。
-   - 运行控制器尚未接入已完成的完整刚体变换模块和相机外参。
-   - 没有 GNSS 与视觉目标一致性检查、平滑接管和下降前视觉丢失恢复。
-   - 没有甲板视觉位置、速度、升沉速度和姿态的状态估计。
+   - 尚未基于视觉消息采样时间进行状态估计和 PX4 位姿时间对齐。
+   - 没有甲板视觉速度、升沉速度和姿态动态估计。
    - 没有目标运动预测和速度前馈。
    - 下降速度固定，没有基于相对速度、甲板倾角和可见性的着陆窗口。
    - `FINAL_LAND` 过早切换 PX4 自动降落，移动甲板继续运动时可能失去水平跟踪。
@@ -836,6 +837,7 @@ colcon test-result --verbose
 - 接管过程目标连续且高度保持不变。
 - 视觉长时丢失能够回到 GNSS 粗引导。
 - 本阶段仍不下降。
+- 已完成 55 项测试和消息级状态机验收，详见 `docs/P2D_GNSS_VISION_HANDOVER_VALIDATION.md`。
 
 ### P3：甲板状态估计和预测
 
@@ -1057,15 +1059,15 @@ colcon test-result --verbose
 
 ## 16. Codex 下一步默认任务
 
-`P0`、`P1`、`P2.0`、`P2A`、`P2B` 和 `P2C` 已完成。当前从 `P2D` 开始，不直接实现 MPC 或强化学习。
+`P0`、`P1`、`P2.0`、`P2A`、`P2B`、`P2C` 和 `P2D` 已完成。当前从 `P3` 开始，不直接实现 MPC 或强化学习。
 
 下一项任务：
 
 ```text
-将 ArUco PoseStamped 通过 T_body_frd_camera_optical 和 VehicleOdometry
-转换到 PX4 local NED，发布 /landing/marker_pose_ned，
-实现 VISUAL_HANDOVER、TRACK_TARGET 和 RECOVER_TO_GNSS，
-平滑切换 GNSS 与视觉目标并限制目标跳变，保持安全高度，不下降。
+实现不依赖 ROS 节点的常速度视觉状态估计器和短时运动预测器，
+基于视觉 local NED 位姿与采样时间处理 dt、异常观测和短时丢帧，
+输出位置、速度及控制时刻预测位置并编写 GTest，
+暂不实现速度前馈、着陆窗口、下降或触地逻辑。
 ```
 
-完成视觉接管和下降前恢复验收后，再进入 `P3：甲板视觉状态估计与短时预测`。
+完成状态估计和预测验收后，再进入 `P4：移动甲板水平跟踪`。

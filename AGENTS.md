@@ -47,7 +47,6 @@ docs/COORDINATE_FRAMES.md
 * `P2A` 坐标与地理转换数学基础。
   * 已实现独立 `coordinate_transform` 和 `geodetic_converter`。
   * 已覆盖刚体变换、ENU/NED、WGS84/ENU、异常输入和局部范围测试。
-  * 新模块尚未接入现有降落控制器。
 
 * `P2B` 船舶 GNSS 传感器仿真。
   * 已实现 `/deck/gps/fix` 和 `/deck/gps/velocity`。
@@ -57,8 +56,14 @@ docs/COORDINATE_FRAMES.md
 * `P2C` GNSS 会合与移动甲板上方粗跟踪。
   * 已实现 `WAIT_DECK_GNSS`、`RENDEZVOUS_GNSS` 和 `ACQUIRE_ARUCO`。
   * 已实现船舶 WGS84 转 PX4 local NED、跳变拒绝、超时回退和目标限幅。
-  * 搜索中心随实时船舶 GNSS 移动；稳定识别后只在安全高度悬停，不下降。
+  * 搜索中心随实时船舶 GNSS 移动。
   * 验收记录见 `docs/P2C_GNSS_RENDEZVOUS_VALIDATION.md`。
+
+* `P2D` GNSS—视觉接管与下降前恢复。
+  * 已将完整相机外参和 PX4 `VehicleOdometry` 接入视觉坐标链。
+  * 已实现 `VISUAL_HANDOVER`、`TRACK_TARGET` 和 `RECOVER_TO_GNSS`。
+  * 已实现 GNSS—视觉一致性、测量跳变拒绝、线性接管、短时保持和长时恢复。
+  * 全程保持安全高度，不下降；验收记录见 `docs/P2D_GNSS_VISION_HANDOVER_VALIDATION.md`。
 
 现有运行包：
 
@@ -66,9 +71,9 @@ docs/COORDINATE_FRAMES.md
   * 输出 `/aruco/pose`、`/aruco/visible`、`/aruco/debug_image`。
 
 * `aruco_precision_landing_cpp`
-  * 订阅 PX4 状态、船舶 GNSS 和 ArUco 可见性。
-  * 通过 PX4 Offboard 位置设定点完成起飞、GNSS 会合、移动中心搜索和安全高度悬停。
-  * 当前 P2C 主路径不会下降；旧静态下降代码仅作为历史基线保留且从主路径不可达。
+  * 订阅 PX4 状态、船舶 GNSS、ArUco 完整位姿和可见性。
+  * 通过 PX4 Offboard 位置设定点完成起飞、GNSS 会合、移动搜索、视觉接管、视觉跟踪和 GNSS 恢复。
+  * 当前 P2D 主路径不会下降；旧静态下降代码仅作为历史基线保留且从主路径不可达。
 
 * `moving_deck_sim`
   * 驱动水平移动甲板并发布 `/simulation/deck/ground_truth`。
@@ -77,9 +82,8 @@ docs/COORDINATE_FRAMES.md
 
 当前缺少：
 
-* ArUco 完整位姿转换和 GNSS 到视觉平滑接管。
-* 将完整相机外参和新坐标模块接入视觉控制链。
-* 甲板速度估计、运动预测和速度前馈。
+* 视觉状态估计、跨传感器时间对齐和短时运动预测。
+* 甲板速度估计和速度前馈。
 * 规则式着陆窗口和相对高度下降。
 * 移动甲板持续跟踪触地。
 * 触地检测、恢复策略和批量评测。
@@ -96,7 +100,7 @@ Codex 必须按以下顺序推进，除非用户明确改变优先级：
 4. `P2A`：完整刚体坐标与 WGS84 / ENU / NED 转换，纯数学模块已完成。
 5. `P2B`：船舶 GNSS 传感器仿真，已完成。
 6. `P2C`：GNSS 会合和移动甲板上方粗跟踪，已完成，不下降。
-7. `P2D`：ArUco 完整变换、GNSS 到视觉接管和下降前恢复。
+7. `P2D`：ArUco 完整变换、GNSS 到视觉接管和下降前恢复，已完成，不下降。
 8. `P3`：甲板视觉状态估计和短时预测。
 9. `P4`：移动甲板视觉水平跟踪。
 10. `P5`：规则式着陆窗口和分阶段下降。
@@ -339,11 +343,11 @@ colcon test-result --verbose
 
 ## 默认下一任务
 
-`P0`、`P1`、`P2.0`、`P2A`、`P2B` 和 `P2C` 已完成。没有额外指令时，从 `P2D` 开始：
+`P0`、`P1`、`P2.0`、`P2A`、`P2B`、`P2C` 和 `P2D` 已完成。没有额外指令时，从 `P3` 开始：
 
 ```text
-将 ArUco PoseStamped 通过完整外参和 PX4 VehicleOdometry 转换到 local NED，
-实现 VISUAL_HANDOVER、TRACK_TARGET 和 RECOVER_TO_GNSS，
-限制 GNSS 与视觉目标差值和接管跳变，接管期间保持安全高度，
-视觉长时丢失时在下降前回退到 GNSS，不实现下降。
+实现不依赖 ROS 节点的常速度甲板状态估计器和短时运动预测器，
+使用视觉 local NED 位姿、消息采样时间和控制器时间处理 dt、异常值和短时丢帧，
+输出位置、速度和预测位置并编写 GTest，
+暂不实现下降、着陆窗口或触地逻辑。
 ```

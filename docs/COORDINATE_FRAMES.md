@@ -662,9 +662,9 @@ local_enu_to_wgs84(...)
 
 ---
 
-## 14. 接入前运行验证清单
+## 14. 运行接入验证清单
 
-数学单元测试通过后，接入控制器前还必须在 SITL 中记录一次运行值：
+数学单元测试通过后，接入控制器时必须在 SITL 或消息级验收中记录以下运行值：
 
 ```bash
 ros2 topic echo /fmu/out/vehicle_odometry --once
@@ -683,7 +683,8 @@ ros2 topic echo <camera_info_topic> --once
 - Marker 位于图像上侧时转换后为 body forward。
 - 下视方向对应 body down。
 
-运行验证结果应写入单独 P2A 验收记录。
+P2D 已通过合成 PX4、GNSS 和 ArUco 消息完成该链路的消息级验证；真实相机插件与 PX4
+动力学联合验证仍需在环境完整后执行。
 
 ---
 
@@ -702,7 +703,9 @@ ros2 topic echo <camera_info_topic> --once
 9. PX4 local 地理原点由无人机首帧 GPS 初始化，不能无条件直接使用 Gazebo world 原点。
 10. GNSS 粗引导必须以 PX4 `ref_lat/ref_lon/ref_alt` 为转换参考。
 
-纯 C++ 数学模块已经实现并通过测试，尚未接入现有降落状态机。
+纯 C++ 数学模块已经实现并通过测试，并已在 P2D 接入运行控制器。控制器现在使用完整
+相机外参和 PX4 `VehicleOdometry` 生成 `/landing/marker_pose_ned`，不再由相机 x/y 的
+手写正负号生成 P2D 主路径目标。
 
 ---
 
@@ -728,16 +731,36 @@ src/aruco_precision_landing_cpp/test/geodetic_converter_test.cpp
 - 默认 `10 km` 局部三维有效范围，可在创建转换器时调整。
 - 无效经纬度、NaN、Inf 和超范围输入显式返回失败。
 
-2026-07-20 执行完整工作区构建和测试：
+P2A 完成时，刚体坐标测试覆盖 10 个 GTest 用例，地理转换测试覆盖 8 个 GTest 用例。
+截至 P2D，完整工作区结果为：
 
 ```text
 3 packages finished
-25 tests
+55 tests
 0 errors
 0 failures
 0 skipped
 ```
 
-其中刚体坐标测试覆盖 10 个 GTest 用例，地理转换测试覆盖 8 个 GTest 用例。
+P2D 消息级验证中，输入：
 
-下一步进入 `P2B` 船舶 GNSS 传感器仿真；本阶段不把新模块接入控制器。
+```text
+UAV local NED = [0.0, 0.0, -5.0] m
+camera_optical Marker = [0.0, 0.0, 5.3] m
+T_body_frd_camera_optical.translation = [0.0, 0.0, -0.10] m
+```
+
+得到：
+
+```text
+Marker local NED ≈ [0.0, 0.0, 0.2] m
+```
+
+结果与完整变换链一致。详细验收见：
+
+```text
+docs/P2D_GNSS_VISION_HANDOVER_VALIDATION.md
+```
+
+当前仍未解决图像采样时刻与 PX4 位姿的时间对齐。P3 将基于视觉消息采样时间实现状态
+估计、异常 `dt` 处理和短时运动预测。

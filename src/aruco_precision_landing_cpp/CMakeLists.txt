@@ -21,6 +21,7 @@ add_library(
   src/coordinate_transform.cpp
   src/geodetic_converter.cpp
   src/gnss_rendezvous_guidance.cpp
+  src/visual_handover_guidance.cpp
 )
 target_compile_features(aruco_landing_math PUBLIC cxx_std_17)
 target_include_directories(
@@ -95,6 +96,12 @@ if(BUILD_TESTING)
     test/gnss_rendezvous_guidance_test.cpp
   )
   target_link_libraries(gnss_rendezvous_guidance_test aruco_landing_math)
+
+  ament_add_gtest(
+    visual_handover_guidance_test
+    test/visual_handover_guidance_test.cpp
+  )
+  target_link_libraries(visual_handover_guidance_test aruco_landing_math)
 endif()
 
 ament_export_dependencies(Eigen3)
