@@ -69,7 +69,13 @@ docs/COORDINATE_FRAMES.md
   * 已实现独立三维常速度 Kalman Filter 和受限常速度预测器。
   * 使用视觉采样时间处理滤波 `dt`，处理乱序、离群点、短时丢帧和长时重初始化。
   * 已发布 `/landing/estimated_deck_odometry` 和 `/landing/predicted_deck_pose`。
-  * 预测结果尚未进入 PX4 setpoint；验收记录见 `docs/P3_VISUAL_STATE_ESTIMATION_VALIDATION.md`。
+  * 验收记录见 `docs/P3_VISUAL_STATE_ESTIMATION_VALIDATION.md`。
+
+* `P4` 安全高度移动甲板水平跟踪。
+  * 已实现原始视觉、估计位置、估计位置+速度前馈、预测位置+速度前馈四种模式。
+  * 默认将预测位置写入 PX4 position setpoint，并将甲板速度与相对速度阻尼写入水平 velocity feedforward。
+  * 已实现位置目标、前馈速度和前馈加速度限制，以及短时丢失衰减和长时 GNSS 恢复。
+  * 代码与消息级验收完成；真实 PX4 跟踪 RMSE 待用户确认，见 `docs/P4_MOVING_TARGET_TRACKING_VALIDATION.md`。
 
 现有运行包：
 
@@ -78,9 +84,10 @@ docs/COORDINATE_FRAMES.md
 
 * `aruco_precision_landing_cpp`
   * 订阅 PX4 状态、船舶 GNSS、ArUco 完整位姿和可见性。
-  * 通过 PX4 Offboard 位置设定点完成起飞、GNSS 会合、移动搜索、视觉接管、视觉跟踪和 GNSS 恢复。
+  * 通过 PX4 Offboard 位置设定点完成起飞、GNSS 会合、移动搜索、视觉接管、移动甲板水平跟踪和 GNSS 恢复。
   * 估计并发布甲板视觉位置、速度、协方差和短时预测位置。
-  * 当前 P3 主路径不会下降，预测结果不参与控制；旧静态下降代码仅作为历史基线保留且从主路径不可达。
+  * 在 `TRACK_TARGET` 中发布预测位置目标和受限水平速度前馈；当前 P4 主路径仍不下降。
+  * 旧静态下降代码仅作为历史基线保留且从主路径不可达。
 
 * `moving_deck_sim`
   * 驱动水平移动甲板并发布 `/simulation/deck/ground_truth`。
@@ -90,7 +97,7 @@ docs/COORDINATE_FRAMES.md
 当前缺少：
 
 * 图像采样时刻的 PX4 位姿历史插值和严格跨时间域对齐。
-* 将预测位置和甲板速度接入水平控制及速度前馈。
+* P4 静止、匀速和正弦真实 PX4 仿真 RMSE 与增益调参。
 * 规则式着陆窗口和相对高度下降。
 * 移动甲板持续跟踪触地。
 * 触地检测、恢复策略和批量评测。
@@ -108,9 +115,9 @@ Codex 必须按以下顺序推进，除非用户明确改变优先级：
 5. `P2B`：船舶 GNSS 传感器仿真，已完成。
 6. `P2C`：GNSS 会合和移动甲板上方粗跟踪，已完成，不下降。
 7. `P2D`：ArUco 完整变换、GNSS 到视觉接管和下降前恢复，已完成，不下降。
-8. `P3`：甲板视觉状态估计和短时预测，已完成，预测结果暂不参与控制。
-9. `P4`：移动甲板视觉水平跟踪。
-10. `P5`：规则式着陆窗口和分阶段下降。
+8. `P3`：甲板视觉状态估计和短时预测，已完成。
+9. `P4`：移动甲板视觉水平跟踪，代码与消息级验收已完成，真实飞行验收待确认。
+10. `P5`：规则式着陆窗口和分阶段下降；P4 真实跟踪验收通过后才能开始。
 11. `P6`：触地确认、恢复和安全中止。
 12. `P7`：批量评测。
 13. `P8`：传统方法消融实验。
@@ -350,11 +357,12 @@ colcon test-result --verbose
 
 ## 默认下一任务
 
-`P0`、`P1`、`P2.0`、`P2A`、`P2B`、`P2C`、`P2D` 和 `P3` 已完成。没有额外指令时，从 `P4` 开始：
+`P0`～`P3` 已完成；`P4` 代码、单元测试和消息级验收已完成。没有额外指令时，不直接实现 P5，先执行 P4 真实 PX4 SITL 验收：
 
 ```text
-使用 /landing/predicted_deck_pose 和 /landing/estimated_deck_odometry 的水平位置与速度，
-实现安全高度下的移动甲板水平跟踪和速度前馈，
-与当前 P2D 原始视觉位置控制进行可配置对比，记录目标连续性和跟踪误差，
-暂不实现着陆窗口、下降或触地逻辑。
+依次运行静止、0.2 m/s、0.4 m/s 和 XY 正弦甲板，
+对比 RAW_VISUAL_POSITION、ESTIMATED_POSITION_VELOCITY_FF 和 PREDICTED_POSITION_VELOCITY_FF，
+记录水平位置 RMSE、相对速度 RMSE、最大误差、Marker 丢失和 GNSS 恢复次数，
+根据 rosbag 结果调节前馈增益、相对速度增益、速度/加速度限制和预测时域。
+用户确认 P4 真实跟踪正常后，再进入 P5 着陆窗口和分阶段下降。
 ```

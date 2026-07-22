@@ -25,6 +25,7 @@ add_library(
   src/visual_handover_guidance.cpp
   src/target_state_estimator.cpp
   src/motion_predictor.cpp
+  src/moving_target_tracking_controller.cpp
 )
 target_compile_features(aruco_landing_math PUBLIC cxx_std_17)
 target_include_directories(
@@ -118,6 +119,12 @@ if(BUILD_TESTING)
     test/motion_predictor_test.cpp
   )
   target_link_libraries(motion_predictor_test aruco_landing_math)
+
+  ament_add_gtest(
+    moving_target_tracking_controller_test
+    test/moving_target_tracking_controller_test.cpp
+  )
+  target_link_libraries(moving_target_tracking_controller_test aruco_landing_math)
 endif()
 
 ament_export_dependencies(Eigen3)

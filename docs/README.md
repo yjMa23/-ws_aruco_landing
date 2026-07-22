@@ -3,7 +3,7 @@
 本文档按当前源码梳理 `ws_aruco_landing` 的运行链路。当前开发阶段为：
 
 ```text
-P3：视觉状态估计与短时运动预测
+P4：安全高度移动甲板水平跟踪
 ```
 
 当前主路径能够完成：
@@ -16,12 +16,12 @@ P3：视觉状态估计与短时运动预测
 → GNSS—视觉平滑接管
 → 安全高度视觉跟踪
 → 估计甲板位置、速度和协方差
-→ 发布短时预测位置
+→ 短时预测甲板位置
+→ 预测位置目标 + 水平速度前馈跟踪
 → 视觉长时丢失后恢复到 GNSS
 ```
 
-**P3 主路径不会下降。** 默认 `enable_auto_land=false`，预测位置只用于监控和评估，
-尚未进入 PX4 setpoint。旧静态下降代码只作为 P0 历史基线保留，从当前主路径不可达。
+**P4 主路径不会下降。** 默认 `enable_auto_land=false`。预测位置已作为水平位置目标，甲板估计速度已作为 PX4 水平速度前馈；旧静态下降代码只作为 P0 历史基线保留，从当前主路径不可达。
 
 详细约束和验收记录：
 
@@ -33,6 +33,8 @@ P3：视觉状态估计与短时运动预测
 - [P2D GNSS—视觉接管验收](P2D_GNSS_VISION_HANDOVER_VALIDATION.md)
 - [P3 视觉状态估计详细计划](P3_VISUAL_STATE_ESTIMATION_PLAN.md)
 - [P3 视觉状态估计验收](P3_VISUAL_STATE_ESTIMATION_VALIDATION.md)
+- [P4 移动目标跟踪详细计划](P4_MOVING_TARGET_TRACKING_PLAN.md)
+- [P4 移动目标跟踪验收](P4_MOVING_TARGET_TRACKING_VALIDATION.md)
 
 旧公式文档仍用于解释 P0 静态基线：
 
@@ -68,6 +70,7 @@ flowchart LR
     CTRL -->|/landing/marker_pose_ned| MON
     CTRL -->|/landing/estimated_deck_odometry| MON
     CTRL -->|/landing/predicted_deck_pose| MON
+    CTRL -->|/landing/tracking_velocity_setpoint| MON
 ```
 
 Ground Truth 只允许进入仿真传感器和后续评测器。控制器与检测器禁止订阅：
@@ -84,7 +87,7 @@ Ground Truth 只允许进入仿真传感器和后续评测器。控制器与检�
 | --- | --- |
 | `aruco_detector` | 图像同步、指定 ID 检测、PnP 完整位姿、可见性和调试图像 |
 | `moving_deck_sim` | 水平移动甲板、确定性 reset、Ground Truth 和船舶 GNSS 传感器仿真 |
-| `aruco_precision_landing_cpp` | PX4 Offboard、GNSS 会合、完整视觉变换、平滑接管、视觉跟踪、状态估计、短时预测和 GNSS 恢复 |
+| `aruco_precision_landing_cpp` | PX4 Offboard、GNSS 会合、完整视觉变换、平滑接管、状态估计、预测位置目标、速度前馈跟踪和 GNSS 恢复 |
 
 ### 2.1 关键纯数学模块
 
@@ -96,6 +99,7 @@ Ground Truth 只允许进入仿真传感器和后续评测器。控制器与检�
 | `visual_handover_guidance` | 视觉测量过滤、GNSS 一致性、线性接管、丢失分类和目标限幅 |
 | `target_state_estimator` | 三维常速度 Kalman Filter、时间异常、离群点和长时重初始化 |
 | `motion_predictor` | 根据观测到达年龄和固定补偿执行受限常速度外推 |
+| `moving_target_tracking_controller` | 选择原始/估计/预测位置目标，生成受限水平速度前馈并处理短时丢失 |
 | `gnss_sensor_model` | GNSS 降频、噪声、延迟、丢包和确定性 reset |
 
 ---
@@ -131,7 +135,7 @@ Ground Truth 只允许进入仿真传感器和后续评测器。控制器与检�
 | 话题 | 类型 | 用途 |
 | --- | --- | --- |
 | `/fmu/in/offboard_control_mode` | `px4_msgs/msg/OffboardControlMode` | 声明 PX4 位置控制 |
-| `/fmu/in/trajectory_setpoint` | `px4_msgs/msg/TrajectorySetpoint` | local NED 目标 |
+| `/fmu/in/trajectory_setpoint` | `px4_msgs/msg/TrajectorySetpoint` | local NED 位置目标和水平速度前馈 |
 | `/fmu/in/vehicle_command` | `px4_msgs/msg/VehicleCommand` | Offboard 和 Arm 命令 |
 | `/landing/state` | `std_msgs/msg/String` | 当前状态 |
 | `/landing/guidance_source` | `std_msgs/msg/String` | GNSS、混合、视觉或恢复来源 |
@@ -140,6 +144,7 @@ Ground Truth 只允许进入仿真传感器和后续评测器。控制器与检�
 | `/landing/marker_pose_ned` | `geometry_msgs/msg/PoseStamped` | 完整刚体变换后的 Marker 位姿 |
 | `/landing/estimated_deck_odometry` | `nav_msgs/msg/Odometry` | 滤波位置、速度和协方差 |
 | `/landing/predicted_deck_pose` | `geometry_msgs/msg/PoseStamped` | 受限短时常速度预测位置 |
+| `/landing/tracking_velocity_setpoint` | `geometry_msgs/msg/TwistStamped` | 实际下发的 local NED 水平速度前馈 |
 
 ---
 
@@ -214,7 +219,7 @@ camera_extrinsic.rotation_wxyz: [0.70710678, 0.0, 0.0, 0.70710678]
 
 ---
 
-## 5. 当前 P3 主路径与 P2D 状态机
+## 5. 当前 P4 主路径与状态机
 
 ```text
 INIT
@@ -245,7 +250,7 @@ VISUAL_HANDOVER / TRACK_TARGET
 | `RENDEZVOUS_GNSS` | 受限地跟随实时船舶 GNSS XY | 到达会合半径和安全高度 |
 | `ACQUIRE_ARUCO` | 围绕实时 GNSS 中心搜索 | 稳定完整视觉位姿与 GNSS 一致 |
 | `VISUAL_HANDOVER` | 线性混合 GNSS 与视觉目标 | 有效视觉接管权重达到 1 |
-| `TRACK_TARGET` | 使用视觉 Marker local NED 水平目标 | 视觉长时丢失或严重异常 |
+| `TRACK_TARGET` | 使用可配置原始/估计/预测位置目标，并按模式加入水平速度前馈 | 视觉长时丢失或严重异常 |
 | `RECOVER_TO_GNSS` | 清除旧视觉并恢复到 GNSS 粗引导 | GNSS 有效后回会合或搜索 |
 
 ### 5.1 接管条件
@@ -274,9 +279,11 @@ target_xy = (1-alpha) * gnss_xy + alpha * visual_xy
 
 短时丢失：
 
-- 保持最近有效水平目标。
-- 保持固定安全高度。
-- 不下降。
+- 原始视觉模式保持最近有效水平目标并清除速度前馈。
+- 估计/预测模式在 `tracking.max_prediction_age_s` 内继续受限预测。
+- 水平速度前馈随估计年龄逐步衰减。
+- 超过预测年龄后保持最近安全位置并清除前馈。
+- 始终保持固定安全高度，不下降。
 
 长时丢失：
 
@@ -307,11 +314,56 @@ x = [px, py, pz, vx, vy, vz]^T
 - 预测时域使用“最后有效观测到达年龄 + 固定附加补偿”，并限制最大外推时域。
 - 不直接计算 `controller_now - image_header_stamp`。
 
-当前 `/landing/predicted_deck_pose` 只用于调试和离线评估，不进入 `/fmu/in/trajectory_setpoint`。
+当前预测结果同时用于调试输出和 P4 默认跟踪模式的位置目标。严格图像时刻 PX4 位姿插值仍未实现。
 
 ---
 
-## 7. 旧静态基线代码
+## 7. P4 水平跟踪控制
+
+默认模式：
+
+```text
+PREDICTED_POSITION_VELOCITY_FF
+```
+
+支持四种消融模式：
+
+```text
+RAW_VISUAL_POSITION
+ESTIMATED_POSITION
+ESTIMATED_POSITION_VELOCITY_FF
+PREDICTED_POSITION_VELOCITY_FF
+```
+
+PX4 使用有限位置设定点运行位置控制器，有限水平速度设定点作为前馈：
+
+```text
+position_sp_xy = 受限视觉 / 估计 / 预测甲板位置
+velocity_ff_xy = velocity_feedforward_gain * v_deck_xy
+               + relative_velocity_gain * (v_deck_xy - v_uav_xy)
+```
+
+位置误差反馈由 PX4 内部位置环完成。P4 外部模块不重复叠加位置 P。
+
+全部模式都保持：
+
+```text
+position_sp_z = -rendezvous_altitude_m
+velocity_sp_z = NaN
+```
+
+控制器限制：
+
+- 位置目标最大移动速度和单周期步长；
+- 水平前馈速度幅值和加速度；
+- 短时预测最大年龄；
+- 视觉短时丢失时的前馈衰减；
+- 输入不足时保持最近安全位置并清除前馈；
+- 视觉长时丢失时恢复到 GNSS。
+
+---
+
+## 8. 旧静态基线代码
 
 源码仍保留：
 
@@ -324,7 +376,7 @@ FINAL_LAND
 DONE
 ```
 
-这些状态用于冻结 P0 历史基线，但当前从 `INIT` 出发的 P3 主路径不可达。默认：
+这些状态用于冻结 P0 历史基线，但当前从 `INIT` 出发的 P4 主路径不可达。默认：
 
 ```yaml
 enable_auto_land: false
@@ -334,7 +386,7 @@ enable_auto_land: false
 
 ---
 
-## 8. 当前验证状态
+## 9. 当前验证状态
 
 已通过：
 
@@ -347,12 +399,17 @@ enable_auto_land: false
 - P3 常速度 Kalman Filter、时间异常、离群点、重初始化和短时预测测试。
 - P3 静止消息级输入估计速度为零。
 - P3 NED East `0.4 m/s` 输入估计速度约为 `0.40023 m/s`。
+- P4 四种跟踪模式、位置/速度/加速度限制和短时丢失衰减测试。
+- P4 静止消息级目标的速度前馈为零，位置目标为 `[0,0,-5]`。
+- P4 NED East `0.4 m/s` 连续输入估计速度约 `0.4 m/s`，水平 East 前馈约 `0.5 m/s`。
+- PX4 `TrajectorySetpoint.velocity` 与 `/landing/tracking_velocity_setpoint` 一致。
+- 视觉长时丢失后按 `TRACK_TARGET → RECOVER_TO_GNSS → ACQUIRE_ARUCO` 恢复。
 
 完整工作区结果：
 
 ```text
 3 packages finished
-77 tests
+93 tests
 0 errors
 0 failures
 0 skipped
@@ -364,7 +421,8 @@ enable_auto_land: false
 - 匀速和正弦移动甲板的视觉跟踪 RMSE。
 - 真实图像和 PX4 动力学下的估计位置/速度 RMSE。
 - 图像采样时刻的 PX4 位姿插值和严格时间对齐。
-- 将预测位置和估计速度用于水平控制后的性能提升。
+- P4 静止、`0.2 m/s`、`0.4 m/s` 和正弦甲板的真实 PX4 跟踪 RMSE。
+- `RAW_VISUAL_POSITION`、估计前馈和预测前馈模式的定量对比与调参。
 - 着陆窗口、下降、触地和批量评测。
 
 当前 Gazebo 环境仍有相机插件问题：

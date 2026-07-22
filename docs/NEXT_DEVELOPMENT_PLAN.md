@@ -20,7 +20,7 @@
 → 丢失恢复、安全中止和批量评测
 ```
 
-本文档是下一阶段的执行计划。用户已确认按本计划执行；当前已完成 `P2.0`、`P2A`、`P2B`、`P2C`、`P2D` 和 `P3`。控制器已具备船舶 GNSS 会合、完整视觉位姿、GNSS—视觉接管、视觉状态估计和短时预测，下一阶段为 `P4` 安全高度移动甲板水平跟踪。
+本文档是传统基线的阶段执行计划。当前已完成 `P2.0`～`P3`，并完成 P4 安全高度移动甲板水平跟踪的代码、单元测试和消息级验收。进入 P5 前，下一任务是完成 P4 真实 PX4 SITL 跟踪对比与调参。
 
 ---
 
@@ -38,7 +38,8 @@
 | `P2B` 船舶 GNSS 传感器仿真 | 已完成 | 实现理想/含噪 GNSS、ENU 速度、固定采样/延迟/丢包、确定性 reset 和端到端冒烟验证 |
 | `P2C` GNSS 会合与移动甲板上方粗跟踪 | 已完成 | 实现 WGS84→local NED、GNSS 校验、会合目标限幅、移动中心搜索和超时回退 |
 | `P2D` GNSS—视觉接管与下降前恢复 | 已完成 | 实现完整相机外参、Marker local NED、线性接管、视觉跟踪、短时保持和长时 GNSS 恢复 |
-| `P3` 视觉状态估计与短时预测 | 已完成 | 实现三维常速度 Kalman Filter、离群/时间异常处理、位置速度协方差和受限短时预测；预测尚未参与控制 |
+| `P3` 视觉状态估计与短时预测 | 已完成 | 实现三维常速度 Kalman Filter、离群/时间异常处理、位置速度协方差和受限短时预测 |
+| `P4` 安全高度移动甲板水平跟踪 | 代码与消息级验收完成 | 实现四种跟踪模式、预测位置目标、水平速度前馈、位置/速度/加速度限制和丢失恢复；真实 PX4 RMSE 待确认 |
 
 ### 2.2 当前已有 ROS 2 包
 
@@ -50,7 +51,7 @@ src/moving_deck_sim
 
 ### 2.3 当前控制器能力
 
-`aruco_precision_landing_cpp` 当前 P3 主路径已经具备：
+`aruco_precision_landing_cpp` 当前 P4 主路径已经具备：
 
 - PX4 Offboard 预发布、自动切换 Offboard、解锁和起飞。
 - 使用 PX4 `VehicleLocalPosition.ref_lat/ref_lon/ref_alt` 建立 local NED 地理参考。
@@ -64,13 +65,16 @@ src/moving_deck_sim
 - 使用视觉采样时间运行三维常速度 Kalman Filter，估计甲板位置、速度和协方差。
 - 发布 `/landing/estimated_deck_odometry` 和 `/landing/predicted_deck_pose`。
 - 处理重复/倒退时间、离群点、大观测间隔和长时重初始化。
+- 支持原始视觉、估计位置、估计位置+速度前馈、预测位置+速度前馈四种模式。
+- 默认将受限预测位置写入 PX4 position setpoint，将甲板速度和相对速度阻尼写入水平 velocity feedforward。
+- 实现位置目标、前馈速度和前馈加速度限制，以及短时丢失衰减和长时 GNSS 恢复。
 
-旧静态对中、下降和 `NAV_LAND` 代码仍保留用于历史基线参考，但从当前 P3 主路径不可达，默认 `enable_auto_land=false`。P3 预测输出尚未进入 PX4 setpoint。
+旧静态对中、下降和 `NAV_LAND` 代码仍保留用于历史基线参考，但从当前 P4 主路径不可达，默认 `enable_auto_land=false`。
 
 ### 2.4 当前核心缺口
 
 - 图像采样时刻的 PX4 位姿历史插值和严格跨时间域对齐尚未实现。
-- 尚未将预测位置和甲板速度用于水平控制及速度前馈。
+- P4 静止、匀速和正弦真实 PX4 仿真 RMSE、模式对比与增益调参尚未完成。
 - 没有基于相对速度和甲板姿态的着陆窗口。
 - 没有相对甲板高度控制。
 - 最终下降阶段过早退出 Offboard 水平跟踪。
@@ -1168,68 +1172,90 @@ baseline-visual-estimator-v0.1
 
 在安全高度稳定跟踪移动甲板，不执行下降。
 
-## 控制结构
+## 已实现控制结构
+
+PX4 使用位置目标和水平速度前馈：
 
 ```text
-预测甲板位置目标
-+
-甲板速度前馈
-+
-水平位置误差反馈
-+
-水平相对速度反馈
+position_sp_xy = 受限视觉 / 估计 / 预测甲板位置
+velocity_ff_xy = velocity_feedforward_gain * v_deck_xy
+               + relative_velocity_gain * (v_deck_xy - v_uav_xy)
 ```
 
-建议形式：
+位置误差反馈由 PX4 内部位置控制器完成，外部不重复叠加位置 P。
+
+支持模式：
 
 ```text
-v_cmd_xy = v_deck_pred
-         + Kp * position_error_xy
-         + Kv * relative_velocity_error_xy
+RAW_VISUAL_POSITION
+ESTIMATED_POSITION
+ESTIMATED_POSITION_VELOCITY_FF
+PREDICTED_POSITION_VELOCITY_FF
 ```
 
-根据 PX4 接口选择：
+默认：
 
-- 位置 + 速度前馈；或
-- 纯速度设定点。
+```text
+PREDICTED_POSITION_VELOCITY_FF
+```
 
-第一版优先使用 PX4 已支持且容易验证的“位置目标 + 速度前馈”。
+## 已实现约束
 
-## 约束
-
-- 最大水平速度。
-- 最大加速度。
-- 最大设定点变化率。
-- 视觉短时丢失时逐步减弱控制。
+- 水平位置目标最大速度。
+- 单周期最大位置目标变化。
+- 水平速度前馈最大幅值。
+- 水平速度前馈最大加速度。
+- 视觉短时丢失时受限预测和前馈衰减。
+- 超过预测年龄后保持最近安全位置并清除前馈。
 - 视觉长时丢失回退 GNSS。
+- z 始终保持 `-rendezvous_altitude_m`。
 
 ## 参数
 
 ```yaml
-tracking_altitude_m: 4.0
-position_gain_xy: ...
-relative_velocity_gain_xy: ...
-max_tracking_speed_mps: ...
-max_tracking_acceleration_mps2: ...
-prediction_horizon_s: ...
+tracking.mode: PREDICTED_POSITION_VELOCITY_FF
+tracking.max_position_target_speed_mps: 2.0
+tracking.max_position_target_step_m: 0.20
+tracking.velocity_feedforward_gain: 1.0
+tracking.relative_velocity_gain: 0.25
+tracking.max_velocity_feedforward_mps: 1.5
+tracking.max_velocity_feedforward_acceleration_mps2: 1.0
+tracking.max_prediction_age_s: 0.75
 ```
 
-数值在仿真调试后确定，不在编码阶段盲目固定。
+## 实现与消息级验收状态
 
-## 对比基线
+已完成：
 
-- 无速度前馈。
-- 有速度前馈。
-- 有速度前馈 + 预测。
+- 新增 `moving_target_tracking_controller` 纯 C++ 模块。
+- 新增 13 项跟踪控制测试。
+- 全工作区累计 93 项测试通过。
+- 静止目标速度前馈为零。
+- NED East `0.4 m/s` 输入估计速度约 `0.4 m/s`。
+- 无人机速度为零时 East 前馈约 `0.5 m/s`，与公式和 PX4 TrajectorySetpoint 一致。
+- 预测位置和位置目标同方向连续增加。
+- 视觉长时丢失按 `TRACK_TARGET → RECOVER_TO_GNSS → ACQUIRE_ARUCO` 恢复。
+- `RAW_VISUAL_POSITION` 可通过 YAML 启动，非法模式会拒绝启动。
 
-## 验收
+详细计划和验收：
 
-- 静止场景稳定悬停。
-- 匀速 `0.4 m/s` 不持续发散。
-- 正弦场景目标连续。
-- 加前馈后水平 RMSE 明显优于无前馈。
-- Marker 短时丢失不会立即失控。
-- 全过程保持安全高度。
+```text
+docs/P4_MOVING_TARGET_TRACKING_PLAN.md
+docs/P4_MOVING_TARGET_TRACKING_VALIDATION.md
+```
+
+## 真实 PX4 验收待办
+
+在进入 P5 前，用户需要依次验证：
+
+- 静止甲板。
+- `0.2 m/s` 匀速甲板。
+- `0.4 m/s` 匀速甲板。
+- XY 正弦甲板。
+- 原始视觉、估计+前馈、预测+前馈三种模式的水平 RMSE。
+- 实际速度、加速度、Marker 丢失次数和 GNSS 恢复次数。
+
+Ground Truth 只进入 rosbag 离线评测。
 
 ## 建议标签
 

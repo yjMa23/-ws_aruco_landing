@@ -2,7 +2,7 @@
 
 `ws_aruco_landing` 是一个面向 PX4 SITL + Gazebo Harmonic + ROS 2 Humble 的移动船舶
 自主降落传统基线工作空间。当前已完成水平移动甲板、船舶 GNSS 传感器仿真、GNSS 会合、
-ArUco 完整位姿转换、GNSS—视觉平滑接管、视觉状态估计和短时运动预测；下一阶段为安全高度移动甲板水平跟踪。
+ArUco 完整位姿转换、GNSS—视觉平滑接管、视觉状态估计、短时预测以及安全高度移动甲板水平跟踪。P4 代码和消息级验收已完成，下一步是实际 PX4 SITL 跟踪对比与调参。
 
 根目录 README 只提供项目总览和快速启动入口。更完整的参数说明、调试方法和实机测试步骤请查看各包文档。
 
@@ -11,7 +11,7 @@ ArUco 完整位姿转换、GNSS—视觉平滑接管、视觉状态估计和短�
 | 包 | 说明 |
 | --- | --- |
 | [`src/aruco_detector`](src/aruco_detector/README.md) | 从相机图像中检测指定 ArUco marker，并发布 `/aruco/pose`、`/aruco/visible` 和调试图像。 |
-| [`src/aruco_precision_landing_cpp`](src/aruco_precision_landing_cpp/README.md) | 使用船舶 GNSS 和 ArUco 完整位姿完成会合、接管和视觉跟踪，并估计甲板位置、速度及短时预测位置。 |
+| [`src/aruco_precision_landing_cpp`](src/aruco_precision_landing_cpp/README.md) | 使用船舶 GNSS 和 ArUco 完整位姿完成会合、接管、状态估计、预测位置目标与速度前馈水平跟踪。 |
 | [`src/moving_deck_sim`](src/moving_deck_sim/README.md) | 提供静止、水平匀速和水平正弦移动甲板、GNSS 传感器仿真及仅供评测使用的 Ground Truth。 |
 
 ## 环境要求
@@ -104,6 +104,7 @@ ros2 topic echo /landing/deck_gnss_pose_ned
 ros2 topic echo /landing/marker_pose_ned
 ros2 topic echo /landing/estimated_deck_odometry
 ros2 topic echo /landing/predicted_deck_pose
+ros2 topic echo /landing/tracking_velocity_setpoint
 ```
 
 ## P1 水平移动甲板
@@ -115,7 +116,7 @@ ros2 topic echo /landing/predicted_deck_pose
 
 移动甲板 world 仍命名为 `aruco`，因此现有相机桥接话题和 ArUco 检测器默认配置保持
 不变。`/simulation/deck/ground_truth` 使用 Gazebo world ENU，禁止输入降落控制器。
-仿真传感器节点会将其处理为 `/deck/gps/fix` 和 `/deck/gps/velocity`。控制器已完成安全高度 GNSS 会合、移动中心搜索、完整 Marker local NED 变换、GNSS—视觉接管、视觉跟踪、视觉状态估计和短时预测。P3 主路径全程保持安全高度，预测位置尚未用于 PX4 setpoint。
+仿真传感器节点会将其处理为 `/deck/gps/fix` 和 `/deck/gps/velocity`。控制器已完成安全高度 GNSS 会合、移动中心搜索、完整 Marker local NED 变换、GNSS—视觉接管、视觉状态估计、短时预测及位置目标与水平速度前馈跟踪。P4 主路径全程保持安全高度，不执行下降。
 
 ## 详细文档
 
@@ -131,7 +132,9 @@ ros2 topic echo /landing/predicted_deck_pose
 - [P2D GNSS—视觉接管验收记录](docs/P2D_GNSS_VISION_HANDOVER_VALIDATION.md)
 - [P3 视觉状态估计详细计划](docs/P3_VISUAL_STATE_ESTIMATION_PLAN.md)
 - [P3 视觉状态估计验收记录](docs/P3_VISUAL_STATE_ESTIMATION_VALIDATION.md)
+- [P4 移动目标跟踪详细计划](docs/P4_MOVING_TARGET_TRACKING_PLAN.md)
+- [P4 移动目标跟踪验收记录](docs/P4_MOVING_TARGET_TRACKING_VALIDATION.md)
 
 ## 安全提示
 
-控制节点会自动发送 Offboard 和 Arm 命令。P3 默认 `enable_auto_land=false`，当前主路径不会下降或发送 Land 命令，预测结果也不参与控制。建议只在 SITL 中验证；实机测试前必须重新核对相机外参、PX4 坐标系、时间同步、估计器、failsafe、通信链路和人工接管手段。
+控制节点会自动发送 Offboard 和 Arm 命令。P4 默认 `enable_auto_land=false`，当前主路径不会下降或发送 Land 命令；预测位置和水平速度前馈已经参与 `TRACK_TARGET` 控制。建议只在 SITL 中验证；实机测试前必须重新核对相机外参、PX4 坐标系、时间同步、估计器、速度与加速度限制、failsafe、通信链路和人工接管手段。

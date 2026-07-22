@@ -43,6 +43,15 @@ px4_aruco_landing_node:
     estimator_output_timeout_s: 2.0
     estimated_deck_child_frame_id: estimated_deck
 
+    tracking.mode: PREDICTED_POSITION_VELOCITY_FF
+    tracking.max_position_target_speed_mps: 2.0
+    tracking.max_position_target_step_m: 0.20
+    tracking.velocity_feedforward_gain: 1.0
+    tracking.relative_velocity_gain: 0.25
+    tracking.max_velocity_feedforward_mps: 1.5
+    tracking.max_velocity_feedforward_acceleration_mps2: 1.0
+    tracking.max_prediction_age_s: 0.75
+
     expected_aruco_pose_frame_id: camera_link
     camera_extrinsic.translation_frd_m: [0.0, 0.0, -0.10]
     camera_extrinsic.rotation_wxyz: [0.70710678, 0.0, 0.0, 0.70710678]

@@ -97,6 +97,27 @@ Px4ArucoLandingNode::Px4ArucoLandingNode()
   predictor_parameters.max_prediction_horizon_s = max_prediction_horizon_s_;
   motion_predictor_ = std::make_unique<MotionPredictor>(predictor_parameters);
 
+  const auto tracking_mode = tracking_control_mode_from_string(tracking_mode_string_);
+  if (!tracking_mode.has_value()) {
+    throw std::invalid_argument("Unsupported tracking.mode: " + tracking_mode_string_);
+  }
+  MovingTargetTrackingParameters tracking_parameters;
+  tracking_parameters.mode = *tracking_mode;
+  tracking_parameters.max_position_target_speed_mps =
+    tracking_max_position_target_speed_mps_;
+  tracking_parameters.max_position_target_step_m =
+    tracking_max_position_target_step_m_;
+  tracking_parameters.velocity_feedforward_gain =
+    tracking_velocity_feedforward_gain_;
+  tracking_parameters.relative_velocity_gain = tracking_relative_velocity_gain_;
+  tracking_parameters.max_velocity_feedforward_mps =
+    tracking_max_velocity_feedforward_mps_;
+  tracking_parameters.max_velocity_feedforward_acceleration_mps2 =
+    tracking_max_velocity_feedforward_acceleration_mps2_;
+  tracking_parameters.max_prediction_age_s = tracking_max_prediction_age_s_;
+  tracking_controller_ =
+    std::make_unique<MovingTargetTrackingController>(tracking_parameters);
+
   body_camera_pose_.translation = Eigen::Vector3d{
     camera_translation_frd_m_[0],
     camera_translation_frd_m_[1],
@@ -120,10 +141,11 @@ Px4ArucoLandingNode::Px4ArucoLandingNode()
   RCLCPP_INFO(
     get_logger(),
     "PX4 landing controller started at %.1f Hz; GNSS rendezvous altitude %.2f m, "
-    "radius %.2f m",
+    "radius %.2f m; tracking mode %s",
     control_rate_hz_,
     rendezvous_altitude_m_,
-    rendezvous_radius_m_);
+    rendezvous_radius_m_,
+    tracking_control_mode_name(tracking_controller_->mode()));
 }
 
 void Px4ArucoLandingNode::declare_and_load_parameters()
@@ -183,6 +205,22 @@ void Px4ArucoLandingNode::declare_and_load_parameters()
     "motion_predictor.max_prediction_horizon_s", 0.50);
   estimator_output_timeout_s_ =
     declare_parameter<double>("estimator_output_timeout_s", 2.0);
+  tracking_mode_string_ = declare_parameter<std::string>(
+    "tracking.mode", "PREDICTED_POSITION_VELOCITY_FF");
+  tracking_max_position_target_speed_mps_ = declare_parameter<double>(
+    "tracking.max_position_target_speed_mps", 2.0);
+  tracking_max_position_target_step_m_ = declare_parameter<double>(
+    "tracking.max_position_target_step_m", 0.20);
+  tracking_velocity_feedforward_gain_ = declare_parameter<double>(
+    "tracking.velocity_feedforward_gain", 1.0);
+  tracking_relative_velocity_gain_ = declare_parameter<double>(
+    "tracking.relative_velocity_gain", 0.25);
+  tracking_max_velocity_feedforward_mps_ = declare_parameter<double>(
+    "tracking.max_velocity_feedforward_mps", 1.5);
+  tracking_max_velocity_feedforward_acceleration_mps2_ = declare_parameter<double>(
+    "tracking.max_velocity_feedforward_acceleration_mps2", 1.0);
+  tracking_max_prediction_age_s_ = declare_parameter<double>(
+    "tracking.max_prediction_age_s", 0.75);
   offboard_prestream_count_ = declare_parameter<int>("offboard_prestream_count", 20);
   stable_detect_count_ = declare_parameter<int>("stable_detect_count", 10);
   camera_x_to_body_y_sign_ =
@@ -275,6 +313,19 @@ void Px4ArucoLandingNode::validate_parameters() const
     estimator_innovation_gate_mahalanobis_);
   require_positive("motion_predictor.max_prediction_horizon_s", max_prediction_horizon_s_);
   require_positive("estimator_output_timeout_s", estimator_output_timeout_s_);
+  require_positive(
+    "tracking.max_position_target_speed_mps",
+    tracking_max_position_target_speed_mps_);
+  require_positive(
+    "tracking.max_position_target_step_m",
+    tracking_max_position_target_step_m_);
+  require_positive(
+    "tracking.max_velocity_feedforward_mps",
+    tracking_max_velocity_feedforward_mps_);
+  require_positive(
+    "tracking.max_velocity_feedforward_acceleration_mps2",
+    tracking_max_velocity_feedforward_acceleration_mps2_);
+  require_positive("tracking.max_prediction_age_s", tracking_max_prediction_age_s_);
   require_positive("max_xy_step", max_xy_step_);
   require_positive("center_xy_threshold", center_xy_threshold_);
   require_positive("max_descent_rate", max_descent_rate_);
@@ -335,6 +386,20 @@ void Px4ArucoLandingNode::validate_parameters() const
   {
     throw std::invalid_argument(
             "motion_predictor.additional_prediction_horizon_s must be finite and within the maximum horizon");
+  }
+  if (!std::isfinite(tracking_velocity_feedforward_gain_) ||
+    tracking_velocity_feedforward_gain_ < 0.0 ||
+    !std::isfinite(tracking_relative_velocity_gain_) ||
+    tracking_relative_velocity_gain_ < 0.0)
+  {
+    throw std::invalid_argument("Tracking velocity gains must be finite and non-negative");
+  }
+  if (!tracking_control_mode_from_string(tracking_mode_string_).has_value()) {
+    throw std::invalid_argument("Parameter 'tracking.mode' is unsupported");
+  }
+  if (tracking_max_prediction_age_s_ > visual_loss_long_timeout_s_) {
+    throw std::invalid_argument(
+            "tracking.max_prediction_age_s must not exceed visual_loss_long_timeout_s");
   }
   if (target_pose_frame_id_.empty()) {
     throw std::invalid_argument("Parameter 'target_pose_frame_id' must not be empty");
@@ -459,6 +524,10 @@ void Px4ArucoLandingNode::create_ros_interfaces()
     rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
   predicted_deck_pose_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>(
     "/landing/predicted_deck_pose",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  tracking_velocity_setpoint_pub_ =
+    create_publisher<geometry_msgs::msg::TwistStamped>(
+    "/landing/tracking_velocity_setpoint",
     rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
   guidance_source_pub_ = create_publisher<std_msgs::msg::String>(
     "/landing/guidance_source",
@@ -698,6 +767,7 @@ void Px4ArucoLandingNode::control_timer_callback()
   }
   dt = std::min(dt, 0.5);
 
+  clear_velocity_feedforward();
   publish_offboard_control_mode();
   run_state_machine(now, dt);
   publish_trajectory_setpoint();
@@ -707,6 +777,7 @@ void Px4ArucoLandingNode::control_timer_callback()
   publish_marker_pose(now);
   publish_estimated_deck_odometry(now);
   publish_predicted_deck_pose(now);
+  publish_tracking_velocity_setpoint(now);
   publish_guidance_source();
 }
 
@@ -983,7 +1054,55 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
             "visual pose was lost for the long timeout before descent");
           break;
         }
-        if (!visual_valid) {
+
+        const auto estimate = target_state_estimator_->estimate();
+        const double valid_measurement_age_s =
+          estimate.has_value() && have_estimator_measurement_receipt_time_ ?
+          now.seconds() - last_estimator_measurement_receipt_time_s_ :
+          std::numeric_limits<double>::infinity();
+        const double estimator_state_age_s =
+          estimate.has_value() && have_estimator_measurement_receipt_time_ ?
+          now.seconds() - last_estimator_state_receipt_time_s_ :
+          std::numeric_limits<double>::infinity();
+        std::optional<Eigen::Vector2d> predicted_position_xy;
+        if (estimate.has_value() &&
+          std::isfinite(estimator_state_age_s) && estimator_state_age_s >= 0.0)
+        {
+          const auto prediction = motion_predictor_->predict(
+            *estimate, estimator_state_age_s);
+          if (prediction.has_value()) {
+            predicted_position_xy = prediction->position_ned.head<2>();
+          }
+        }
+
+        MovingTargetTrackingInput tracking_input;
+        tracking_input.current_target_xy = target_valid_ ?
+          Eigen::Vector2d{target_x_, target_y_} :
+          Eigen::Vector2d{local_position_.x, local_position_.y};
+        if (visual_position.has_value()) {
+          tracking_input.raw_visual_position_xy = visual_position->head<2>();
+        }
+        tracking_input.estimated_state = estimate;
+        tracking_input.predicted_position_xy = predicted_position_xy;
+        tracking_input.uav_position_xy =
+          Eigen::Vector2d{local_position_.x, local_position_.y};
+        if (local_position_.v_xy_valid &&
+          std::isfinite(local_position_.vx) &&
+          std::isfinite(local_position_.vy))
+        {
+          tracking_input.uav_velocity_xy =
+            Eigen::Vector2d{local_position_.vx, local_position_.vy};
+        }
+        tracking_input.visual_fresh = visual_valid;
+        tracking_input.estimate_age_s = valid_measurement_age_s;
+        tracking_input.dt_s = dt;
+
+        const auto command = tracking_controller_->compute(tracking_input);
+        if (!command.has_value()) {
+          tracking_controller_->reset();
+          RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 5000,
+            "Moving target tracking input unavailable; holding the latest safe position target");
           set_target(
             target_valid_ ? target_x_ : local_position_.x,
             target_valid_ ? target_y_ : local_position_.y,
@@ -992,21 +1111,16 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
           break;
         }
 
-        const Eigen::Vector2d current_target = target_valid_ ?
-          Eigen::Vector2d{target_x_, target_y_} :
-          Eigen::Vector2d{local_position_.x, local_position_.y};
-        const auto limited_target = visual_guidance_->limit_target_xy(
-          current_target, visual_position->head<2>(), dt);
-        if (!limited_target.has_value()) {
-          transition_to(LandingState::ABORT, "invalid visual tracking target");
-          break;
-        }
-
         set_target(
-          limited_target->x(),
-          limited_target->y(),
+          command->position_target_xy.x(),
+          command->position_target_xy.y(),
           -rendezvous_altitude_m_,
           current_yaw_);
+        if (command->velocity_feedforward_xy.has_value()) {
+          set_velocity_feedforward(
+            command->velocity_feedforward_xy->x(),
+            command->velocity_feedforward_xy->y());
+        }
         break;
       }
 
@@ -1185,6 +1299,8 @@ void Px4ArucoLandingNode::transition_to(
     state_name(new_state),
     reason);
   state_ = new_state;
+  clear_velocity_feedforward();
+  tracking_controller_->reset();
 
   switch (state_) {
     case LandingState::OFFBOARD_PRE_STREAM:
@@ -1433,6 +1549,24 @@ void Px4ArucoLandingNode::set_target(double x, double y, double z, double yaw)
     std::isfinite(target_yaw_);
 }
 
+void Px4ArucoLandingNode::set_velocity_feedforward(
+  double north_mps,
+  double east_mps)
+{
+  velocity_feedforward_north_mps_ = north_mps;
+  velocity_feedforward_east_mps_ = east_mps;
+  velocity_feedforward_valid_ =
+    std::isfinite(velocity_feedforward_north_mps_) &&
+    std::isfinite(velocity_feedforward_east_mps_);
+}
+
+void Px4ArucoLandingNode::clear_velocity_feedforward()
+{
+  velocity_feedforward_north_mps_ = 0.0;
+  velocity_feedforward_east_mps_ = 0.0;
+  velocity_feedforward_valid_ = false;
+}
+
 void Px4ArucoLandingNode::publish_offboard_control_mode()
 {
   px4_msgs::msg::OffboardControlMode msg{};
@@ -1458,7 +1592,12 @@ void Px4ArucoLandingNode::publish_trajectory_setpoint()
     static_cast<float>(target_y_),
     static_cast<float>(target_z_)} :
   std::array<float, 3>{nan, nan, nan};
-  msg.velocity = {nan, nan, nan};
+  msg.velocity = target_valid_ && velocity_feedforward_valid_ ?
+    std::array<float, 3>{
+    static_cast<float>(velocity_feedforward_north_mps_),
+    static_cast<float>(velocity_feedforward_east_mps_),
+    nan} :
+  std::array<float, 3>{nan, nan, nan};
   msg.acceleration = {nan, nan, nan};
   msg.jerk = {nan, nan, nan};
   msg.yaw = target_valid_ ? static_cast<float>(target_yaw_) : nan;
@@ -1643,6 +1782,22 @@ void Px4ArucoLandingNode::publish_predicted_deck_pose(const rclcpp::Time & now)
   predicted_deck_pose_pub_->publish(msg);
 }
 
+void Px4ArucoLandingNode::publish_tracking_velocity_setpoint(
+  const rclcpp::Time & now)
+{
+  if (!velocity_feedforward_valid_) {
+    return;
+  }
+
+  geometry_msgs::msg::TwistStamped msg;
+  msg.header.stamp = now;
+  msg.header.frame_id = target_pose_frame_id_;
+  msg.twist.linear.x = velocity_feedforward_north_mps_;
+  msg.twist.linear.y = velocity_feedforward_east_mps_;
+  msg.twist.linear.z = 0.0;
+  tracking_velocity_setpoint_pub_->publish(msg);
+}
+
 void Px4ArucoLandingNode::publish_guidance_source()
 {
   std_msgs::msg::String msg;
@@ -1660,7 +1815,20 @@ void Px4ArucoLandingNode::publish_guidance_source()
       msg.data = "BLENDING";
       break;
     case LandingState::TRACK_TARGET:
-      msg.data = "VISION";
+      switch (tracking_controller_->mode()) {
+        case TrackingControlMode::kRawVisualPosition:
+          msg.data = "VISION_RAW";
+          break;
+        case TrackingControlMode::kEstimatedPosition:
+          msg.data = "VISION_ESTIMATED";
+          break;
+        case TrackingControlMode::kEstimatedPositionVelocityFeedforward:
+          msg.data = "VISION_ESTIMATED_FF";
+          break;
+        case TrackingControlMode::kPredictedPositionVelocityFeedforward:
+          msg.data = "VISION_PREDICTED_FF";
+          break;
+      }
       break;
     case LandingState::RECOVER_TO_GNSS:
       msg.data = "GNSS_RECOVERY";
