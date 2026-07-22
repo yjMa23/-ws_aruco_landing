@@ -74,6 +74,29 @@ Px4ArucoLandingNode::Px4ArucoLandingNode()
   visual_parameters.max_target_step_m = max_target_step_m_;
   visual_guidance_ = std::make_unique<VisualHandoverGuidance>(visual_parameters);
 
+  TargetStateEstimatorParameters estimator_parameters;
+  estimator_parameters.process_acceleration_std_mps2 =
+    estimator_process_acceleration_std_mps2_;
+  estimator_parameters.measurement_horizontal_std_m =
+    estimator_measurement_horizontal_std_m_;
+  estimator_parameters.measurement_vertical_std_m =
+    estimator_measurement_vertical_std_m_;
+  estimator_parameters.initial_position_std_m = estimator_initial_position_std_m_;
+  estimator_parameters.initial_velocity_std_mps = estimator_initial_velocity_std_mps_;
+  estimator_parameters.minimum_sample_dt_s = estimator_minimum_sample_dt_s_;
+  estimator_parameters.maximum_sample_dt_s = estimator_maximum_sample_dt_s_;
+  estimator_parameters.reinitialize_gap_s = estimator_reinitialize_gap_s_;
+  estimator_parameters.innovation_gate_mahalanobis =
+    estimator_innovation_gate_mahalanobis_;
+  target_state_estimator_ =
+    std::make_unique<TargetStateEstimator>(estimator_parameters);
+
+  MotionPredictorParameters predictor_parameters;
+  predictor_parameters.additional_prediction_horizon_s =
+    additional_prediction_horizon_s_;
+  predictor_parameters.max_prediction_horizon_s = max_prediction_horizon_s_;
+  motion_predictor_ = std::make_unique<MotionPredictor>(predictor_parameters);
+
   body_camera_pose_.translation = Eigen::Vector3d{
     camera_translation_frd_m_[0],
     camera_translation_frd_m_[1],
@@ -136,6 +159,30 @@ void Px4ArucoLandingNode::declare_and_load_parameters()
     declare_parameter<double>("visual_loss_short_timeout_s", 0.5);
   visual_loss_long_timeout_s_ =
     declare_parameter<double>("visual_loss_long_timeout_s", 2.0);
+  estimator_process_acceleration_std_mps2_ = declare_parameter<double>(
+    "target_state_estimator.process_acceleration_std_mps2", 1.0);
+  estimator_measurement_horizontal_std_m_ = declare_parameter<double>(
+    "target_state_estimator.measurement_horizontal_std_m", 0.08);
+  estimator_measurement_vertical_std_m_ = declare_parameter<double>(
+    "target_state_estimator.measurement_vertical_std_m", 0.12);
+  estimator_initial_position_std_m_ = declare_parameter<double>(
+    "target_state_estimator.initial_position_std_m", 0.20);
+  estimator_initial_velocity_std_mps_ = declare_parameter<double>(
+    "target_state_estimator.initial_velocity_std_mps", 1.0);
+  estimator_minimum_sample_dt_s_ = declare_parameter<double>(
+    "target_state_estimator.minimum_sample_dt_s", 0.001);
+  estimator_maximum_sample_dt_s_ = declare_parameter<double>(
+    "target_state_estimator.maximum_sample_dt_s", 0.50);
+  estimator_reinitialize_gap_s_ = declare_parameter<double>(
+    "target_state_estimator.reinitialize_gap_s", 2.0);
+  estimator_innovation_gate_mahalanobis_ = declare_parameter<double>(
+    "target_state_estimator.innovation_gate_mahalanobis", 5.0);
+  additional_prediction_horizon_s_ = declare_parameter<double>(
+    "motion_predictor.additional_prediction_horizon_s", 0.10);
+  max_prediction_horizon_s_ = declare_parameter<double>(
+    "motion_predictor.max_prediction_horizon_s", 0.50);
+  estimator_output_timeout_s_ =
+    declare_parameter<double>("estimator_output_timeout_s", 2.0);
   offboard_prestream_count_ = declare_parameter<int>("offboard_prestream_count", 20);
   stable_detect_count_ = declare_parameter<int>("stable_detect_count", 10);
   camera_x_to_body_y_sign_ =
@@ -159,6 +206,8 @@ void Px4ArucoLandingNode::declare_and_load_parameters()
     declare_parameter<std::string>("deck_gnss_velocity_frame_id", "world_enu");
   expected_aruco_pose_frame_id_ =
     declare_parameter<std::string>("expected_aruco_pose_frame_id", "camera_link");
+  estimated_deck_child_frame_id_ = declare_parameter<std::string>(
+    "estimated_deck_child_frame_id", "estimated_deck");
   camera_translation_frd_m_ = to_array<3>(
     declare_parameter<std::vector<double>>(
       "camera_extrinsic.translation_frd_m", {0.0, 0.0, -0.10}),
@@ -197,6 +246,35 @@ void Px4ArucoLandingNode::validate_parameters() const
   require_positive("max_visual_measurement_jump_m", max_visual_measurement_jump_m_);
   require_positive("visual_loss_short_timeout_s", visual_loss_short_timeout_s_);
   require_positive("visual_loss_long_timeout_s", visual_loss_long_timeout_s_);
+  require_positive(
+    "target_state_estimator.process_acceleration_std_mps2",
+    estimator_process_acceleration_std_mps2_);
+  require_positive(
+    "target_state_estimator.measurement_horizontal_std_m",
+    estimator_measurement_horizontal_std_m_);
+  require_positive(
+    "target_state_estimator.measurement_vertical_std_m",
+    estimator_measurement_vertical_std_m_);
+  require_positive(
+    "target_state_estimator.initial_position_std_m",
+    estimator_initial_position_std_m_);
+  require_positive(
+    "target_state_estimator.initial_velocity_std_mps",
+    estimator_initial_velocity_std_mps_);
+  require_positive(
+    "target_state_estimator.minimum_sample_dt_s",
+    estimator_minimum_sample_dt_s_);
+  require_positive(
+    "target_state_estimator.maximum_sample_dt_s",
+    estimator_maximum_sample_dt_s_);
+  require_positive(
+    "target_state_estimator.reinitialize_gap_s",
+    estimator_reinitialize_gap_s_);
+  require_positive(
+    "target_state_estimator.innovation_gate_mahalanobis",
+    estimator_innovation_gate_mahalanobis_);
+  require_positive("motion_predictor.max_prediction_horizon_s", max_prediction_horizon_s_);
+  require_positive("estimator_output_timeout_s", estimator_output_timeout_s_);
   require_positive("max_xy_step", max_xy_step_);
   require_positive("center_xy_threshold", center_xy_threshold_);
   require_positive("max_descent_rate", max_descent_rate_);
@@ -243,12 +321,31 @@ void Px4ArucoLandingNode::validate_parameters() const
     throw std::invalid_argument(
             "visual_loss_long_timeout_s must be greater than visual_loss_short_timeout_s");
   }
+  if (estimator_maximum_sample_dt_s_ < estimator_minimum_sample_dt_s_) {
+    throw std::invalid_argument(
+            "target_state_estimator.maximum_sample_dt_s must not be smaller than minimum_sample_dt_s");
+  }
+  if (estimator_reinitialize_gap_s_ <= estimator_maximum_sample_dt_s_) {
+    throw std::invalid_argument(
+            "target_state_estimator.reinitialize_gap_s must be greater than maximum_sample_dt_s");
+  }
+  if (!std::isfinite(additional_prediction_horizon_s_) ||
+    additional_prediction_horizon_s_ < 0.0 ||
+    additional_prediction_horizon_s_ > max_prediction_horizon_s_)
+  {
+    throw std::invalid_argument(
+            "motion_predictor.additional_prediction_horizon_s must be finite and within the maximum horizon");
+  }
   if (target_pose_frame_id_.empty()) {
     throw std::invalid_argument("Parameter 'target_pose_frame_id' must not be empty");
   }
   if (expected_aruco_pose_frame_id_.empty()) {
     throw std::invalid_argument(
             "Parameter 'expected_aruco_pose_frame_id' must not be empty");
+  }
+  if (estimated_deck_child_frame_id_.empty()) {
+    throw std::invalid_argument(
+            "Parameter 'estimated_deck_child_frame_id' must not be empty");
   }
   if (deck_gnss_velocity_frame_id_.empty()) {
     throw std::invalid_argument(
@@ -357,6 +454,12 @@ void Px4ArucoLandingNode::create_ros_interfaces()
   marker_pose_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>(
     "/landing/marker_pose_ned",
     rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  estimated_deck_odometry_pub_ = create_publisher<nav_msgs::msg::Odometry>(
+    "/landing/estimated_deck_odometry",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  predicted_deck_pose_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>(
+    "/landing/predicted_deck_pose",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
   guidance_source_pub_ = create_publisher<std_msgs::msg::String>(
     "/landing/guidance_source",
     rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
@@ -365,10 +468,7 @@ void Px4ArucoLandingNode::create_ros_interfaces()
 void Px4ArucoLandingNode::aruco_pose_callback(
   const geometry_msgs::msg::PoseStamped::SharedPtr msg)
 {
-  aruco_pose_ = *msg;
-  have_aruco_pose_ = true;
   const rclcpp::Time receipt_time = get_clock()->now();
-  last_aruco_pose_time_ = receipt_time;
 
   if (msg->header.frame_id != expected_aruco_pose_frame_id_) {
     RCLCPP_WARN_THROTTLE(
@@ -388,6 +488,9 @@ void Px4ArucoLandingNode::aruco_pose_callback(
       get_logger(), *get_clock(), 5000, "Rejected repeated or out-of-order ArUco sample");
     return;
   }
+
+  aruco_pose_ = *msg;
+  have_aruco_pose_ = true;
 
   Pose3d marker_pose_ned;
   if (!compute_marker_pose_ned(marker_pose_ned)) {
@@ -427,6 +530,37 @@ void Px4ArucoLandingNode::aruco_pose_callback(
     return;
   }
 
+  const double sample_time_s = sample_stamp_ns > 0 ?
+    static_cast<double>(sample_stamp_ns) * 1.0e-9 : receipt_time.seconds();
+  const TargetStateUpdateResult estimator_result =
+    target_state_estimator_->update(marker_pose_ned.translation, sample_time_s);
+  switch (estimator_result.status) {
+    case TargetStateUpdateStatus::kInitialized:
+    case TargetStateUpdateStatus::kUpdated:
+    case TargetStateUpdateStatus::kReinitialized:
+      last_estimator_measurement_receipt_time_s_ = receipt_time.seconds();
+      last_estimator_state_receipt_time_s_ = receipt_time.seconds();
+      have_estimator_measurement_receipt_time_ = true;
+      break;
+    case TargetStateUpdateStatus::kRejectedOutlier:
+      last_estimator_state_receipt_time_s_ = receipt_time.seconds();
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 5000,
+        "Rejected visual state-estimator outlier with NIS %.3f",
+        estimator_result.normalized_innovation_squared);
+      break;
+    case TargetStateUpdateStatus::kRejectedInvalidInput:
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 5000,
+        "Rejected invalid visual state-estimator input");
+      break;
+    case TargetStateUpdateStatus::kRejectedNonMonotonicTime:
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 5000,
+        "Rejected non-monotonic visual state-estimator sample time");
+      break;
+  }
+
   marker_pose_ned_.header.stamp = receipt_time;
   marker_pose_ned_.header.frame_id = target_pose_frame_id_;
   marker_pose_ned_.pose.position.x = marker_pose_ned.translation.x();
@@ -437,6 +571,7 @@ void Px4ArucoLandingNode::aruco_pose_callback(
   marker_pose_ned_.pose.orientation.y = marker_pose_ned.rotation.y();
   marker_pose_ned_.pose.orientation.z = marker_pose_ned.rotation.z();
   have_marker_pose_ned_ = true;
+  last_aruco_pose_time_ = receipt_time;
 
   if (sample_stamp_ns > 0) {
     last_aruco_sample_stamp_ns_ = sample_stamp_ns;
@@ -570,6 +705,8 @@ void Px4ArucoLandingNode::control_timer_callback()
   publish_target_pose();
   publish_deck_gnss_pose(now);
   publish_marker_pose(now);
+  publish_estimated_deck_odometry(now);
+  publish_predicted_deck_pose(now);
   publish_guidance_source();
 }
 
@@ -1073,7 +1210,9 @@ void Px4ArucoLandingNode::transition_to(
       have_search_pattern_start_time_ = false;
       have_marker_pose_ned_ = false;
       have_last_aruco_sample_stamp_ = false;
+      have_estimator_measurement_receipt_time_ = false;
       visual_guidance_->reset();
+      target_state_estimator_->reset();
       set_target(
         local_position_.x,
         local_position_.y,
@@ -1096,7 +1235,9 @@ void Px4ArucoLandingNode::transition_to(
       have_aruco_visible_since_ = false;
       have_marker_pose_ned_ = false;
       have_last_aruco_sample_stamp_ = false;
+      have_estimator_measurement_receipt_time_ = false;
       visual_guidance_->reset();
+      target_state_estimator_->reset();
       set_target(
         target_valid_ ? target_x_ : local_position_.x,
         target_valid_ ? target_y_ : local_position_.y,
@@ -1126,7 +1267,9 @@ void Px4ArucoLandingNode::transition_to(
       have_aruco_visible_since_ = false;
       have_marker_pose_ned_ = false;
       have_last_aruco_sample_stamp_ = false;
+      have_estimator_measurement_receipt_time_ = false;
       visual_guidance_->reset();
+      target_state_estimator_->reset();
       set_target(
         target_valid_ ? target_x_ : local_position_.x,
         target_valid_ ? target_y_ : local_position_.y,
@@ -1159,6 +1302,8 @@ void Px4ArucoLandingNode::transition_to(
       break;
 
     case LandingState::ABORT:
+      have_estimator_measurement_receipt_time_ = false;
+      target_state_estimator_->reset();
       set_target(
         local_position_.x,
         local_position_.y,
@@ -1405,6 +1550,97 @@ void Px4ArucoLandingNode::publish_marker_pose(const rclcpp::Time & now)
   geometry_msgs::msg::PoseStamped msg = marker_pose_ned_;
   msg.header.stamp = now;
   marker_pose_pub_->publish(msg);
+}
+
+void Px4ArucoLandingNode::publish_estimated_deck_odometry(const rclcpp::Time & now)
+{
+  if (!have_estimator_measurement_receipt_time_) {
+    return;
+  }
+
+  const double observation_age_s =
+    now.seconds() - last_estimator_measurement_receipt_time_s_;
+  if (!std::isfinite(observation_age_s) ||
+    observation_age_s < 0.0 ||
+    observation_age_s > estimator_output_timeout_s_)
+  {
+    return;
+  }
+
+  const auto estimate = target_state_estimator_->estimate();
+  if (!estimate.has_value()) {
+    return;
+  }
+
+  nav_msgs::msg::Odometry msg;
+  msg.header.stamp = now;
+  msg.header.frame_id = target_pose_frame_id_;
+  msg.child_frame_id = estimated_deck_child_frame_id_;
+  msg.pose.pose.position.x = estimate->position_ned.x();
+  msg.pose.pose.position.y = estimate->position_ned.y();
+  msg.pose.pose.position.z = estimate->position_ned.z();
+  msg.pose.pose.orientation.w = 1.0;
+  msg.twist.twist.linear.x = estimate->velocity_ned.x();
+  msg.twist.twist.linear.y = estimate->velocity_ned.y();
+  msg.twist.twist.linear.z = estimate->velocity_ned.z();
+
+  msg.pose.covariance.fill(0.0);
+  msg.twist.covariance.fill(0.0);
+  for (int row = 0; row < 3; ++row) {
+    for (int column = 0; column < 3; ++column) {
+      msg.pose.covariance[row * 6 + column] =
+        estimate->covariance(row, column);
+      msg.twist.covariance[row * 6 + column] =
+        estimate->covariance(row + 3, column + 3);
+    }
+  }
+
+  constexpr double kUnestimatedVariance = 1.0e6;
+  msg.pose.covariance[21] = kUnestimatedVariance;
+  msg.pose.covariance[28] = kUnestimatedVariance;
+  msg.pose.covariance[35] = kUnestimatedVariance;
+  msg.twist.covariance[21] = kUnestimatedVariance;
+  msg.twist.covariance[28] = kUnestimatedVariance;
+  msg.twist.covariance[35] = kUnestimatedVariance;
+  estimated_deck_odometry_pub_->publish(msg);
+}
+
+void Px4ArucoLandingNode::publish_predicted_deck_pose(const rclcpp::Time & now)
+{
+  if (!have_estimator_measurement_receipt_time_) {
+    return;
+  }
+
+  const double valid_measurement_age_s =
+    now.seconds() - last_estimator_measurement_receipt_time_s_;
+  const double estimator_state_age_s =
+    now.seconds() - last_estimator_state_receipt_time_s_;
+  if (!std::isfinite(valid_measurement_age_s) ||
+    !std::isfinite(estimator_state_age_s) ||
+    valid_measurement_age_s < 0.0 ||
+    estimator_state_age_s < 0.0 ||
+    valid_measurement_age_s > estimator_output_timeout_s_)
+  {
+    return;
+  }
+
+  const auto estimate = target_state_estimator_->estimate();
+  if (!estimate.has_value()) {
+    return;
+  }
+  const auto prediction = motion_predictor_->predict(*estimate, estimator_state_age_s);
+  if (!prediction.has_value()) {
+    return;
+  }
+
+  geometry_msgs::msg::PoseStamped msg;
+  msg.header.stamp = now;
+  msg.header.frame_id = target_pose_frame_id_;
+  msg.pose.position.x = prediction->position_ned.x();
+  msg.pose.position.y = prediction->position_ned.y();
+  msg.pose.position.z = prediction->position_ned.z();
+  msg.pose.orientation.w = 1.0;
+  predicted_deck_pose_pub_->publish(msg);
 }
 
 void Px4ArucoLandingNode::publish_guidance_source()

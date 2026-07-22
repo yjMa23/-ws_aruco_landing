@@ -1,63 +1,74 @@
 # aruco_precision_landing_cpp
 
-`aruco_precision_landing_cpp` 是 ROS 2 Humble 下的 PX4 Offboard 控制包。当前实现阶段为
-**P2D：船舶 GNSS 会合、ArUco 完整位姿转换、GNSS—视觉平滑接管和下降前恢复**。
+`aruco_precision_landing_cpp` 是 ROS 2 Humble 下的 PX4 Offboard 控制包。当前实现阶段为：
 
-当前默认流程：
+```text
+P3：船舶 GNSS 会合、GNSS—视觉接管、视觉状态估计和短时运动预测
+```
+
+当前主流程：
 
 ```text
 PX4 状态有效
 → Offboard 预发布、解锁和起飞
 → 等待稳定船舶 GNSS
 → 飞向移动甲板 GNSS 上方
-→ 以实时船舶 GNSS 为中心搜索 ArUco
+→ 围绕实时 GNSS 中心搜索 ArUco
 → 完整刚体变换得到 Marker local NED 位姿
-→ GNSS 与视觉位置一致性检查
 → GNSS—视觉线性接管
 → 安全高度视觉跟踪
+→ 估计甲板位置、速度和协方差
+→ 发布受限短时预测位置
 → 视觉长时丢失时回退到 GNSS
 ```
 
-P2D **不会执行下降**。所有 GNSS、接管、视觉跟踪和恢复状态均保持固定
-`rendezvous_altitude_m`。默认 `enable_auto_land=false`。
+P3 **不会执行下降**，也不会把预测位置用于 PX4 setpoint。当前 `TRACK_TARGET` 仍使用
+P2D 原始视觉位置目标，P4 才会接入预测位置和速度前馈。默认：
 
-控制器禁止订阅 Gazebo 甲板 Ground Truth。船舶粗位置只能来自经过传感器模型处理的：
-
-```text
-/deck/gps/fix
-/deck/gps/velocity
+```yaml
+enable_auto_land: false
 ```
 
-## 依赖与环境
+控制器禁止订阅 Gazebo 甲板 Ground Truth。
+
+---
+
+## 1. 依赖与环境
 
 - Ubuntu 22.04
 - ROS 2 Humble
 - PX4 SITL 与 Gazebo Harmonic
 - PX4 uXRCE-DDS Agent
-- 与运行中 PX4 版本匹配的 `px4_msgs`
-- `moving_deck_sim` 发布的船舶 GNSS
-- `aruco_detector` 发布的 `/aruco/pose` 和 `/aruco/visible`
+- 与 PX4 版本匹配的 `px4_msgs`
+- Eigen3
+- `geometry_msgs`、`nav_msgs`、`sensor_msgs`、`std_msgs`
+- `moving_deck_sim` 提供船舶 GNSS
+- `aruco_detector` 提供 ArUco 位姿和可见性
 
-## 构建
+## 2. 构建
 
 ```bash
 cd ~/ws_aruco_landing
 source /opt/ros/humble/setup.bash
 source ~/ws_sensor_combined/install/setup.bash
 
-colcon build --symlink-install --packages-select aruco_precision_landing_cpp
+colcon build --symlink-install \
+  --packages-select aruco_precision_landing_cpp \
+  --cmake-args -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 source install/setup.bash
 ```
 
-## 推荐启动顺序
+---
 
-### 1. 启动 uXRCE-DDS Agent
+## 3. 推荐启动顺序
+
+### 3.1 uXRCE-DDS Agent
 
 ```bash
 MicroXRCEAgent udp4 -p 8888
 ```
 
-### 2. 启动 PX4 SITL
+### 3.2 PX4 SITL
 
 移动甲板 world 由 `moving_deck_sim` 启动，因此 PX4 使用 standalone 模式：
 
@@ -69,7 +80,7 @@ PX4_GZ_MODEL_POSE=0,0,2.2 \
 make px4_sitl gz_x500_mono_cam_down
 ```
 
-### 3. 启动移动甲板和船舶 GNSS
+### 3.3 移动甲板和船舶 GNSS
 
 ```bash
 cd ~/ws_aruco_landing
@@ -80,7 +91,7 @@ source ~/PX4-Autopilot/build/px4_sitl_default/rootfs/gz_env.sh
 ros2 launch moving_deck_sim moving_deck_sim.launch.py
 ```
 
-含噪 GNSS：
+切换含噪 GNSS：
 
 ```bash
 SHARE=$(ros2 pkg prefix --share moving_deck_sim)
@@ -88,25 +99,24 @@ ros2 launch moving_deck_sim moving_deck_sim.launch.py \
   gnss_config_file:=$SHARE/config/gnss_noisy.yaml
 ```
 
-### 4. 启动 ArUco 检测器
+### 3.4 ArUco 检测器
 
 ```bash
 ros2 launch aruco_detector aruco_detector.launch.py
 ```
 
-检测器的 `/aruco/pose` 数值语义固定为：
+`/aruco/pose` 数值语义固定为相机光学坐标系：
 
 ```text
-camera_optical
 x：图像向右
 y：图像向下
 z：镜头前方
 ```
 
 当前消息字符串 `header.frame_id` 默认为 `camera_link`。控制器通过
-`expected_aruco_pose_frame_id` 检查字符串，但始终按 `camera_optical` 数值语义解释。
+`expected_aruco_pose_frame_id` 检查字符串，但按 `camera_optical` 数值语义解释。
 
-### 5. 启动控制器
+### 3.5 控制器
 
 ```bash
 ros2 launch aruco_precision_landing_cpp px4_aruco_landing.launch.py
@@ -122,18 +132,20 @@ PX4 v1.18 默认 remap：
 → /fmu/out/vehicle_local_position_v1
 ```
 
-## ROS 2 接口
+---
 
-### 输入
+## 4. ROS 2 接口
+
+### 4.1 输入
 
 | 话题 | 类型 | 用途 |
 | --- | --- | --- |
 | `/fmu/out/vehicle_status` | `px4_msgs/msg/VehicleStatus` | 模式和解锁状态 |
 | `/fmu/out/vehicle_local_position` | `px4_msgs/msg/VehicleLocalPosition` | local NED 和 WGS84 参考原点 |
-| `/fmu/out/vehicle_odometry` | `px4_msgs/msg/VehicleOdometry` | `body_frd → local_ned` 完整姿态和位置 |
+| `/fmu/out/vehicle_odometry` | `px4_msgs/msg/VehicleOdometry` | `body_frd → local_ned` 位姿 |
 | `/deck/gps/fix` | `sensor_msgs/msg/NavSatFix` | 船舶 WGS84 粗位置 |
 | `/deck/gps/velocity` | `geometry_msgs/msg/TwistStamped` | 船舶 ENU 速度 |
-| `/aruco/pose` | `geometry_msgs/msg/PoseStamped` | Marker 在 `camera_optical` 中的完整位姿 |
+| `/aruco/pose` | `geometry_msgs/msg/PoseStamped` | Marker `camera_optical` 位姿 |
 | `/aruco/visible` | `std_msgs/msg/Bool` | ArUco 可见性 |
 
 船舶速度默认要求：
@@ -145,30 +157,35 @@ linear.y = North
 linear.z = Up
 ```
 
-### 输出
+### 4.2 输出
 
 | 话题 | 类型 | 用途 |
 | --- | --- | --- |
-| `/fmu/in/offboard_control_mode` | `px4_msgs/msg/OffboardControlMode` | PX4 Offboard 模式声明 |
-| `/fmu/in/trajectory_setpoint` | `px4_msgs/msg/TrajectorySetpoint` | local NED 位置目标 |
+| `/fmu/in/offboard_control_mode` | `px4_msgs/msg/OffboardControlMode` | PX4 位置控制模式声明 |
+| `/fmu/in/trajectory_setpoint` | `px4_msgs/msg/TrajectorySetpoint` | 当前 local NED 控制目标 |
 | `/fmu/in/vehicle_command` | `px4_msgs/msg/VehicleCommand` | Offboard 和 Arm 命令 |
-| `/landing/state` | `std_msgs/msg/String` | 当前状态 |
-| `/landing/target_pose` | `geometry_msgs/msg/PoseStamped` | 当前 local NED 目标 |
-| `/landing/deck_gnss_pose_ned` | `geometry_msgs/msg/PoseStamped` | 船舶 GNSS 粗位置 |
-| `/landing/marker_pose_ned` | `geometry_msgs/msg/PoseStamped` | 完整刚体变换后的 Marker 位姿 |
-| `/landing/guidance_source` | `std_msgs/msg/String` | `GNSS_*`、`BLENDING` 或 `VISION` |
+| `/landing/state` | `std_msgs/msg/String` | 状态机状态 |
+| `/landing/guidance_source` | `std_msgs/msg/String` | `GNSS_*`、`BLENDING`、`VISION` |
+| `/landing/target_pose` | `geometry_msgs/msg/PoseStamped` | 实际发送给 PX4 的位置目标 |
+| `/landing/deck_gnss_pose_ned` | `geometry_msgs/msg/PoseStamped` | 船舶 GNSS local NED 粗位置 |
+| `/landing/marker_pose_ned` | `geometry_msgs/msg/PoseStamped` | 完整变换后的原始视觉位置 |
+| `/landing/estimated_deck_odometry` | `nav_msgs/msg/Odometry` | 滤波位置、速度和协方差 |
+| `/landing/predicted_deck_pose` | `geometry_msgs/msg/PoseStamped` | 短时常速度预测位置 |
 
-调试：
+常用监控：
 
 ```bash
 ros2 topic echo /landing/state
 ros2 topic echo /landing/guidance_source
-ros2 topic echo /landing/target_pose
-ros2 topic echo /landing/deck_gnss_pose_ned
 ros2 topic echo /landing/marker_pose_ned
+ros2 topic echo /landing/estimated_deck_odometry
+ros2 topic echo /landing/predicted_deck_pose
+ros2 topic echo /landing/target_pose
 ```
 
-## 完整视觉坐标变换
+---
+
+## 5. 坐标变换
 
 视觉位姿统一使用：
 
@@ -186,7 +203,7 @@ T_camera_optical_marker
 
 - `T_local_ned_body_frd`：PX4 `VehicleOdometry.position + q`。
 - `T_body_frd_camera_optical`：YAML 相机外参。
-- `T_camera_optical_marker`：ArUco PnP 完整位置和姿态。
+- `T_camera_optical_marker`：ArUco PnP 位姿。
 
 默认外参：
 
@@ -195,19 +212,17 @@ camera_extrinsic.translation_frd_m: [0.0, 0.0, -0.10]
 camera_extrinsic.rotation_wxyz: [0.70710678, 0.0, 0.0, 0.70710678]
 ```
 
-参数方向明确为：
+方向为：
 
 ```text
 T_body_frd_camera_optical
 ```
 
-四元数顺序为 `[w, x, y, z]`。输入 NaN、Inf、零范数四元数、错误 PX4
-`pose_frame` 或错误 ArUco `frame_id` 会被拒绝。
+四元数顺序为 `[w, x, y, z]`。
 
-旧静态基线的两个相机正负号参数仍保留在配置中，只供不可达的历史静态下降代码参考；
-P2D 主路径不再使用它们计算视觉目标。
+---
 
-## P2D 状态机
+## 6. P2D 状态机保持不变
 
 ```text
 INIT
@@ -221,86 +236,135 @@ INIT
 → TRACK_TARGET
 ```
 
-异常恢复：
+视觉长时丢失：
 
 ```text
 VISUAL_HANDOVER / TRACK_TARGET
-→ 视觉短时丢失：保持当前水平目标和安全高度
-→ 视觉长时丢失：RECOVER_TO_GNSS
+→ RECOVER_TO_GNSS
 → RENDEZVOUS_GNSS 或 ACQUIRE_ARUCO
 ```
 
-### `ACQUIRE_ARUCO`
-
-搜索中心始终跟随实时船舶 GNSS。只有同时满足以下条件才进入接管：
-
-- ArUco 连续可见达到 `aruco_acquire_duration_s`。
-- 位姿回调到达时间新鲜。
-- 完整刚体变换成功。
-- Marker local NED 位置有限。
-- GNSS 与视觉水平距离小于 `handover_max_horizontal_difference_m`。
-- 视觉测量没有超过 `max_visual_measurement_jump_m` 的异常跳变。
-
-单帧检测不会触发接管。
-
-### `VISUAL_HANDOVER`
-
-接管权重：
+全部状态保持：
 
 ```text
-alpha = clamp(valid_handover_time / visual_handover_duration_s, 0, 1)
-target_xy = (1-alpha) * gnss_xy + alpha * visual_xy
+target_z = -rendezvous_altitude_m
 ```
 
-只有视觉有效的控制周期才累加接管时间。混合目标继续受最大速度和单周期步长限幅。
-目标 z 始终为：
+P3 没有增加新的飞行状态，也没有修改原 P2D setpoint 控制律。
+
+---
+
+## 7. P3 状态估计
+
+### 7.1 状态
 
 ```text
--rendezvous_altitude_m
+x = [px, py, pz, vx, vy, vz]^T
 ```
 
-### `TRACK_TARGET`
+坐标系：PX4 `local_ned`。
 
-- 水平目标来自完整变换后的 Marker local NED 位置。
-- 目标变化继续限幅。
-- 不使用 GNSS 混合控制。
-- 不下降。
+### 7.2 模型
 
-### `RECOVER_TO_GNSS`
+```text
+p(k+1) = p(k) + v(k) * dt
+v(k+1) = v(k)
+```
 
-- 清除旧视觉测量。
-- 保持安全高度。
-- 使用有效 GNSS 粗位置恢复。
-- 无人机仍在会合半径内时回到 `ACQUIRE_ARUCO`，否则回到 `RENDEZVOUS_GNSS`。
-- GNSS 也不可用时进入 `WAIT_DECK_GNSS` 并锁定当前水平位置。
+视觉只观测位置。过程噪声使用离散白噪声加速度模型，测量噪声区分水平与垂直方向。
 
-## 时间约定
+### 7.3 时间处理
 
-当前 ROS `/clock`、相机图像时间和 PX4 时间域尚未统一，因此：
+滤波 `dt`：
 
-- 视觉控制新鲜度使用控制器回调到达时间。
-- 非零图像采样时间戳只用于拒绝重复或乱序帧。
-- `/landing/marker_pose_ned` 时间戳表示完成转换的控制器时间。
-- 当前变换使用回调时最新 `VehicleOdometry`，尚未对图像采样时刻插值。
+```text
+优先使用 /aruco/pose.header.stamp
+零时间戳时使用回调到达时间
+```
 
-P3 必须补充跨传感器时间对齐、滤波和运动预测。
+规则：
 
-## 主要参数
+- 重复或倒退时间戳拒绝。
+- 超过重初始化间隔后，用当前测量重新初始化并清零速度。
+- 大观测间隔在内部拆成受限预测步长。
+
+### 7.4 离群点
+
+使用归一化创新平方：
+
+```text
+NIS = innovation^T * S^-1 * innovation
+```
+
+超过门限的测量不会更新滤波观测，也不会刷新最后有效观测到达时间。
+
+### 7.5 估计输出
+
+`/landing/estimated_deck_odometry`：
+
+```text
+header.frame_id = local_ned
+child_frame_id = estimated_deck
+pose.position = estimated position
+linear velocity = estimated velocity
+```
+
+位置和线速度协方差来自 6×6 状态协方差。甲板姿态和角速度未估计，对应协方差使用大值表示未知。
+
+---
+
+## 8. P3 短时预测
+
+预测时域：
+
+```text
+prediction_horizon
+=
+last_valid_measurement_receipt_age
++
+additional_prediction_horizon
+```
+
+并限制在：
+
+```text
+[0, max_prediction_horizon]
+```
+
+预测公式：
+
+```text
+p_pred = p_est + v_est * prediction_horizon
+v_pred = v_est
+```
+
+当前图像采样时间、控制器时间和 PX4 内部时间没有建立严格统一映射，因此不会直接计算：
+
+```text
+controller_now - image_header_stamp
+```
+
+`/landing/predicted_deck_pose` 目前只用于监控和评估，不进入 PX4 setpoint。
+
+---
+
+## 9. 主要 P3 参数
 
 | 参数 | 默认值 | 说明 |
 | --- | ---: | --- |
-| `rendezvous_altitude_m` | `5.0` | GNSS、接管和视觉跟踪安全高度 |
-| `rendezvous_radius_m` | `2.0` | 会合完成水平半径 |
-| `aruco_acquire_duration_s` | `0.5` | 进入接管前连续可见时间 |
-| `visual_handover_duration_s` | `0.5` | GNSS 到视觉混合时长 |
-| `handover_max_horizontal_difference_m` | `3.0` | GNSS 与视觉最大水平差 |
-| `max_visual_measurement_jump_m` | `0.5` | 相邻有效视觉测量最大水平跳变 |
-| `visual_loss_short_timeout_s` | `0.5` | 视觉测量短时新鲜阈值 |
-| `visual_loss_long_timeout_s` | `2.0` | 触发 GNSS 恢复的长时丢失阈值 |
-| `max_rendezvous_speed_mps` | `2.0` | GNSS和视觉目标最大移动速度 |
-| `max_target_step_m` | `0.20` | 单周期水平目标最大步长 |
-| `expected_aruco_pose_frame_id` | `camera_link` | 允许的 ArUco 消息 frame 字符串 |
-| `enable_auto_land` | `false` | 默认禁止自动降落 |
+| `target_state_estimator.process_acceleration_std_mps2` | `1.0` | 过程加速度标准差 |
+| `target_state_estimator.measurement_horizontal_std_m` | `0.08` | 水平视觉位置噪声 |
+| `target_state_estimator.measurement_vertical_std_m` | `0.12` | 垂直视觉位置噪声 |
+| `target_state_estimator.initial_position_std_m` | `0.20` | 初始位置标准差 |
+| `target_state_estimator.initial_velocity_std_mps` | `1.0` | 初始速度标准差 |
+| `target_state_estimator.minimum_sample_dt_s` | `0.001` | 最小有效采样间隔 |
+| `target_state_estimator.maximum_sample_dt_s` | `0.50` | 单次最大预测步长 |
+| `target_state_estimator.reinitialize_gap_s` | `2.0` | 长时丢失重初始化阈值 |
+| `target_state_estimator.innovation_gate_mahalanobis` | `5.0` | 创新门限 |
+| `motion_predictor.additional_prediction_horizon_s` | `0.10` | 固定链路补偿 |
+| `motion_predictor.max_prediction_horizon_s` | `0.50` | 最大外推时域 |
+| `estimator_output_timeout_s` | `2.0` | 估计输出最长有效年龄 |
+| `estimated_deck_child_frame_id` | `estimated_deck` | 估计里程计子坐标系 |
 
 全部参数位于：
 
@@ -308,7 +372,9 @@ P3 必须补充跨传感器时间对齐、滤波和运动预测。
 config/px4_aruco_landing.yaml
 ```
 
-## 测试
+---
+
+## 10. 测试
 
 ```bash
 source /opt/ros/humble/setup.bash
@@ -321,20 +387,41 @@ colcon test --packages-select aruco_precision_landing_cpp
 colcon test-result --verbose
 ```
 
+当前结果：
+
+```text
+77 tests
+0 errors
+0 failures
+0 skipped
+```
+
 关键测试：
 
 - `coordinate_transform_test`
 - `geodetic_converter_test`
 - `gnss_rendezvous_guidance_test`
 - `visual_handover_guidance_test`
+- `target_state_estimator_test`
+- `motion_predictor_test`
 
-P2D 消息级状态机验收见：
+详细文档：
 
 ```text
-docs/P2D_GNSS_VISION_HANDOVER_VALIDATION.md
+docs/P3_VISUAL_STATE_ESTIMATION_PLAN.md
+docs/P3_VISUAL_STATE_ESTIMATION_VALIDATION.md
 ```
 
-## 安全提示
+---
 
-节点会自动发送 Offboard 和 Arm 命令。P2D 默认不发送 Land，不进入下降状态。只应先在
-SITL 中验证；实机测试前必须重新核对相机外参、PX4 坐标系、failsafe、人工接管和解锁策略。
+## 11. 安全提示
+
+节点会自动发送 Offboard 和 Arm 命令。当前主路径：
+
+- 不下降；
+- 不发送 Land；
+- 不使用预测位置控制；
+- 不订阅 Ground Truth。
+
+只应先在 SITL 中验证。实机测试前必须重新核对相机外参、PX4 坐标系、时间同步、
+failsafe、人工接管和解锁策略。

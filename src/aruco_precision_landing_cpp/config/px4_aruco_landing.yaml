@@ -28,6 +28,21 @@ px4_aruco_landing_node:
     visual_loss_short_timeout_s: 0.5
     visual_loss_long_timeout_s: 2.0
 
+    target_state_estimator.process_acceleration_std_mps2: 1.0
+    target_state_estimator.measurement_horizontal_std_m: 0.08
+    target_state_estimator.measurement_vertical_std_m: 0.12
+    target_state_estimator.initial_position_std_m: 0.20
+    target_state_estimator.initial_velocity_std_mps: 1.0
+    target_state_estimator.minimum_sample_dt_s: 0.001
+    target_state_estimator.maximum_sample_dt_s: 0.50
+    target_state_estimator.reinitialize_gap_s: 2.0
+    target_state_estimator.innovation_gate_mahalanobis: 5.0
+
+    motion_predictor.additional_prediction_horizon_s: 0.10
+    motion_predictor.max_prediction_horizon_s: 0.50
+    estimator_output_timeout_s: 2.0
+    estimated_deck_child_frame_id: estimated_deck
+
     expected_aruco_pose_frame_id: camera_link
     camera_extrinsic.translation_frd_m: [0.0, 0.0, -0.10]
     camera_extrinsic.rotation_wxyz: [0.70710678, 0.0, 0.0, 0.70710678]

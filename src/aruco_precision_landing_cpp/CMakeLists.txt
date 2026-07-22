@@ -13,6 +13,7 @@ find_package(Eigen3 REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(px4_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 
@@ -22,6 +23,8 @@ add_library(
   src/geodetic_converter.cpp
   src/gnss_rendezvous_guidance.cpp
   src/visual_handover_guidance.cpp
+  src/target_state_estimator.cpp
+  src/motion_predictor.cpp
 )
 target_compile_features(aruco_landing_math PUBLIC cxx_std_17)
 target_include_directories(
@@ -49,6 +52,7 @@ ament_target_dependencies(
   rclcpp
   px4_msgs
   geometry_msgs
+  nav_msgs
   sensor_msgs
   std_msgs
 )
@@ -102,6 +106,18 @@ if(BUILD_TESTING)
     test/visual_handover_guidance_test.cpp
   )
   target_link_libraries(visual_handover_guidance_test aruco_landing_math)
+
+  ament_add_gtest(
+    target_state_estimator_test
+    test/target_state_estimator_test.cpp
+  )
+  target_link_libraries(target_state_estimator_test aruco_landing_math)
+
+  ament_add_gtest(
+    motion_predictor_test
+    test/motion_predictor_test.cpp
+  )
+  target_link_libraries(motion_predictor_test aruco_landing_math)
 endif()
 
 ament_export_dependencies(Eigen3)

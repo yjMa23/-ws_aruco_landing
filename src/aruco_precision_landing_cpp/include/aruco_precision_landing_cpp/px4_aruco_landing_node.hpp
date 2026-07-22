@@ -6,6 +6,8 @@
 
 #include "aruco_precision_landing_cpp/coordinate_transform.hpp"
 #include "aruco_precision_landing_cpp/gnss_rendezvous_guidance.hpp"
+#include "aruco_precision_landing_cpp/motion_predictor.hpp"
+#include "aruco_precision_landing_cpp/target_state_estimator.hpp"
 #include "aruco_precision_landing_cpp/visual_handover_guidance.hpp"
 
 #include <array>
@@ -15,6 +17,7 @@
 
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
+#include <nav_msgs/msg/odometry.hpp>
 #include <px4_msgs/msg/offboard_control_mode.hpp>
 #include <px4_msgs/msg/trajectory_setpoint.hpp>
 #include <px4_msgs/msg/vehicle_command.hpp>
@@ -98,6 +101,8 @@ private:
   void publish_target_pose();
   void publish_deck_gnss_pose(const rclcpp::Time & now);
   void publish_marker_pose(const rclcpp::Time & now);
+  void publish_estimated_deck_odometry(const rclcpp::Time & now);
+  void publish_predicted_deck_pose(const rclcpp::Time & now);
   void publish_guidance_source();
 
   static const char * state_name(LandingState state);
@@ -127,6 +132,18 @@ private:
   double max_visual_measurement_jump_m_{0.5};
   double visual_loss_short_timeout_s_{0.5};
   double visual_loss_long_timeout_s_{2.0};
+  double estimator_process_acceleration_std_mps2_{1.0};
+  double estimator_measurement_horizontal_std_m_{0.08};
+  double estimator_measurement_vertical_std_m_{0.12};
+  double estimator_initial_position_std_m_{0.20};
+  double estimator_initial_velocity_std_mps_{1.0};
+  double estimator_minimum_sample_dt_s_{0.001};
+  double estimator_maximum_sample_dt_s_{0.50};
+  double estimator_reinitialize_gap_s_{2.0};
+  double estimator_innovation_gate_mahalanobis_{5.0};
+  double additional_prediction_horizon_s_{0.10};
+  double max_prediction_horizon_s_{0.50};
+  double estimator_output_timeout_s_{2.0};
   int offboard_prestream_count_{20};
   int stable_detect_count_{10};
   double camera_x_to_body_y_sign_{1.0};
@@ -145,6 +162,7 @@ private:
   std::string target_pose_frame_id_{"local_ned"};
   std::string deck_gnss_velocity_frame_id_{"world_enu"};
   std::string expected_aruco_pose_frame_id_{"camera_link"};
+  std::string estimated_deck_child_frame_id_{"estimated_deck"};
   std::array<double, 3> camera_translation_frd_m_{{0.0, 0.0, -0.10}};
   std::array<double, 4> camera_rotation_wxyz_{{0.70710678, 0.0, 0.0, 0.70710678}};
 
@@ -160,6 +178,7 @@ private:
   bool have_search_pattern_start_time_{false};
   bool have_marker_pose_ned_{false};
   bool have_last_aruco_sample_stamp_{false};
+  bool have_estimator_measurement_receipt_time_{false};
   int32_t aruco_id_{-1};
   int64_t last_aruco_sample_stamp_ns_{0};
 
@@ -184,6 +203,8 @@ private:
   int prestream_setpoint_count_{0};
   bool final_land_command_sent_{false};
   double handover_progress_s_{0.0};
+  double last_estimator_measurement_receipt_time_s_{0.0};
+  double last_estimator_state_receipt_time_s_{0.0};
 
   double takeoff_start_x_{0.0};
   double takeoff_start_y_{0.0};
@@ -198,6 +219,8 @@ private:
 
   std::unique_ptr<GnssRendezvousGuidance> gnss_guidance_;
   std::unique_ptr<VisualHandoverGuidance> visual_guidance_;
+  std::unique_ptr<TargetStateEstimator> target_state_estimator_;
+  std::unique_ptr<MotionPredictor> motion_predictor_;
 
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr aruco_pose_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr aruco_visible_sub_;
@@ -217,6 +240,8 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr target_pose_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr deck_gnss_pose_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr marker_pose_pub_;
+  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr estimated_deck_odometry_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr predicted_deck_pose_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr guidance_source_pub_;
 
   rclcpp::TimerBase::SharedPtr control_timer_;

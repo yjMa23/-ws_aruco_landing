@@ -20,7 +20,7 @@
 → 丢失恢复、安全中止和批量评测
 ```
 
-本文档是下一阶段的执行计划。用户已确认按本计划执行；当前已完成 `P2.0`、`P2A`、`P2B`、`P2C` 和 `P2D`。船舶 GNSS、ArUco 完整位姿、GNSS—视觉接管和下降前恢复已接入控制器，下一阶段为 `P3` 视觉状态估计与短时运动预测。
+本文档是下一阶段的执行计划。用户已确认按本计划执行；当前已完成 `P2.0`、`P2A`、`P2B`、`P2C`、`P2D` 和 `P3`。控制器已具备船舶 GNSS 会合、完整视觉位姿、GNSS—视觉接管、视觉状态估计和短时预测，下一阶段为 `P4` 安全高度移动甲板水平跟踪。
 
 ---
 
@@ -38,6 +38,7 @@
 | `P2B` 船舶 GNSS 传感器仿真 | 已完成 | 实现理想/含噪 GNSS、ENU 速度、固定采样/延迟/丢包、确定性 reset 和端到端冒烟验证 |
 | `P2C` GNSS 会合与移动甲板上方粗跟踪 | 已完成 | 实现 WGS84→local NED、GNSS 校验、会合目标限幅、移动中心搜索和超时回退 |
 | `P2D` GNSS—视觉接管与下降前恢复 | 已完成 | 实现完整相机外参、Marker local NED、线性接管、视觉跟踪、短时保持和长时 GNSS 恢复 |
+| `P3` 视觉状态估计与短时预测 | 已完成 | 实现三维常速度 Kalman Filter、离群/时间异常处理、位置速度协方差和受限短时预测；预测尚未参与控制 |
 
 ### 2.2 当前已有 ROS 2 包
 
@@ -49,7 +50,7 @@ src/moving_deck_sim
 
 ### 2.3 当前控制器能力
 
-`aruco_precision_landing_cpp` 当前 P2D 主路径已经具备：
+`aruco_precision_landing_cpp` 当前 P3 主路径已经具备：
 
 - PX4 Offboard 预发布、自动切换 Offboard、解锁和起飞。
 - 使用 PX4 `VehicleLocalPosition.ref_lat/ref_lon/ref_alt` 建立 local NED 地理参考。
@@ -60,13 +61,16 @@ src/moving_deck_sim
 - 实现 `VISUAL_HANDOVER`、`TRACK_TARGET` 和 `RECOVER_TO_GNSS`。
 - 接管、视觉跟踪和恢复全程保持固定安全高度。
 - 发布 GNSS 和 Marker local NED 调试位姿及当前引导来源。
+- 使用视觉采样时间运行三维常速度 Kalman Filter，估计甲板位置、速度和协方差。
+- 发布 `/landing/estimated_deck_odometry` 和 `/landing/predicted_deck_pose`。
+- 处理重复/倒退时间、离群点、大观测间隔和长时重初始化。
 
-旧静态对中、下降和 `NAV_LAND` 代码仍保留用于历史基线参考，但从当前 P2D 主路径不可达，默认 `enable_auto_land=false`。
+旧静态对中、下降和 `NAV_LAND` 代码仍保留用于历史基线参考，但从当前 P3 主路径不可达，默认 `enable_auto_land=false`。P3 预测输出尚未进入 PX4 setpoint。
 
 ### 2.4 当前核心缺口
 
-- 没有基于消息采样时间的视觉状态估计和跨传感器时间对齐。
-- 没有甲板速度估计、短时运动预测和速度前馈。
+- 图像采样时刻的 PX4 位姿历史插值和严格跨时间域对齐尚未实现。
+- 尚未将预测位置和甲板速度用于水平控制及速度前馈。
 - 没有基于相对速度和甲板姿态的着陆窗口。
 - 没有相对甲板高度控制。
 - 最终下降阶段过早退出 Offboard 水平跟踪。
@@ -1048,6 +1052,13 @@ baseline-gnss-vision-handover-v0.1
 
 # P3：甲板视觉状态估计与短时预测
 
+详细实施计划和验收记录：
+
+```text
+docs/P3_VISUAL_STATE_ESTIMATION_PLAN.md
+docs/P3_VISUAL_STATE_ESTIMATION_VALIDATION.md
+```
+
 ## 目标
 
 从视觉 NED 位姿估计甲板位置和速度，并在图像延迟和短时丢帧时预测控制时刻位置。
@@ -1129,6 +1140,19 @@ p_pred = p_est + v_est * prediction_horizon
 - 正弦场景估计连续。
 - 短时丢帧时目标不突跳。
 - Ground Truth 只用于离线统计。
+
+## 实现与验收状态
+
+P3 已完成：
+
+- 新增 `target_state_estimator` 和 `motion_predictor`。
+- 发布估计里程计和预测位姿。
+- 全工作区累计 77 项测试通过。
+- 静止消息级输入估计速度为零。
+- NED East `0.4 m/s` 匀速输入估计为约 `0.40023 m/s`。
+- 预测输出尚未进入控制，P2D 安全高度路径未改变。
+
+真实 PX4 动力学下的位置/速度 RMSE 和正弦场景统计仍需实际仿真 rosbag 离线评估。
 
 ## 建议标签
 
@@ -1838,23 +1862,22 @@ grep -R "/simulation/deck/ground_truth" \
 
 ## 15. 当前下一项代码任务
 
-`P2.0`、`P2A`、`P2B`、`P2C` 和 `P2D` 已完成。下一项任务限定为：
+`P2.0`、`P2A`、`P2B`、`P2C`、`P2D` 和 `P3` 已完成。下一项任务限定为：
 
 ```text
-P3：甲板视觉状态估计与短时运动预测
+P4：安全高度移动甲板水平跟踪与速度前馈
 ```
 
 具体只做：
 
-1. 实现不依赖 ROS 节点的常速度视觉状态估计器。
-2. 状态至少包含 `[x, y, z, vx, vy, vz]`。
-3. 使用视觉消息采样时间和控制时间明确计算 `dt`。
-4. 拒绝 NaN、Inf、异常 `dt` 和过大观测残差。
-5. 视觉短时丢失时只预测，长时丢失时标记估计无效或重置。
-6. 实现控制时刻的短时位置预测。
-7. 发布估计位置、速度和预测位置调试输出。
-8. 编写静态、匀速、短时丢帧、异常输入和重新捕获 GTest。
-9. 暂不实现速度前馈、着陆窗口、下降或触地逻辑。
+1. 将 `/landing/predicted_deck_pose` 的水平位置作为可配置跟踪目标。
+2. 使用 `/landing/estimated_deck_odometry` 的水平速度生成 PX4 速度前馈。
+3. 保留 P2D 原始视觉位置控制作为对照模式。
+4. 限制目标位置、速度和模式切换跳变。
+5. 在静止、`0.4 m/s` 匀速和 XY 正弦甲板上统计水平误差。
+6. 短时视觉丢失时使用受限预测，长时丢失仍回到 GNSS。
+7. 全程保持 `rendezvous_altitude_m`，不实现下降。
+8. 暂不实现着陆窗口、触地或强化学习。
 
 ---
 

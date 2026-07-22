@@ -3,7 +3,7 @@
 本文档按当前源码梳理 `ws_aruco_landing` 的运行链路。当前开发阶段为：
 
 ```text
-P2D：船舶 GNSS 会合、ArUco 完整位姿转换、GNSS—视觉接管和下降前恢复
+P3：视觉状态估计与短时运动预测
 ```
 
 当前主路径能够完成：
@@ -15,11 +15,13 @@ P2D：船舶 GNSS 会合、ArUco 完整位姿转换、GNSS—视觉接管和下�
 → 完整刚体变换得到 Marker local NED 位姿
 → GNSS—视觉平滑接管
 → 安全高度视觉跟踪
+→ 估计甲板位置、速度和协方差
+→ 发布短时预测位置
 → 视觉长时丢失后恢复到 GNSS
 ```
 
-**P2D 主路径不会下降。** 默认 `enable_auto_land=false`，旧静态下降代码只作为 P0
-历史基线保留，从当前主路径不可达。
+**P3 主路径不会下降。** 默认 `enable_auto_land=false`，预测位置只用于监控和评估，
+尚未进入 PX4 setpoint。旧静态下降代码只作为 P0 历史基线保留，从当前主路径不可达。
 
 详细约束和验收记录：
 
@@ -29,6 +31,8 @@ P2D：船舶 GNSS 会合、ArUco 完整位姿转换、GNSS—视觉接管和下�
 - [P2B 船舶 GNSS 仿真验收](P2B_DECK_GNSS_VALIDATION.md)
 - [P2C GNSS 会合与移动搜索验收](P2C_GNSS_RENDEZVOUS_VALIDATION.md)
 - [P2D GNSS—视觉接管验收](P2D_GNSS_VISION_HANDOVER_VALIDATION.md)
+- [P3 视觉状态估计详细计划](P3_VISUAL_STATE_ESTIMATION_PLAN.md)
+- [P3 视觉状态估计验收](P3_VISUAL_STATE_ESTIMATION_VALIDATION.md)
 
 旧公式文档仍用于解释 P0 静态基线：
 
@@ -62,6 +66,8 @@ flowchart LR
     CTRL -->|/landing/target_pose| MON
     CTRL -->|/landing/deck_gnss_pose_ned| MON
     CTRL -->|/landing/marker_pose_ned| MON
+    CTRL -->|/landing/estimated_deck_odometry| MON
+    CTRL -->|/landing/predicted_deck_pose| MON
 ```
 
 Ground Truth 只允许进入仿真传感器和后续评测器。控制器与检测器禁止订阅：
@@ -78,7 +84,7 @@ Ground Truth 只允许进入仿真传感器和后续评测器。控制器与检�
 | --- | --- |
 | `aruco_detector` | 图像同步、指定 ID 检测、PnP 完整位姿、可见性和调试图像 |
 | `moving_deck_sim` | 水平移动甲板、确定性 reset、Ground Truth 和船舶 GNSS 传感器仿真 |
-| `aruco_precision_landing_cpp` | PX4 Offboard、GNSS 会合、完整视觉变换、平滑接管、视觉跟踪和 GNSS 恢复 |
+| `aruco_precision_landing_cpp` | PX4 Offboard、GNSS 会合、完整视觉变换、平滑接管、视觉跟踪、状态估计、短时预测和 GNSS 恢复 |
 
 ### 2.1 关键纯数学模块
 
@@ -88,6 +94,8 @@ Ground Truth 只允许进入仿真传感器和后续评测器。控制器与检�
 | `geodetic_converter` | WGS84、ECEF、局部 ENU 双向转换 |
 | `gnss_rendezvous_guidance` | GNSS 稳定性、跳变、超时、目标限幅和移动中心搜索 |
 | `visual_handover_guidance` | 视觉测量过滤、GNSS 一致性、线性接管、丢失分类和目标限幅 |
+| `target_state_estimator` | 三维常速度 Kalman Filter、时间异常、离群点和长时重初始化 |
+| `motion_predictor` | 根据观测到达年龄和固定补偿执行受限常速度外推 |
 | `gnss_sensor_model` | GNSS 降频、噪声、延迟、丢包和确定性 reset |
 
 ---
@@ -130,6 +138,8 @@ Ground Truth 只允许进入仿真传感器和后续评测器。控制器与检�
 | `/landing/target_pose` | `geometry_msgs/msg/PoseStamped` | 当前 local NED setpoint |
 | `/landing/deck_gnss_pose_ned` | `geometry_msgs/msg/PoseStamped` | 船舶 GNSS 粗位置 |
 | `/landing/marker_pose_ned` | `geometry_msgs/msg/PoseStamped` | 完整刚体变换后的 Marker 位姿 |
+| `/landing/estimated_deck_odometry` | `nav_msgs/msg/Odometry` | 滤波位置、速度和协方差 |
+| `/landing/predicted_deck_pose` | `geometry_msgs/msg/PoseStamped` | 受限短时常速度预测位置 |
 
 ---
 
@@ -204,7 +214,7 @@ camera_extrinsic.rotation_wxyz: [0.70710678, 0.0, 0.0, 0.70710678]
 
 ---
 
-## 5. 当前 P2D 状态机
+## 5. 当前 P3 主路径与 P2D 状态机
 
 ```text
 INIT
@@ -280,16 +290,24 @@ GNSS 同时无效时进入 `WAIT_DECK_GNSS`，锁定当前无人机水平位置�
 
 ---
 
-## 6. 时间处理边界
+## 6. P3 状态估计、预测与时间边界
 
-当前 ROS `/clock`、图像时间和 PX4 时间域尚未统一，因此 P2D：
+状态估计使用：
 
-- 使用控制器回调到达时间判断视觉新鲜度。
-- 使用非零图像采样时间戳拒绝重复和乱序帧。
-- 使用回调时最新 `VehicleOdometry` 完成坐标变换。
-- `/landing/marker_pose_ned` 的时间戳表示控制器完成转换的时间。
+```text
+x = [px, py, pz, vx, vy, vz]^T
+```
 
-P3 将实现基于采样时间的状态估计、跨传感器时间对齐和短时运动预测。
+滤波器采用三维常速度模型，使用 ArUco 非零 `header.stamp` 计算相邻观测 `dt`；零时间戳时退化使用回调到达时间。重复或倒退时间戳被拒绝，大残差测量通过 NIS 门限拒绝，长时间隔后重新初始化并清零速度。
+
+当前 ROS `/clock`、图像时间和 PX4 时间域尚未建立严格统一映射，因此：
+
+- 视觉控制新鲜度仍使用控制器回调到达时间。
+- 完整坐标变换仍使用回调时最新 `VehicleOdometry`，尚未做图像时刻姿态插值。
+- 预测时域使用“最后有效观测到达年龄 + 固定附加补偿”，并限制最大外推时域。
+- 不直接计算 `controller_now - image_header_stamp`。
+
+当前 `/landing/predicted_deck_pose` 只用于调试和离线评估，不进入 `/fmu/in/trajectory_setpoint`。
 
 ---
 
@@ -306,7 +324,7 @@ FINAL_LAND
 DONE
 ```
 
-这些状态用于冻结 P0 历史基线，但当前从 `INIT` 出发的 P2D 主路径不可达。默认：
+这些状态用于冻结 P0 历史基线，但当前从 `INIT` 出发的 P3 主路径不可达。默认：
 
 ```yaml
 enable_auto_land: false
@@ -326,12 +344,15 @@ enable_auto_land: false
 - P2B 船舶 GNSS 频率、噪声、延迟、丢包和 reset 测试。
 - P2C GNSS 校验、目标限幅、移动搜索和消息级状态机测试。
 - P2D 完整 Marker local NED 变换、接管、视觉跟踪、单帧误检和视觉恢复测试。
+- P3 常速度 Kalman Filter、时间异常、离群点、重初始化和短时预测测试。
+- P3 静止消息级输入估计速度为零。
+- P3 NED East `0.4 m/s` 输入估计速度约为 `0.40023 m/s`。
 
 完整工作区结果：
 
 ```text
 3 packages finished
-55 tests
+77 tests
 0 errors
 0 failures
 0 skipped
@@ -341,7 +362,9 @@ enable_auto_land: false
 
 - 真实 PX4 动力学下的 GNSS—视觉联合飞行。
 - 匀速和正弦移动甲板的视觉跟踪 RMSE。
-- 图像延迟下的时间对齐和预测补偿。
+- 真实图像和 PX4 动力学下的估计位置/速度 RMSE。
+- 图像采样时刻的 PX4 位姿插值和严格时间对齐。
+- 将预测位置和估计速度用于水平控制后的性能提升。
 - 着陆窗口、下降、触地和批量评测。
 
 当前 Gazebo 环境仍有相机插件问题：
