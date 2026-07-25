@@ -13,10 +13,12 @@
 → 预测位置 + 自适应水平速度前馈跟踪
 → 视觉甲板倾角估计
 → 规则式着陆窗口判断
+→ 相对高度分阶段下降
+→ 低高度垂直状态估计与速度前馈
 → 视觉丢失时恢复到 GNSS
 ```
 
-当前阶段为 **P5C：低高度垂直状态估计与误差标定**。P5B 已完成静止、0.4 m/s 匀速和升沉甲板的相对高度分阶段下降，并在 `0.50 m` 安全测试高度停止；恢复爬升和恢复后重新授权锁止也已通过 PX4 SITL 验收。
+当前阶段为 **P6：触地确认、最终下降与安全中止**。P5C 已完成相机 z 外参修正、独立垂直状态估计、低高度误差标定和甲板垂直速度前馈；静止 `0.50 m` 与升沉 `0.70 m` PX4 SITL 验收均通过。
 
 > 相对下降默认关闭，只有显式传入 `--enable-relative-descent` 才允许下降到 `0.50 m`。当前不会触地、不会发送 `NAV_LAND`，也不会自动 Disarm。
 
@@ -39,15 +41,16 @@
 | P4.7 加速度感知增益调度 | 已完成 | 匀速有效增益约 `0.25`，正弦换向提升至 `1.2`；统一参数通过交叉验证 | — |
 | P5A 动态甲板与着陆窗口 | 已完成 | 升沉/倾斜/组合仿真、法向量倾角估计、迟滞窗口和五场景 SITL 验收 | — |
 | P5B 相对高度下降 | 已完成 | 分阶段下降到 `0.50 m`、窗口暂停、恢复到 `2.0 m` 和恢复后重新授权锁止 | — |
-| P5C 垂直状态估计与标定 | 当前阶段 | Marker z 动态偏差、独立垂直估计和多高度相对高度误差验收 | — |
-| P6 触地与安全恢复 | 未开始 | `0.50 m` 以下最终下降、触地确认、恢复和安全中止 | — |
+| P5C 垂直状态估计与标定 | 已完成 | 相机 z 外参修正、独立垂直估计、低高度标定和 z 速度前馈 | — |
+| P6A 多源触地确认 | 已完成 | PX4 land detector、视觉高度和垂直速度联合判据及负向 SITL 验收 | — |
+| P6B 最终下降与真实接触 | 当前阶段 | 显式授权的最终下降、真实接触正向验收和触地后保持 | — |
 | P7/P8 评测与消融 | 未开始 | 批量实验、指标统计和传统方法消融 | — |
 
 当前完整工作区测试结果：
 
 ```text
 3 packages finished
-154 tests
+182 tests
 0 errors
 0 failures
 0 skipped
@@ -117,7 +120,7 @@ colcon test-result --verbose
 预期结果：
 
 ```text
-154 tests, 0 errors, 0 failures, 0 skipped
+182 tests, 0 errors, 0 failures, 0 skipped
 ```
 
 如果 `px4_msgs` 位于其他工作空间，请替换：
@@ -698,8 +701,10 @@ ps -ef | grep -E \
 - [P5A 动态甲板与着陆窗口验收](docs/P5A_DECK_DYNAMICS_AND_LANDING_WINDOW_VALIDATION.md)
 - [P5B 相对高度下降计划](docs/P5B_RELATIVE_DESCENT_PLAN.md)
 - [P5B 相对高度下降验收](docs/P5B_RELATIVE_DESCENT_VALIDATION.md)
-- [P5A 动态甲板与着陆窗口计划](docs/P5A_DECK_DYNAMICS_AND_LANDING_WINDOW_PLAN.md)
-- [P5A 动态甲板与着陆窗口验收](docs/P5A_DECK_DYNAMICS_AND_LANDING_WINDOW_VALIDATION.md)
+- [P5C 垂直状态估计与标定计划](docs/P5C_VERTICAL_STATE_ESTIMATION_PLAN.md)
+- [P5C 垂直状态估计与标定验收](docs/P5C_VERTICAL_STATE_ESTIMATION_VALIDATION.md)
+- [P6A 多源触地确认计划](docs/P6_TOUCHDOWN_CONFIRMATION_PLAN.md)
+- [P6A 多源触地确认验收](docs/P6_TOUCHDOWN_CONFIRMATION_VALIDATION.md)
 
 ---
 

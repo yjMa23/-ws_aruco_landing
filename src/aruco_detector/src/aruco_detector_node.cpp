@@ -1,6 +1,10 @@
+#include "aruco_detector/marker_selector.hpp"
+
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -18,6 +22,7 @@
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/int32.hpp>
 
 namespace
 {
@@ -158,16 +163,47 @@ public:
     marker_length_ = declare_parameter<double>("marker_length", 0.5);
     dictionary_name_ = declare_parameter<std::string>("dictionary", "DICT_4X4_50");
     target_id_ = declare_parameter<int>("target_id", 0);
+    const auto marker_ids = declare_parameter<std::vector<int64_t>>(
+      "marker_ids", std::vector<int64_t>{-1});
+    const auto marker_lengths = declare_parameter<std::vector<double>>(
+      "marker_lengths_m", std::vector<double>{-1.0});
+    const auto marker_priorities = declare_parameter<std::vector<int64_t>>(
+      "marker_priorities", std::vector<int64_t>{-1});
+    const auto target_offsets = declare_parameter<std::vector<double>>(
+      "marker_target_offsets_m", std::vector<double>{0.0, 0.0, 0.0});
     sync_queue_size_ = declare_parameter<int>("sync_queue_size", 10);
 
-    // marker 边长（米）必须为正，同步队列至少容纳一条消息。
-    // 非法值回退默认值，使配置错误不会阻止节点启动。
-    if (marker_length_ <= 0.0) {
-      RCLCPP_WARN(
-        get_logger(),
-        "marker_length must be positive; falling back to 0.5 m");
-      marker_length_ = 0.5;
+    const bool use_legacy_marker =
+      marker_ids.size() == 1U && marker_ids.front() < 0;
+    if (use_legacy_marker) {
+      if (!std::isfinite(marker_length_) || marker_length_ <= 0.0 || target_id_ < 0) {
+        throw std::invalid_argument(
+                "legacy target_id and marker_length must be non-negative/positive");
+      }
+      marker_configurations_.push_back(
+        aruco_detector::MarkerConfiguration{target_id_, marker_length_, 0});
+    } else {
+      if (marker_ids.size() != marker_lengths.size() ||
+        marker_ids.size() != marker_priorities.size() ||
+        target_offsets.size() != marker_ids.size() * 3U)
+      {
+        throw std::invalid_argument(
+                "marker_ids, marker_lengths_m, marker_priorities, and marker_target_offsets_m sizes are inconsistent");
+      }
+      marker_configurations_.reserve(marker_ids.size());
+      for (std::size_t index = 0; index < marker_ids.size(); ++index) {
+        aruco_detector::MarkerConfiguration configuration;
+        configuration.id = static_cast<int>(marker_ids[index]);
+        configuration.length_m = marker_lengths[index];
+        configuration.priority = static_cast<int>(marker_priorities[index]);
+        configuration.target_offset_marker_m = {
+          target_offsets[index * 3U],
+          target_offsets[index * 3U + 1U],
+          target_offsets[index * 3U + 2U]};
+        marker_configurations_.push_back(configuration);
+      }
     }
+    aruco_detector::validate_marker_configurations(marker_configurations_);
 
     if (sync_queue_size_ < 1) {
       RCLCPP_WARN(
@@ -180,6 +216,7 @@ public:
     detector_params_ = cv::aruco::DetectorParameters::create();
 
     pose_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("/aruco/pose", 10);
+    id_pub_ = create_publisher<std_msgs::msg::Int32>("/aruco/id", 10);
     visible_pub_ = create_publisher<std_msgs::msg::Bool>("/aruco/visible", 10);
     debug_image_pub_ =
       create_publisher<sensor_msgs::msg::Image>("/aruco/debug_image", rclcpp::SensorDataQoS());
@@ -201,11 +238,10 @@ public:
 
     RCLCPP_INFO(
       get_logger(),
-      "Detecting ArUco target id %d on %s with %s, marker_length=%.3f m",
-      target_id_,
+      "Detecting %zu configured ArUco markers on %s with %s",
+      marker_configurations_.size(),
       image_topic_.c_str(),
-      dictionary_name_.c_str(),
-      marker_length_);
+      dictionary_name_.c_str());
   }
 
 private:
@@ -256,12 +292,21 @@ private:
       cv::aruco::drawDetectedMarkers(debug_image, corners, ids);
     }
 
-    const auto target_it = std::find(ids.begin(), ids.end(), target_id_);
-    const bool target_visible = target_it != ids.end();
+    std::vector<aruco_detector::MarkerDetectionCandidate> candidates;
+    candidates.reserve(ids.size());
+    for (std::size_t index = 0; index < ids.size() && index < corners.size(); ++index) {
+      candidates.push_back(
+        aruco_detector::MarkerDetectionCandidate{
+          ids[index],
+          std::abs(cv::contourArea(corners[index])),
+          index});
+    }
+    const auto selected =
+      aruco_detector::select_marker(marker_configurations_, candidates);
     const bool valid_camera_info = hasValidCameraInfo(*camera_info_msg);
 
-    // visible 表示目标位姿当前可用，仅检测到目标但内参无效时仍必须为 false。
-    if (!target_visible || !valid_camera_info) {
+    // visible 表示选中目标位姿当前可用，仅检测到 Marker 但内参无效时仍必须为 false。
+    if (!selected.has_value() || !valid_camera_info) {
       if (!valid_camera_info) {
         RCLCPP_WARN_THROTTLE(
           get_logger(),
@@ -275,8 +320,13 @@ private:
       return;
     }
 
-    const auto target_index = static_cast<size_t>(std::distance(ids.begin(), target_it));
-    // OpenCV 接口接收多 marker 数组，这里只传目标角点，避免估计无关 ID 的位姿。
+    const std::size_t target_index = selected->detection_index;
+    if (target_index >= corners.size()) {
+      publishVisible(false);
+      publishDebugImage(debug_image, *image_msg);
+      return;
+    }
+    // OpenCV 接口接收多 Marker 数组，这里只传选中角点，并使用该 ID 的真实物理边长。
     const std::vector<std::vector<cv::Point2f>> target_corners = {corners[target_index]};
     std::vector<cv::Vec3d> rvecs;
     std::vector<cv::Vec3d> tvecs;
@@ -286,7 +336,7 @@ private:
 
     cv::aruco::estimatePoseSingleMarkers(
       target_corners,
-      marker_length_,
+      selected->configuration.length_m,
       camera_matrix,
       dist_coeffs,
       rvecs,
@@ -305,9 +355,25 @@ private:
       dist_coeffs,
       rvecs.front(),
       tvecs.front(),
-      marker_length_ * 0.5);
+      selected->configuration.length_m * 0.5);
 
-    publishPose(rvecs.front(), tvecs.front(), *image_msg);
+    cv::Mat rotation_matrix;
+    cv::Rodrigues(rvecs.front(), rotation_matrix);
+    const auto & offset = selected->configuration.target_offset_marker_m;
+    const cv::Vec3d target_offset_camera{
+      rotation_matrix.at<double>(0, 0) * offset[0] +
+      rotation_matrix.at<double>(0, 1) * offset[1] +
+      rotation_matrix.at<double>(0, 2) * offset[2],
+      rotation_matrix.at<double>(1, 0) * offset[0] +
+      rotation_matrix.at<double>(1, 1) * offset[1] +
+      rotation_matrix.at<double>(1, 2) * offset[2],
+      rotation_matrix.at<double>(2, 0) * offset[0] +
+      rotation_matrix.at<double>(2, 1) * offset[1] +
+      rotation_matrix.at<double>(2, 2) * offset[2]};
+    const cv::Vec3d target_tvec = tvecs.front() + target_offset_camera;
+
+    publishId(selected->configuration.id);
+    publishPose(rvecs.front(), target_tvec, *image_msg);
     publishVisible(true);
     publishDebugImage(debug_image, *image_msg);
   }
@@ -380,6 +446,13 @@ private:
     pose_pub_->publish(pose_msg);
   }
 
+  void publishId(int marker_id)
+  {
+    std_msgs::msg::Int32 id_msg;
+    id_msg.data = marker_id;
+    id_pub_->publish(id_msg);
+  }
+
   void publishVisible(bool visible)
   {
     std_msgs::msg::Bool visible_msg;
@@ -404,6 +477,7 @@ private:
   double marker_length_;
   int target_id_;
   int sync_queue_size_;
+  std::vector<aruco_detector::MarkerConfiguration> marker_configurations_;
 
   cv::Ptr<cv::aruco::Dictionary> dictionary_;
   cv::Ptr<cv::aruco::DetectorParameters> detector_params_;
@@ -413,6 +487,7 @@ private:
   std::shared_ptr<Synchronizer> sync_;
 
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_pub_;
+  rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr id_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr visible_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr debug_image_pub_;
 };

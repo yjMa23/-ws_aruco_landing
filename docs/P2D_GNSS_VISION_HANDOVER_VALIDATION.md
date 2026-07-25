@@ -59,7 +59,7 @@ T_camera_optical_marker
 默认相机外参：
 
 ```yaml
-camera_extrinsic.translation_frd_m: [0.0, 0.0, -0.10]
+camera_extrinsic.translation_frd_m: [0.0, 0.0, 0.14]
 camera_extrinsic.rotation_wxyz: [0.70710678, 0.0, 0.0, 0.70710678]
 ```
 

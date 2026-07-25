@@ -69,7 +69,7 @@ std::optional<RelativeDescentOutput> RelativeDescentController::update(
       RelativeDescentPhase::kRecovering :
       (input.window_open ? RelativeDescentPhase::kDescending :
       RelativeDescentPhase::kWaitingWindow);
-    return make_output(height_reference_m_, phase);
+    return make_output(height_reference_m_, phase, input.dt_s);
   }
 
   const double previous_reference_m = height_reference_m_;
@@ -80,26 +80,30 @@ std::optional<RelativeDescentOutput> RelativeDescentController::update(
         parameters_.recovery_height_m,
         height_reference_m_ + parameters_.recovery_rate_mps * input.dt_s);
       descent_started_ = true;
-      return make_output(previous_reference_m, RelativeDescentPhase::kRecovering);
+      return make_output(
+        previous_reference_m, RelativeDescentPhase::kRecovering, input.dt_s);
     }
-    return make_output(previous_reference_m, RelativeDescentPhase::kPaused);
+    return make_output(
+      previous_reference_m, RelativeDescentPhase::kPaused, input.dt_s);
   }
 
   if (!input.window_open) {
     const RelativeDescentPhase phase = descent_started_ ?
       RelativeDescentPhase::kPaused : RelativeDescentPhase::kWaitingWindow;
-    return make_output(previous_reference_m, phase);
+    return make_output(previous_reference_m, phase, input.dt_s);
   }
 
   if (height_reference_m_ <= parameters_.minimum_test_height_m) {
     height_reference_m_ = parameters_.minimum_test_height_m;
-    return make_output(previous_reference_m, RelativeDescentPhase::kTestHeightHold);
+    return make_output(
+      previous_reference_m, RelativeDescentPhase::kTestHeightHold, input.dt_s);
   }
 
   const double tracking_error_m =
     std::abs(input.current_relative_height_m - height_reference_m_);
   if (tracking_error_m > parameters_.max_reference_tracking_error_m) {
-    return make_output(previous_reference_m, RelativeDescentPhase::kPaused);
+    return make_output(
+      previous_reference_m, RelativeDescentPhase::kPaused, input.dt_s);
   }
 
   const double rate_mps = descent_rate(height_reference_m_);
@@ -111,7 +115,7 @@ std::optional<RelativeDescentOutput> RelativeDescentController::update(
   const RelativeDescentPhase phase =
     height_reference_m_ <= parameters_.minimum_test_height_m ?
     RelativeDescentPhase::kTestHeightHold : RelativeDescentPhase::kDescending;
-  return make_output(previous_reference_m, phase);
+  return make_output(previous_reference_m, phase, input.dt_s);
 }
 
 void RelativeDescentController::reset()
@@ -139,10 +143,13 @@ double RelativeDescentController::descent_rate(double height_reference_m) const
 
 RelativeDescentOutput RelativeDescentController::make_output(
   double previous_reference_m,
-  RelativeDescentPhase phase) const
+  RelativeDescentPhase phase,
+  double dt_s) const
 {
   RelativeDescentOutput output;
   output.height_reference_m = height_reference_m_;
+  output.vertical_reference_velocity_ned_mps =
+    (previous_reference_m - height_reference_m_) / dt_s;
   output.phase = phase;
   output.reference_changed =
     std::abs(height_reference_m_ - previous_reference_m) > kReferenceChangeTolerance;

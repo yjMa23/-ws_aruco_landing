@@ -31,6 +31,9 @@ add_library(
   src/landing_window.cpp
   src/deck_attitude_estimator.cpp
   src/relative_descent_controller.cpp
+  src/vertical_state_estimator.cpp
+  src/touchdown_detector.cpp
+  src/final_descent_controller.cpp
 )
 target_compile_features(aruco_landing_math PUBLIC cxx_std_17)
 target_include_directories(
@@ -160,6 +163,24 @@ if(BUILD_TESTING)
     test/relative_descent_controller_test.cpp
   )
   target_link_libraries(relative_descent_controller_test aruco_landing_math)
+
+  ament_add_gtest(
+    vertical_state_estimator_test
+    test/vertical_state_estimator_test.cpp
+  )
+  target_link_libraries(vertical_state_estimator_test aruco_landing_math)
+
+  ament_add_gtest(
+    touchdown_detector_test
+    test/touchdown_detector_test.cpp
+  )
+  target_link_libraries(touchdown_detector_test aruco_landing_math)
+
+  ament_add_gtest(
+    final_descent_controller_test
+    test/final_descent_controller_test.cpp
+  )
+  target_link_libraries(final_descent_controller_test aruco_landing_math)
 endif()
 
 ament_export_dependencies(Eigen3)

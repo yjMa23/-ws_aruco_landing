@@ -358,7 +358,7 @@ camera_y_to_body_x_sign = -1
 P2A 数学模块接入控制器时使用显式参数：
 
 ```yaml
-camera_extrinsic.translation_frd_m: [0.0, 0.0, -0.10]
+camera_extrinsic.translation_frd_m: [0.0, 0.0, 0.14]
 camera_extrinsic.rotation_wxyz: [0.70710678, 0.0, 0.0, 0.70710678]
 ```
 

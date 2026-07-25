@@ -24,8 +24,16 @@ Options:
   --adaptive-accel-high VALUE            High acceleration threshold (default: 0.35)
   --adaptive-max-accel VALUE             Acceleration clamp (default: 1.50)
   --adaptive-filter-gain GAIN            Acceleration low-pass gain (default: 0.20)
-  --enable-relative-descent              Enable P5B descent to the 0.50 m test height
+  --enable-vertical-ff                   Enable P5C deck vertical-velocity feedforward (default)
+  --disable-vertical-ff                  Disable vertical feedforward for ablation
+  --vertical-ff-gain GAIN                Deck vertical-velocity gain (default: 1.0)
+  --vertical-ff-max VALUE                Absolute vertical feedforward limit (default: 0.60)
+  --enable-relative-descent              Enable P5B relative-height descent
+  --descent-test-height HEIGHT           Override P5B minimum test height (default: 0.50)
   --landing-window-min-height HEIGHT     Override minimum valid estimated height (default: 0.20)
+  --enable-final-descent                 Enable P6B final descent (static scenario only)
+  --final-descent-rate RATE              Final relative-height descent rate (max: 0.03)
+  --final-descent-min-height HEIGHT      Final command-height clamp (default: 0.15)
   -h, --help                             Show this help
 
 Environment:
@@ -54,8 +62,16 @@ adaptive_acceleration_low_threshold_mps2="0.05"
 adaptive_acceleration_high_threshold_mps2="0.35"
 adaptive_max_acceleration_mps2="1.50"
 adaptive_acceleration_filter_gain="0.20"
+vertical_velocity_feedforward_enabled="true"
+vertical_velocity_feedforward_gain="1.0"
+vertical_velocity_feedforward_max_mps="0.60"
 relative_descent_enabled="false"
+descent_minimum_test_height_m="0.50"
 landing_window_minimum_relative_height_m="0.20"
+final_descent_enabled="false"
+final_descent_rate_mps="0.03"
+final_descent_minimum_command_height_m="0.15"
+final_descent_max_reference_tracking_error_m="0.20"
 tuning_override="false"
 
 while (($#)); do
@@ -143,13 +159,57 @@ while (($#)); do
       tuning_override="true"
       shift 2
       ;;
+    --enable-vertical-ff)
+      vertical_velocity_feedforward_enabled="true"
+      tuning_override="true"
+      shift
+      ;;
+    --disable-vertical-ff)
+      vertical_velocity_feedforward_enabled="false"
+      tuning_override="true"
+      shift
+      ;;
+    --vertical-ff-gain)
+      (($# >= 2)) || die "--vertical-ff-gain requires a value"
+      vertical_velocity_feedforward_gain="$2"
+      tuning_override="true"
+      shift 2
+      ;;
+    --vertical-ff-max)
+      (($# >= 2)) || die "--vertical-ff-max requires a value"
+      vertical_velocity_feedforward_max_mps="$2"
+      tuning_override="true"
+      shift 2
+      ;;
     --enable-relative-descent)
       relative_descent_enabled="true"
       shift
       ;;
+    --descent-test-height)
+      (($# >= 2)) || die "--descent-test-height requires a value"
+      descent_minimum_test_height_m="$2"
+      tuning_override="true"
+      shift 2
+      ;;
     --landing-window-min-height)
       (($# >= 2)) || die "--landing-window-min-height requires a value"
       landing_window_minimum_relative_height_m="$2"
+      tuning_override="true"
+      shift 2
+      ;;
+    --enable-final-descent)
+      final_descent_enabled="true"
+      shift
+      ;;
+    --final-descent-rate)
+      (($# >= 2)) || die "--final-descent-rate requires a value"
+      final_descent_rate_mps="$2"
+      tuning_override="true"
+      shift 2
+      ;;
+    --final-descent-min-height)
+      (($# >= 2)) || die "--final-descent-min-height requires a value"
+      final_descent_minimum_command_height_m="$2"
       tuning_override="true"
       shift 2
       ;;
@@ -196,7 +256,13 @@ for value_name in \
   adaptive_acceleration_high_threshold_mps2 \
   adaptive_max_acceleration_mps2 \
   adaptive_acceleration_filter_gain \
-  landing_window_minimum_relative_height_m; do
+  vertical_velocity_feedforward_gain \
+  vertical_velocity_feedforward_max_mps \
+  descent_minimum_test_height_m \
+  landing_window_minimum_relative_height_m \
+  final_descent_rate_mps \
+  final_descent_minimum_command_height_m \
+  final_descent_max_reference_tracking_error_m; do
   value="${!value_name}"
   is_nonnegative_number "$value" || die "$value_name must be a non-negative decimal number"
 done
@@ -218,9 +284,37 @@ awk -v low="$adaptive_acceleration_low_threshold_mps2" \
 awk -v value="$adaptive_acceleration_filter_gain" \
   'BEGIN {exit !(value > 0.0 && value <= 1.0)}' ||
   die "adaptive_acceleration_filter_gain must be within (0, 1]"
+awk -v value="$vertical_velocity_feedforward_gain" \
+  'BEGIN {exit !(value >= 0.0 && value <= 3.0)}' ||
+  die "vertical_velocity_feedforward_gain must be within [0, 3]"
+awk -v value="$vertical_velocity_feedforward_max_mps" \
+  'BEGIN {exit !(value > 0.0 && value <= 2.0)}' ||
+  die "vertical_velocity_feedforward_max_mps must be within (0, 2]"
+awk -v value="$descent_minimum_test_height_m" \
+  'BEGIN {exit !(value >= 0.50 && value < 0.80)}' ||
+  die "descent_minimum_test_height_m must be within [0.50, 0.80)"
 awk -v value="$landing_window_minimum_relative_height_m" \
   'BEGIN {exit !(value > 0.0 && value < 6.0)}' ||
   die "landing_window_minimum_relative_height_m must be within (0, 6)"
+awk -v value="$final_descent_rate_mps" \
+  'BEGIN {exit !(value > 0.0 && value <= 0.03)}' ||
+  die "final_descent_rate_mps must be within (0, 0.03]"
+awk -v value="$final_descent_minimum_command_height_m" \
+  -v entry="$descent_minimum_test_height_m" \
+  'BEGIN {exit !(value >= 0.10 && value < entry)}' ||
+  die "final_descent_minimum_command_height_m must be within [0.10, descent test height)"
+awk -v value="$final_descent_max_reference_tracking_error_m" \
+  'BEGIN {exit !(value > 0.0 && value <= 0.30)}' ||
+  die "final_descent_max_reference_tracking_error_m must be within (0, 0.30]"
+if [[ "$final_descent_enabled" == "true" ]]; then
+  [[ "$relative_descent_enabled" == "true" ]] ||
+    die "--enable-final-descent requires --enable-relative-descent"
+  [[ "$scenario" == "static" ]] ||
+    die "--enable-final-descent is restricted to --scenario static in P6B"
+  awk -v value="$descent_minimum_test_height_m" \
+    'BEGIN {exit !(value == 0.50)}' ||
+    die "P6B final descent requires --descent-test-height 0.50"
+fi
 
 sanitize_number() {
   local value="$1"
@@ -376,6 +470,14 @@ if [[ "$record" == "true" ]]; then
   bag_prefix="p4_${scenario}"
   if [[ "$relative_descent_enabled" == "true" ]]; then
     bag_prefix="p5b_${scenario}_descent"
+    if [[ "$final_descent_enabled" == "true" ]]; then
+      bag_prefix="p6b_${scenario}_final_descent"
+    fi
+    if [[ "$vertical_velocity_feedforward_enabled" == "true" ]]; then
+      bag_prefix+="_zff$(sanitize_number "$vertical_velocity_feedforward_gain")"
+    else
+      bag_prefix+="_zffoff"
+    fi
   fi
   if [[ "$tuning_override" == "true" ]]; then
     bag_prefix+="_${tracking_mode_slug}"
@@ -388,8 +490,15 @@ if [[ "$record" == "true" ]]; then
       bag_prefix+="_a$(sanitize_number "$adaptive_acceleration_low_threshold_mps2")-$(sanitize_number "$adaptive_acceleration_high_threshold_mps2")"
       bag_prefix+="_f$(sanitize_number "$adaptive_acceleration_filter_gain")"
     fi
+    if [[ "$descent_minimum_test_height_m" != "0.50" ]]; then
+      bag_prefix+="_hmin$(sanitize_number "$descent_minimum_test_height_m")"
+    fi
     if [[ "$landing_window_minimum_relative_height_m" != "0.20" ]]; then
       bag_prefix+="_winmin$(sanitize_number "$landing_window_minimum_relative_height_m")"
+    fi
+    if [[ "$final_descent_enabled" == "true" ]]; then
+      bag_prefix+="_finalrate$(sanitize_number "$final_descent_rate_mps")"
+      bag_prefix+="_finalmin$(sanitize_number "$final_descent_minimum_command_height_m")"
     fi
   fi
   bag_path="$workspace_dir/bags/${bag_prefix}_$(date +%Y%m%d_%H%M%S)"
@@ -400,7 +509,16 @@ if [[ "$record" == "true" ]]; then
     /landing/target_pose \
     /landing/deck_gnss_pose_ned \
     /landing/marker_pose_ned \
+    /landing/active_marker_id \
     /landing/estimated_deck_odometry \
+    /landing/vertical_state \
+    /landing/raw_relative_height \
+    /landing/relative_vertical_velocity \
+    /landing/touchdown_status \
+    /landing/touchdown_evidence \
+    /landing/touchdown_candidate_duration \
+    /landing/touchdown_confirmed \
+    /landing/final_descent_phase \
     /landing/predicted_deck_pose \
     /landing/tracking_velocity_setpoint \
     /landing/effective_relative_velocity_gain \
@@ -414,8 +532,10 @@ if [[ "$record" == "true" ]]; then
     /landing/descent_phase \
     /simulation/deck/ground_truth \
     /aruco/visible \
+    /aruco/id \
     /aruco/pose \
     /fmu/out/vehicle_local_position_v1 \
+    /fmu/out/vehicle_land_detected \
     /fmu/out/vehicle_odometry \
     /fmu/in/trajectory_setpoint \
     /fmu/in/vehicle_command
@@ -435,7 +555,16 @@ start_process "landing controller" ros2 launch \
   "adaptive_acceleration_high_threshold_mps2:=$adaptive_acceleration_high_threshold_mps2" \
   "adaptive_max_acceleration_mps2:=$adaptive_max_acceleration_mps2" \
   "adaptive_acceleration_filter_gain:=$adaptive_acceleration_filter_gain" \
+  "vertical_velocity_feedforward_enabled:=$vertical_velocity_feedforward_enabled" \
+  "vertical_velocity_feedforward_gain:=$vertical_velocity_feedforward_gain" \
+  "vertical_velocity_feedforward_max_mps:=$vertical_velocity_feedforward_max_mps" \
+  "final_descent_enabled:=$final_descent_enabled" \
+  "final_descent_entry_height_m:=$descent_minimum_test_height_m" \
+  "final_descent_rate_mps:=$final_descent_rate_mps" \
+  "final_descent_minimum_command_height_m:=$final_descent_minimum_command_height_m" \
+  "final_descent_max_reference_tracking_error_m:=$final_descent_max_reference_tracking_error_m" \
   "relative_descent_enabled:=$relative_descent_enabled" \
+  "descent_minimum_test_height_m:=$descent_minimum_test_height_m" \
   "landing_window_minimum_relative_height_m:=$landing_window_minimum_relative_height_m"
 
 echo "SITL is running. Press Ctrl-C to stop all processes."

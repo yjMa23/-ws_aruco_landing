@@ -180,7 +180,7 @@ T_camera_optical_marker
 默认相机外参：
 
 ```yaml
-camera_extrinsic.translation_frd_m: [0.0, 0.0, -0.10]
+camera_extrinsic.translation_frd_m: [0.0, 0.0, 0.14]
 camera_extrinsic.rotation_wxyz: [0.70710678, 0.0, 0.0, 0.70710678]
 ```
 
@@ -388,7 +388,7 @@ colcon test-result --verbose
 当前结果：
 
 ```text
-154 tests
+182 tests
 0 errors
 0 failures
 0 skipped
@@ -407,6 +407,8 @@ colcon test-result --verbose
 - `deck_attitude_estimator_test`
 - `landing_window_test`
 - `relative_descent_controller_test`
+- `vertical_state_estimator_test`
+- `touchdown_detector_test`
 
 详细文档：
 
@@ -421,6 +423,10 @@ docs/P5A_DECK_DYNAMICS_AND_LANDING_WINDOW_PLAN.md
 docs/P5A_DECK_DYNAMICS_AND_LANDING_WINDOW_VALIDATION.md
 docs/P5B_RELATIVE_DESCENT_PLAN.md
 docs/P5B_RELATIVE_DESCENT_VALIDATION.md
+docs/P5C_VERTICAL_STATE_ESTIMATION_PLAN.md
+docs/P5C_VERTICAL_STATE_ESTIMATION_VALIDATION.md
+docs/P6_TOUCHDOWN_CONFIRMATION_PLAN.md
+docs/P6_TOUCHDOWN_CONFIRMATION_VALIDATION.md
 ```
 
 ## 12. 当前验收边界
@@ -439,7 +445,7 @@ P4～P4.6 已完成静止、`0.2 m/s`、`0.4 m/s`、正弦、时间对齐和参�
 P4.7 已完成加速度感知连续增益调度，并设为统一默认：0.4 m/s 匀速位置 RMSE 为
 `0.0554 m`，XY 正弦位置 RMSE 为 `0.3490 m`，Marker 丢失和 GNSS 恢复均为 0。
 
-P5A 已完成视觉甲板倾角估计、规则式着陆窗口、`WAIT_LANDING_WINDOW` 和五场景 PX4 SITL 验收。P5B 已完成静止、0.4 m/s 匀速和升沉甲板下降到 `0.50 m` 安全测试高度，以及恢复到 `2.0 m` 和恢复后重新授权锁止。当前进入 P5C：低高度垂直状态估计与误差标定。
+P5A 已完成规则式着陆窗口，P5B 已完成相对高度分阶段下降与恢复，P5C 已完成垂直估计和默认 z 速度前馈。P6A 已完成 PX4 land detector、视觉低高度和垂直速度联合判据及三类负向 SITL 验收。当前进入 P6B：最终下降与真实接触正向验证。
 
 ## 13. 安全提示
 

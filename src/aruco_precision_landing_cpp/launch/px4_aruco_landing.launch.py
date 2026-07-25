@@ -82,9 +82,94 @@ def generate_launch_description():
                 description="First-order acceleration filter gain.",
             ),
             DeclareLaunchArgument(
+                "vertical_velocity_feedforward_enabled",
+                default_value="true",
+                description="Enable P5C deck vertical-velocity feedforward during relative descent.",
+            ),
+            DeclareLaunchArgument(
+                "vertical_velocity_feedforward_gain",
+                default_value="1.0",
+                description="Gain applied to estimated deck NED vertical velocity.",
+            ),
+            DeclareLaunchArgument(
+                "vertical_velocity_feedforward_max_mps",
+                default_value="0.60",
+                description="Absolute vertical velocity feedforward limit.",
+            ),
+            DeclareLaunchArgument(
+                "touchdown_detector_enabled",
+                default_value="true",
+                description="Enable P6A parallel touchdown evidence evaluation.",
+            ),
+            DeclareLaunchArgument(
+                "touchdown_px4_status_timeout_s",
+                default_value="0.20",
+                description="Maximum accepted PX4 land-detector age.",
+            ),
+            DeclareLaunchArgument(
+                "touchdown_visual_timeout_s",
+                default_value="0.20",
+                description="Maximum accepted visual-height age.",
+            ),
+            DeclareLaunchArgument(
+                "touchdown_low_height_enter_m",
+                default_value="0.18",
+                description="Relative-height threshold for entering low-height evidence.",
+            ),
+            DeclareLaunchArgument(
+                "touchdown_low_height_exit_m",
+                default_value="0.28",
+                description="Relative-height threshold for leaving low-height evidence.",
+            ),
+            DeclareLaunchArgument(
+                "touchdown_max_relative_vertical_speed_mps",
+                default_value="0.12",
+                description="Maximum relative vertical speed accepted as low motion.",
+            ),
+            DeclareLaunchArgument(
+                "touchdown_max_uav_vertical_speed_mps",
+                default_value="0.15",
+                description="Maximum UAV vertical speed accepted as low motion.",
+            ),
+            DeclareLaunchArgument(
+                "touchdown_candidate_required_duration_s",
+                default_value="0.50",
+                description="Continuous candidate duration required for confirmation.",
+            ),
+            DeclareLaunchArgument(
+                "final_descent_enabled",
+                default_value="false",
+                description="Explicitly enable P6B final descent below the P5B test height.",
+            ),
+            DeclareLaunchArgument(
+                "final_descent_entry_height_m",
+                default_value="0.50",
+                description="Relative height at which P6B final descent is allowed to start.",
+            ),
+            DeclareLaunchArgument(
+                "final_descent_rate_mps",
+                default_value="0.03",
+                description="P6B final relative-height descent rate.",
+            ),
+            DeclareLaunchArgument(
+                "final_descent_minimum_command_height_m",
+                default_value="0.15",
+                description="Minimum relative-height command clamp before touchdown confirmation.",
+            ),
+            DeclareLaunchArgument(
+                "final_descent_max_reference_tracking_error_m",
+                default_value="0.20",
+                description="Maximum relative-height tracking error before final descent pauses.",
+            ),
+            DeclareLaunchArgument(
                 "relative_descent_enabled",
                 default_value="false",
                 description="Explicitly enable P5B relative-height descent to the test height.",
+            ),
+            DeclareLaunchArgument(
+                "descent_minimum_test_height_m",
+                default_value="0.50",
+                description="Minimum relative-height reference allowed in the current SITL test.",
             ),
             DeclareLaunchArgument(
                 "landing_window_minimum_relative_height_m",
@@ -100,6 +185,11 @@ def generate_launch_description():
                 "vehicle_local_position_topic",
                 default_value="/fmu/out/vehicle_local_position_v1",
                 description="PX4 VehicleLocalPosition output topic.",
+            ),
+            DeclareLaunchArgument(
+                "vehicle_land_detected_topic",
+                default_value="/fmu/out/vehicle_land_detected",
+                description="PX4 VehicleLandDetected output topic.",
             ),
             DeclareLaunchArgument(
                 "deck_gps_fix_topic",
@@ -165,9 +255,85 @@ def generate_launch_description():
                             LaunchConfiguration("adaptive_acceleration_filter_gain"),
                             value_type=float,
                         ),
+                        "vertical_velocity_feedforward.enabled": ParameterValue(
+                            LaunchConfiguration("vertical_velocity_feedforward_enabled"),
+                            value_type=bool,
+                        ),
+                        "vertical_velocity_feedforward.deck_velocity_gain": ParameterValue(
+                            LaunchConfiguration("vertical_velocity_feedforward_gain"),
+                            value_type=float,
+                        ),
+                        "vertical_velocity_feedforward.max_abs_mps": ParameterValue(
+                            LaunchConfiguration("vertical_velocity_feedforward_max_mps"),
+                            value_type=float,
+                        ),
+                        "touchdown_detector.enabled": ParameterValue(
+                            LaunchConfiguration("touchdown_detector_enabled"),
+                            value_type=bool,
+                        ),
+                        "touchdown_detector.px4_status_timeout_s": ParameterValue(
+                            LaunchConfiguration("touchdown_px4_status_timeout_s"),
+                            value_type=float,
+                        ),
+                        "touchdown_detector.visual_timeout_s": ParameterValue(
+                            LaunchConfiguration("touchdown_visual_timeout_s"),
+                            value_type=float,
+                        ),
+                        "touchdown_detector.low_height_enter_m": ParameterValue(
+                            LaunchConfiguration("touchdown_low_height_enter_m"),
+                            value_type=float,
+                        ),
+                        "touchdown_detector.low_height_exit_m": ParameterValue(
+                            LaunchConfiguration("touchdown_low_height_exit_m"),
+                            value_type=float,
+                        ),
+                        "touchdown_detector.max_relative_vertical_speed_mps": ParameterValue(
+                            LaunchConfiguration(
+                                "touchdown_max_relative_vertical_speed_mps"
+                            ),
+                            value_type=float,
+                        ),
+                        "touchdown_detector.max_uav_vertical_speed_mps": ParameterValue(
+                            LaunchConfiguration("touchdown_max_uav_vertical_speed_mps"),
+                            value_type=float,
+                        ),
+                        "touchdown_detector.candidate_required_duration_s": ParameterValue(
+                            LaunchConfiguration(
+                                "touchdown_candidate_required_duration_s"
+                            ),
+                            value_type=float,
+                        ),
+                        "final_descent.enabled": ParameterValue(
+                            LaunchConfiguration("final_descent_enabled"),
+                            value_type=bool,
+                        ),
+                        "final_descent.entry_height_m": ParameterValue(
+                            LaunchConfiguration("final_descent_entry_height_m"),
+                            value_type=float,
+                        ),
+                        "final_descent.rate_mps": ParameterValue(
+                            LaunchConfiguration("final_descent_rate_mps"),
+                            value_type=float,
+                        ),
+                        "final_descent.minimum_command_height_m": ParameterValue(
+                            LaunchConfiguration(
+                                "final_descent_minimum_command_height_m"
+                            ),
+                            value_type=float,
+                        ),
+                        "final_descent.max_reference_tracking_error_m": ParameterValue(
+                            LaunchConfiguration(
+                                "final_descent_max_reference_tracking_error_m"
+                            ),
+                            value_type=float,
+                        ),
                         "descent.enabled": ParameterValue(
                             LaunchConfiguration("relative_descent_enabled"),
                             value_type=bool,
+                        ),
+                        "descent.minimum_test_height_m": ParameterValue(
+                            LaunchConfiguration("descent_minimum_test_height_m"),
+                            value_type=float,
                         ),
                         "landing_window.minimum_relative_height_m": ParameterValue(
                             LaunchConfiguration(
@@ -185,6 +351,10 @@ def generate_launch_description():
                     (
                         "/fmu/out/vehicle_local_position",
                         LaunchConfiguration("vehicle_local_position_topic"),
+                    ),
+                    (
+                        "/fmu/out/vehicle_land_detected",
+                        LaunchConfiguration("vehicle_land_detected_topic"),
                     ),
                     (
                         "/deck/gps/fix",

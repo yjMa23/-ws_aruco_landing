@@ -38,6 +38,42 @@ px4_aruco_landing_node:
     target_state_estimator.reinitialize_gap_s: 2.0
     target_state_estimator.innovation_gate_mahalanobis: 5.0
 
+    # P5C 并行垂直估计器当前只发布调试结果，不接管 P5B 控制。
+    vertical_state_estimator.enabled: true
+    vertical_state_estimator.process_acceleration_std_mps2: 0.40
+    vertical_state_estimator.measurement_std_m: 0.05
+    # 低高度误差随观测距离变化，暂不使用固定常量偏置。
+    vertical_state_estimator.measurement_bias_m: 0.0
+    vertical_state_estimator.initial_position_std_m: 0.10
+    vertical_state_estimator.initial_velocity_std_mps: 0.50
+    vertical_state_estimator.minimum_sample_dt_s: 0.001
+    vertical_state_estimator.maximum_sample_dt_s: 0.25
+    vertical_state_estimator.reinitialize_gap_s: 2.0
+    vertical_state_estimator.innovation_gate_mahalanobis: 5.0
+    vertical_state_estimator.prediction_horizon_s: 0.10
+
+    # P5C 对照结果：gain=1.0 同时改善静止与升沉相对高度跟踪。
+    vertical_velocity_feedforward.enabled: true
+    vertical_velocity_feedforward.deck_velocity_gain: 1.0
+    vertical_velocity_feedforward.max_abs_mps: 0.60
+
+    # P6A 只并行发布触地候选/确认结果，不触发状态跳转或 Land/Disarm。
+    touchdown_detector.enabled: true
+    touchdown_detector.px4_status_timeout_s: 0.20
+    touchdown_detector.visual_timeout_s: 0.20
+    touchdown_detector.low_height_enter_m: 0.18
+    touchdown_detector.low_height_exit_m: 0.28
+    touchdown_detector.max_relative_vertical_speed_mps: 0.12
+    touchdown_detector.max_uav_vertical_speed_mps: 0.15
+    touchdown_detector.candidate_required_duration_s: 0.50
+
+    # P6B 默认关闭，必须通过启动参数显式授权。
+    final_descent.enabled: false
+    final_descent.entry_height_m: 0.50
+    final_descent.rate_mps: 0.03
+    final_descent.minimum_command_height_m: 0.15
+    final_descent.max_reference_tracking_error_m: 0.20
+
     motion_predictor.additional_prediction_horizon_s: 0.10
     motion_predictor.max_prediction_horizon_s: 0.50
     estimator_output_timeout_s: 2.0
@@ -90,7 +126,9 @@ px4_aruco_landing_node:
     vehicle_pose_history.max_clock_offset_jump_s: 0.10
 
     expected_aruco_pose_frame_id: camera_link
-    camera_extrinsic.translation_frd_m: [0.0, 0.0, -0.10]
+    # PX4 x500_mono_cam_down: base_link z=0.24 m, camera_link z=0.10 m，
+    # 因此相机相对机体参考点位于 FRD Down 方向 0.14 m。
+    camera_extrinsic.translation_frd_m: [0.0, 0.0, 0.14]
     camera_extrinsic.rotation_wxyz: [0.70710678, 0.0, 0.0, 0.70710678]
 
     offboard_prestream_count: 20

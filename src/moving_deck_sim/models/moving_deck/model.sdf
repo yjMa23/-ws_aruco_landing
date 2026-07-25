@@ -50,8 +50,9 @@
         </material>
       </visual>
 
-      <visual name="aruco_marker_visual">
-        <pose>0 0 0.001 0 0 0</pose>
+      <!-- 远距大 Marker 偏置布置；检测器会将其位姿补偿回甲板中心。 -->
+      <visual name="aruco_marker_far_visual">
+        <pose>0.35 0 0.001 0 0 0</pose>
         <cast_shadows>false</cast_shadows>
         <geometry>
           <plane>
@@ -65,6 +66,27 @@
           <pbr>
             <metal>
               <albedo_map>model://arucotag/arucotag.png</albedo_map>
+            </metal>
+          </pbr>
+        </material>
+      </visual>
+
+      <!-- 近距小 Marker 位于统一甲板中心，避免最终下降时大 Marker 超出视场。 -->
+      <visual name="aruco_marker_near_visual">
+        <pose>0 0 0.002 0 0 0</pose>
+        <cast_shadows>false</cast_shadows>
+        <geometry>
+          <plane>
+            <normal>0 0 1</normal>
+            <size>0.16 0.16</size>
+          </plane>
+        </geometry>
+        <material>
+          <diffuse>1 1 1 1</diffuse>
+          <specular>0.4 0.4 0.4 1</specular>
+          <pbr>
+            <metal>
+              <albedo_map>model://moving_deck/aruco_id1.pgm</albedo_map>
             </metal>
           </pbr>
         </material>

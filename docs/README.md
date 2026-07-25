@@ -3,7 +3,7 @@
 本文档按当前源码梳理 `ws_aruco_landing` 的运行链路。当前开发阶段为：
 
 ```text
-P4：安全高度移动甲板水平跟踪
+P6：多源触地确认、最终下降与安全中止
 ```
 
 当前主路径能够完成：
@@ -18,10 +18,13 @@ P4：安全高度移动甲板水平跟踪
 → 估计甲板位置、速度和协方差
 → 短时预测甲板位置
 → 预测位置目标 + 水平速度前馈跟踪
+→ 规则式着陆窗口
+→ 相对高度分阶段下降
+→ 低高度垂直状态估计与速度前馈
 → 视觉长时丢失后恢复到 GNSS
 ```
 
-**P4 主路径不会下降。** 默认 `enable_auto_land=false`。预测位置已作为水平位置目标，甲板估计速度已作为 PX4 水平速度前馈；旧静态下降代码只作为 P0 历史基线保留，从当前主路径不可达。
+**相对下降仍默认关闭。** 只有显式传入 `--enable-relative-descent` 才允许下降到安全测试高度；当前不触地、不发送 `NAV_LAND`、不自动 Disarm。旧静态下降代码只作为 P0 历史基线保留，从当前主路径不可达。
 
 详细约束和验收记录：
 
@@ -35,6 +38,13 @@ P4：安全高度移动甲板水平跟踪
 - [P3 视觉状态估计验收](P3_VISUAL_STATE_ESTIMATION_VALIDATION.md)
 - [P4 移动目标跟踪详细计划](P4_MOVING_TARGET_TRACKING_PLAN.md)
 - [P4 移动目标跟踪验收](P4_MOVING_TARGET_TRACKING_VALIDATION.md)
+- [P4.5 时间对齐验收](P4_5_TIME_ALIGNMENT_VALIDATION.md)
+- [P4.7 自适应增益调度验收](P4_7_ADAPTIVE_GAIN_SCHEDULING_VALIDATION.md)
+- [P5A 动态甲板与着陆窗口验收](P5A_DECK_DYNAMICS_AND_LANDING_WINDOW_VALIDATION.md)
+- [P5B 相对高度下降验收](P5B_RELATIVE_DESCENT_VALIDATION.md)
+- [P5C 垂直状态估计与标定验收](P5C_VERTICAL_STATE_ESTIMATION_VALIDATION.md)
+- [P6A 多源触地确认计划](P6_TOUCHDOWN_CONFIRMATION_PLAN.md)
+- [P6A 多源触地确认验收](P6_TOUCHDOWN_CONFIRMATION_VALIDATION.md)
 
 旧公式文档仍用于解释 P0 静态基线：
 
@@ -210,7 +220,7 @@ T_camera_optical_marker
 默认外参：
 
 ```yaml
-camera_extrinsic.translation_frd_m: [0.0, 0.0, -0.10]
+camera_extrinsic.translation_frd_m: [0.0, 0.0, 0.14]
 camera_extrinsic.rotation_wxyz: [0.70710678, 0.0, 0.0, 0.70710678]
 ```
 
@@ -413,7 +423,7 @@ enable_auto_land: false
 
 ```text
 3 packages finished
-154 tests
+182 tests
 0 errors
 0 failures
 0 skipped
@@ -421,8 +431,8 @@ enable_auto_land: false
 
 尚未声明通过：
 
-- 低高度垂直状态估计与 Marker z 动态偏差标定。
-- `0.50 m` 以下最终下降、触地检测和批量评测。
+- `0.50 m` 以下最终下降和真实接触正向验收。
+- 触地确认后的保持、自动 Land/Disarm 授权与批量评测。
 
 已新增：
 
@@ -432,7 +442,10 @@ enable_auto_land: false
 - P5A 升沉/倾斜/组合甲板、`WAIT_LANDING_WINDOW` 和窗口调试话题；
 - 静止、匀速、升沉、倾斜和组合五场景 P5A PX4 SITL 验收；
 - P5B 静止、0.4 m/s 匀速和升沉甲板 `0.50 m` 安全下降验收；
-- P5B 恢复到 `2.0 m`、恢复后重新授权锁止和组合运动负向验证。
+- P5B 恢复到 `2.0 m`、恢复后重新授权锁止和组合运动负向验证；
+- P5C 相机 z 外参修正、独立垂直状态估计、低高度标定和 z 速度前馈；
+- P5C 静止 `0.50 m`、升沉 `0.70 m` PX4 SITL 验收；
+- P6A 多源触地检测、调试话题和静止/升沉/恢复三类负向验收。
 
 当前 Gazebo 环境仍有相机插件问题：
 

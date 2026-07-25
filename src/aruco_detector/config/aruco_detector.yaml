@@ -2,10 +2,15 @@ aruco_detector:
   ros__parameters:
     image_topic: /world/aruco/model/x500_mono_cam_down_0/link/camera_link/sensor/camera/image
     camera_info_topic: /world/aruco/model/x500_mono_cam_down_0/link/camera_link/sensor/camera/camera_info
-    # marker_length 决定位姿尺度，单位为米，应填写 marker 外边框的实际边长。
+    # 旧单 Marker 参数保留兼容；配置 marker_ids 后改用多尺度选择。
     marker_length: 0.5
-    dictionary: DICT_4X4_50
-    # 仅为该 ID 估计位姿，检测到其他 marker 时不会发布其位姿。
     target_id: 0
+    dictionary: DICT_4X4_50
+    # ID 0 是偏置布置的远距 0.50 m Marker，ID 1 是甲板中心近距 0.16 m Marker。
+    marker_ids: [0, 1]
+    marker_lengths_m: [0.50, 0.16]
+    marker_priorities: [0, 1]
+    # 每个三元组表示 Marker 坐标系中从 Marker 中心到统一甲板中心的平移。
+    marker_target_offsets_m: [-0.35, 0.0, 0.0, 0.0, 0.0, 0.0]
     # 近似时间同步队列用于容纳图像与 CameraInfo 的小幅时间戳偏差。
     sync_queue_size: 10

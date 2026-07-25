@@ -35,6 +35,7 @@ TEST(RelativeDescentControllerTest, InitializesFromCurrentHeightWithoutJump)
 
   ASSERT_TRUE(output.has_value());
   EXPECT_DOUBLE_EQ(output->height_reference_m, 5.2);
+  EXPECT_DOUBLE_EQ(output->vertical_reference_velocity_ned_mps, 0.0);
   EXPECT_EQ(output->phase, RelativeDescentPhase::kWaitingWindow);
   EXPECT_FALSE(output->reference_changed);
   EXPECT_FALSE(output->reached_test_height);
@@ -48,6 +49,7 @@ TEST(RelativeDescentControllerTest, UsesFastMediumAndSlowRates)
   const auto fast = fast_controller.update(make_input(5.0, true));
   ASSERT_TRUE(fast.has_value());
   EXPECT_NEAR(fast->height_reference_m, 4.70, 1.0e-12);
+  EXPECT_NEAR(fast->vertical_reference_velocity_ned_mps, 0.30, 1.0e-12);
   EXPECT_EQ(fast->phase, RelativeDescentPhase::kDescending);
 
   RelativeDescentController medium_controller(RelativeDescentParameters{});
@@ -55,12 +57,14 @@ TEST(RelativeDescentControllerTest, UsesFastMediumAndSlowRates)
   const auto medium = medium_controller.update(make_input(1.50, true));
   ASSERT_TRUE(medium.has_value());
   EXPECT_NEAR(medium->height_reference_m, 1.35, 1.0e-12);
+  EXPECT_NEAR(medium->vertical_reference_velocity_ned_mps, 0.15, 1.0e-12);
 
   RelativeDescentController slow_controller(RelativeDescentParameters{});
   ASSERT_TRUE(slow_controller.update(make_input(0.70, true)).has_value());
   const auto slow = slow_controller.update(make_input(0.70, true));
   ASSERT_TRUE(slow.has_value());
   EXPECT_NEAR(slow->height_reference_m, 0.65, 1.0e-12);
+  EXPECT_NEAR(slow->vertical_reference_velocity_ned_mps, 0.05, 1.0e-12);
 }
 
 TEST(RelativeDescentControllerTest, ClampsAtMinimumTestHeight)
@@ -77,6 +81,7 @@ TEST(RelativeDescentControllerTest, ClampsAtMinimumTestHeight)
   EXPECT_TRUE(output->reached_test_height);
   ASSERT_TRUE(held.has_value());
   EXPECT_DOUBLE_EQ(held->height_reference_m, 0.50);
+  EXPECT_DOUBLE_EQ(held->vertical_reference_velocity_ned_mps, 0.0);
   EXPECT_FALSE(held->reference_changed);
 }
 
@@ -138,6 +143,7 @@ TEST(RelativeDescentControllerTest, SevereFailureRaisesReferenceTowardRecoveryHe
   ASSERT_TRUE(recovery.has_value());
   EXPECT_EQ(recovery->phase, RelativeDescentPhase::kRecovering);
   EXPECT_NEAR(recovery->height_reference_m, 1.15, 1.0e-12);
+  EXPECT_NEAR(recovery->vertical_reference_velocity_ned_mps, -0.30, 1.0e-12);
   EXPECT_TRUE(recovery->reference_changed);
 
   for (int iteration = 0; iteration < 10; ++iteration) {

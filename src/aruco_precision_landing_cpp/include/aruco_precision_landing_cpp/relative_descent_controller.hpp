@@ -55,6 +55,8 @@ struct RelativeDescentInput
 struct RelativeDescentOutput
 {
   double height_reference_m{0.0};
+  /** 由相对高度参考变化产生的 PX4 NED z 速度；下降为正，恢复爬升为负。 */
+  double vertical_reference_velocity_ned_mps{0.0};
   RelativeDescentPhase phase{RelativeDescentPhase::kWaitingWindow};
   bool reference_changed{false};
   bool reached_test_height{false};
@@ -95,7 +97,8 @@ private:
   double descent_rate(double height_reference_m) const;
   RelativeDescentOutput make_output(
     double previous_reference_m,
-    RelativeDescentPhase phase) const;
+    RelativeDescentPhase phase,
+    double dt_s) const;
 
   RelativeDescentParameters parameters_;
   double height_reference_m_{0.0};

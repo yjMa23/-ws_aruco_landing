@@ -6,13 +6,16 @@
 
 #include "aruco_precision_landing_cpp/coordinate_transform.hpp"
 #include "aruco_precision_landing_cpp/deck_attitude_estimator.hpp"
+#include "aruco_precision_landing_cpp/final_descent_controller.hpp"
 #include "aruco_precision_landing_cpp/gnss_rendezvous_guidance.hpp"
 #include "aruco_precision_landing_cpp/landing_window.hpp"
 #include "aruco_precision_landing_cpp/motion_predictor.hpp"
 #include "aruco_precision_landing_cpp/moving_target_tracking_controller.hpp"
 #include "aruco_precision_landing_cpp/relative_descent_controller.hpp"
 #include "aruco_precision_landing_cpp/target_state_estimator.hpp"
+#include "aruco_precision_landing_cpp/touchdown_detector.hpp"
 #include "aruco_precision_landing_cpp/vehicle_pose_history.hpp"
+#include "aruco_precision_landing_cpp/vertical_state_estimator.hpp"
 #include "aruco_precision_landing_cpp/visual_handover_guidance.hpp"
 
 #include <array>
@@ -28,6 +31,7 @@
 #include <px4_msgs/msg/offboard_control_mode.hpp>
 #include <px4_msgs/msg/trajectory_setpoint.hpp>
 #include <px4_msgs/msg/vehicle_command.hpp>
+#include <px4_msgs/msg/vehicle_land_detected.hpp>
 #include <px4_msgs/msg/vehicle_local_position.hpp>
 #include <px4_msgs/msg/vehicle_odometry.hpp>
 #include <px4_msgs/msg/vehicle_status.hpp>
@@ -56,6 +60,9 @@ enum class LandingState
   WAIT_LANDING_WINDOW,
   DESCEND,
   TEST_HEIGHT_HOLD,
+  FINAL_DESCENT,
+  TOUCHDOWN_CANDIDATE_HOLD,
+  TOUCHDOWN_HOLD,
   RECOVER_CLIMB,
   RECOVER_TO_GNSS,
   GOTO_ARUCO_AREA,
@@ -83,6 +90,8 @@ private:
   void deck_gps_fix_callback(const sensor_msgs::msg::NavSatFix::SharedPtr msg);
   void deck_gps_velocity_callback(const geometry_msgs::msg::TwistStamped::SharedPtr msg);
   void vehicle_status_callback(const px4_msgs::msg::VehicleStatus::SharedPtr msg);
+  void vehicle_land_detected_callback(
+    const px4_msgs::msg::VehicleLandDetected::SharedPtr msg);
   void vehicle_local_position_callback(
     const px4_msgs::msg::VehicleLocalPosition::SharedPtr msg);
   void vehicle_odometry_callback(const px4_msgs::msg::VehicleOdometry::SharedPtr msg);
@@ -134,9 +143,15 @@ private:
     const std::optional<Eigen::Vector3d> & predicted_position_ned,
     bool visual_valid,
     double dt);
+  std::optional<FinalDescentOutput> update_final_descent(
+    const std::optional<TargetStateEstimate> & estimate,
+    bool visual_valid,
+    double dt);
+  void update_touchdown_detection(const rclcpp::Time & now);
 
   void set_target(double x, double y, double z, double yaw);
   void set_velocity_feedforward(double north_mps, double east_mps);
+  void set_vertical_velocity_feedforward(double down_mps);
   void set_adaptive_tracking_debug(
     const std::optional<double> & effective_gain,
     const std::optional<Eigen::Vector2d> & estimated_deck_acceleration_xy);
@@ -156,6 +171,7 @@ private:
   void publish_target_pose();
   void publish_deck_gnss_pose(const rclcpp::Time & now);
   void publish_marker_pose(const rclcpp::Time & now);
+  void publish_active_marker_id();
   void publish_estimated_deck_odometry(const rclcpp::Time & now);
   void publish_predicted_deck_pose(const rclcpp::Time & now);
   void publish_tracking_velocity_setpoint(const rclcpp::Time & now);
@@ -164,10 +180,17 @@ private:
   void publish_estimated_deck_attitude();
   void publish_landing_window_debug();
   void publish_relative_descent_debug();
+  void publish_vertical_state(const rclcpp::Time & now);
+  void publish_raw_relative_height(const rclcpp::Time & now);
+  void publish_relative_vertical_velocity(const rclcpp::Time & now);
+  void publish_final_descent_debug();
+  void publish_touchdown_debug();
   void publish_guidance_source();
 
   static const char * state_name(LandingState state);
   static const char * relative_descent_phase_name(RelativeDescentPhase phase);
+  static const char * final_descent_phase_name(FinalDescentPhase phase);
+  static const char * touchdown_status_name(TouchdownStatus status);
   static double quaternion_to_yaw(const float q[4]);
   static bool quaternion_is_valid(const float q[4]);
 
@@ -203,6 +226,33 @@ private:
   double estimator_maximum_sample_dt_s_{0.50};
   double estimator_reinitialize_gap_s_{2.0};
   double estimator_innovation_gate_mahalanobis_{5.0};
+  bool vertical_state_estimator_enabled_{true};
+  double vertical_process_acceleration_std_mps2_{0.40};
+  double vertical_measurement_std_m_{0.05};
+  double vertical_measurement_bias_m_{0.0};
+  double vertical_initial_position_std_m_{0.10};
+  double vertical_initial_velocity_std_mps_{0.50};
+  double vertical_minimum_sample_dt_s_{0.001};
+  double vertical_maximum_sample_dt_s_{0.25};
+  double vertical_reinitialize_gap_s_{2.0};
+  double vertical_innovation_gate_mahalanobis_{5.0};
+  double vertical_prediction_horizon_s_{0.10};
+  bool vertical_velocity_feedforward_enabled_{true};
+  double vertical_velocity_feedforward_gain_{1.0};
+  double vertical_velocity_feedforward_max_mps_{0.60};
+  bool touchdown_detector_enabled_{true};
+  double touchdown_px4_status_timeout_s_{0.20};
+  double touchdown_visual_timeout_s_{0.20};
+  double touchdown_low_height_enter_m_{0.18};
+  double touchdown_low_height_exit_m_{0.28};
+  double touchdown_max_relative_vertical_speed_mps_{0.12};
+  double touchdown_max_uav_vertical_speed_mps_{0.15};
+  double touchdown_candidate_required_duration_s_{0.50};
+  bool final_descent_enabled_{false};
+  double final_descent_entry_height_m_{0.50};
+  double final_descent_rate_mps_{0.03};
+  double final_descent_minimum_command_height_m_{0.15};
+  double final_descent_max_reference_tracking_error_m_{0.20};
   double additional_prediction_horizon_s_{0.10};
   double max_prediction_horizon_s_{0.50};
   double estimator_output_timeout_s_{2.0};
@@ -266,7 +316,7 @@ private:
   std::string expected_aruco_pose_frame_id_{"camera_link"};
   std::string estimated_deck_child_frame_id_{"estimated_deck"};
   std::string tracking_mode_string_{"PREDICTED_POSITION_VELOCITY_FF"};
-  std::array<double, 3> camera_translation_frd_m_{{0.0, 0.0, -0.10}};
+  std::array<double, 3> camera_translation_frd_m_{{0.0, 0.0, 0.14}};
   std::array<double, 4> camera_rotation_wxyz_{{0.70710678, 0.0, 0.0, 0.70710678}};
 
   LandingState state_{LandingState::INIT};
@@ -274,6 +324,7 @@ private:
   bool have_vehicle_status_{false};
   bool have_local_position_{false};
   bool have_vehicle_odometry_{false};
+  bool have_vehicle_land_detected_{false};
   bool have_aruco_pose_{false};
   bool aruco_visible_{false};
   bool have_aruco_id_{false};
@@ -285,6 +336,11 @@ private:
   bool have_estimated_deck_attitude_{false};
   bool landing_window_result_valid_{false};
   bool relative_descent_debug_valid_{false};
+  bool vertical_state_measurement_valid_{false};
+  bool raw_relative_height_valid_{false};
+  bool touchdown_result_valid_{false};
+  bool final_descent_debug_valid_{false};
+  bool touchdown_hold_target_valid_{false};
   bool descent_reentry_locked_{false};
   bool have_px4_to_ros_time_offset_{false};
   bool have_last_time_sync_observation_{false};
@@ -295,6 +351,7 @@ private:
   px4_msgs::msg::VehicleStatus vehicle_status_{};
   px4_msgs::msg::VehicleLocalPosition local_position_{};
   px4_msgs::msg::VehicleOdometry vehicle_odometry_{};
+  px4_msgs::msg::VehicleLandDetected vehicle_land_detected_{};
   geometry_msgs::msg::PoseStamped aruco_pose_{};
   geometry_msgs::msg::PoseStamped marker_pose_ned_{};
   Pose3d body_camera_pose_{};
@@ -316,6 +373,10 @@ private:
   double handover_progress_s_{0.0};
   double last_estimator_measurement_receipt_time_s_{0.0};
   double last_estimator_state_receipt_time_s_{0.0};
+  double last_vertical_state_measurement_receipt_time_s_{0.0};
+  double last_vehicle_land_detected_receipt_time_s_{0.0};
+  double raw_relative_height_m_{0.0};
+  double touchdown_hold_target_z_{0.0};
   double px4_to_ros_time_offset_s_{0.0};
   double last_time_sync_receipt_s_{0.0};
 
@@ -332,6 +393,8 @@ private:
   bool velocity_feedforward_valid_{false};
   double velocity_feedforward_north_mps_{0.0};
   double velocity_feedforward_east_mps_{0.0};
+  bool vertical_velocity_feedforward_valid_{false};
+  double vertical_velocity_feedforward_down_mps_{0.0};
   bool effective_relative_velocity_gain_valid_{false};
   bool estimated_deck_acceleration_valid_{false};
   double effective_relative_velocity_gain_{0.0};
@@ -341,16 +404,21 @@ private:
   double relative_height_m_{0.0};
   double relative_height_reference_m_{0.0};
   RelativeDescentPhase relative_descent_phase_{RelativeDescentPhase::kWaitingWindow};
+  FinalDescentOutput final_descent_output_{};
+  TouchdownDetectorOutput touchdown_result_{};
 
   std::unique_ptr<GnssRendezvousGuidance> gnss_guidance_;
   std::unique_ptr<VisualHandoverGuidance> visual_guidance_;
   std::unique_ptr<TargetStateEstimator> target_state_estimator_;
+  std::unique_ptr<VerticalStateEstimator> vertical_state_estimator_;
   std::unique_ptr<MotionPredictor> motion_predictor_;
   std::unique_ptr<MovingTargetTrackingController> tracking_controller_;
   std::unique_ptr<VehiclePoseHistory> vehicle_pose_history_;
   std::unique_ptr<DeckAttitudeEstimator> deck_attitude_estimator_;
   std::unique_ptr<LandingWindow> landing_window_;
   std::unique_ptr<RelativeDescentController> relative_descent_controller_;
+  std::unique_ptr<TouchdownDetector> touchdown_detector_;
+  std::unique_ptr<FinalDescentController> final_descent_controller_;
 
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr aruco_pose_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr aruco_visible_sub_;
@@ -358,6 +426,8 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr deck_gps_fix_sub_;
   rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr deck_gps_velocity_sub_;
   rclcpp::Subscription<px4_msgs::msg::VehicleStatus>::SharedPtr vehicle_status_sub_;
+  rclcpp::Subscription<px4_msgs::msg::VehicleLandDetected>::SharedPtr
+    vehicle_land_detected_sub_;
   rclcpp::Subscription<px4_msgs::msg::VehicleLocalPosition>::SharedPtr
     vehicle_local_position_sub_;
   rclcpp::Subscription<px4_msgs::msg::VehicleOdometry>::SharedPtr vehicle_odometry_sub_;
@@ -370,6 +440,7 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr target_pose_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr deck_gnss_pose_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr marker_pose_pub_;
+  rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr active_marker_id_pub_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr estimated_deck_odometry_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr predicted_deck_pose_pub_;
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr
@@ -387,6 +458,16 @@ private:
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr relative_height_pub_;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr relative_height_reference_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr descent_phase_pub_;
+  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr vertical_state_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr raw_relative_height_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr
+    relative_vertical_velocity_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr touchdown_status_pub_;
+  rclcpp::Publisher<std_msgs::msg::UInt32>::SharedPtr touchdown_evidence_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr
+    touchdown_candidate_duration_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr touchdown_confirmed_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr final_descent_phase_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr guidance_source_pub_;
 
   rclcpp::TimerBase::SharedPtr control_timer_;
