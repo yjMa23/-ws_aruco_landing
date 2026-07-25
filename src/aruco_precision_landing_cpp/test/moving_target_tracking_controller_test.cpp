@@ -139,6 +139,137 @@ TEST(MovingTargetTrackingControllerTest, RelativeVelocityGainDampsUavVelocityErr
   ASSERT_TRUE(command.has_value());
   ASSERT_TRUE(command->velocity_feedforward_xy.has_value());
   EXPECT_TRUE(command->velocity_feedforward_xy->isApprox(Eigen::Vector2d{1.4, 0.0}));
+  ASSERT_TRUE(command->effective_relative_velocity_gain.has_value());
+  EXPECT_DOUBLE_EQ(*command->effective_relative_velocity_gain, 0.5);
+  EXPECT_FALSE(command->estimated_deck_acceleration_xy.has_value());
+}
+
+TEST(MovingTargetTrackingControllerTest, AdaptiveGainUsesMinimumOnFirstEstimate)
+{
+  auto parameters = permissive_parameters(
+    TrackingControlMode::kEstimatedPositionVelocityFeedforward);
+  parameters.relative_velocity_gain = 0.25;
+  parameters.adaptive_relative_velocity_gain_enabled = true;
+  parameters.adaptive_relative_velocity_gain_parameters.min_gain = 0.25;
+  parameters.adaptive_relative_velocity_gain_parameters.max_gain = 1.0;
+  parameters.adaptive_relative_velocity_gain_parameters.acceleration_low_threshold_mps2 = 0.10;
+  parameters.adaptive_relative_velocity_gain_parameters.acceleration_high_threshold_mps2 = 0.50;
+  parameters.adaptive_relative_velocity_gain_parameters.max_acceleration_mps2 = 1.0;
+  parameters.adaptive_relative_velocity_gain_parameters.acceleration_filter_gain = 1.0;
+  MovingTargetTrackingController controller(parameters);
+  auto input = make_input();
+  input.estimated_state = make_estimate(
+    Eigen::Vector3d::Zero(), Eigen::Vector3d{1.0, 0.0, 0.0});
+  input.uav_velocity_xy = Eigen::Vector2d::Zero();
+
+  const auto command = controller.compute(input);
+
+  ASSERT_TRUE(command.has_value());
+  ASSERT_TRUE(command->effective_relative_velocity_gain.has_value());
+  ASSERT_TRUE(command->estimated_deck_acceleration_xy.has_value());
+  EXPECT_DOUBLE_EQ(*command->effective_relative_velocity_gain, 0.25);
+  EXPECT_TRUE(command->estimated_deck_acceleration_xy->isZero(1.0e-12));
+  ASSERT_TRUE(command->velocity_feedforward_xy.has_value());
+  EXPECT_TRUE(command->velocity_feedforward_xy->isApprox(Eigen::Vector2d{1.25, 0.0}));
+}
+
+TEST(MovingTargetTrackingControllerTest, AdaptiveGainRisesOnNewAcceleratingEstimate)
+{
+  auto parameters = permissive_parameters(
+    TrackingControlMode::kEstimatedPositionVelocityFeedforward);
+  parameters.adaptive_relative_velocity_gain_enabled = true;
+  parameters.adaptive_relative_velocity_gain_parameters.min_gain = 0.25;
+  parameters.adaptive_relative_velocity_gain_parameters.max_gain = 1.0;
+  parameters.adaptive_relative_velocity_gain_parameters.acceleration_low_threshold_mps2 = 0.10;
+  parameters.adaptive_relative_velocity_gain_parameters.acceleration_high_threshold_mps2 = 0.50;
+  parameters.adaptive_relative_velocity_gain_parameters.max_acceleration_mps2 = 1.0;
+  parameters.adaptive_relative_velocity_gain_parameters.acceleration_filter_gain = 1.0;
+  MovingTargetTrackingController controller(parameters);
+  auto input = make_input();
+  input.estimated_state = make_estimate(
+    Eigen::Vector3d::Zero(), Eigen::Vector3d{0.0, 0.0, 0.0});
+  input.uav_velocity_xy = Eigen::Vector2d::Zero();
+  ASSERT_TRUE(controller.compute(input).has_value());
+
+  input.estimated_state = make_estimate(
+    Eigen::Vector3d::Zero(), Eigen::Vector3d{0.6, 0.0, 0.0});
+  input.estimated_state->sample_time_s = 11.0;
+  const auto command = controller.compute(input);
+
+  ASSERT_TRUE(command.has_value());
+  ASSERT_TRUE(command->effective_relative_velocity_gain.has_value());
+  ASSERT_TRUE(command->estimated_deck_acceleration_xy.has_value());
+  EXPECT_DOUBLE_EQ(*command->effective_relative_velocity_gain, 1.0);
+  EXPECT_TRUE(command->estimated_deck_acceleration_xy->isApprox(Eigen::Vector2d{0.6, 0.0}));
+  ASSERT_TRUE(command->velocity_feedforward_xy.has_value());
+  EXPECT_TRUE(command->velocity_feedforward_xy->isApprox(Eigen::Vector2d{1.2, 0.0}));
+}
+
+TEST(MovingTargetTrackingControllerTest, RepeatedEstimateKeepsLastAdaptiveGain)
+{
+  auto parameters = permissive_parameters(
+    TrackingControlMode::kEstimatedPositionVelocityFeedforward);
+  parameters.adaptive_relative_velocity_gain_enabled = true;
+  parameters.adaptive_relative_velocity_gain_parameters.min_gain = 0.25;
+  parameters.adaptive_relative_velocity_gain_parameters.max_gain = 1.0;
+  parameters.adaptive_relative_velocity_gain_parameters.acceleration_low_threshold_mps2 = 0.10;
+  parameters.adaptive_relative_velocity_gain_parameters.acceleration_high_threshold_mps2 = 0.50;
+  parameters.adaptive_relative_velocity_gain_parameters.max_acceleration_mps2 = 1.0;
+  parameters.adaptive_relative_velocity_gain_parameters.acceleration_filter_gain = 1.0;
+  MovingTargetTrackingController controller(parameters);
+  auto input = make_input();
+  input.estimated_state = make_estimate(
+    Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero());
+  ASSERT_TRUE(controller.compute(input).has_value());
+  input.estimated_state = make_estimate(
+    Eigen::Vector3d::Zero(), Eigen::Vector3d{0.6, 0.0, 0.0});
+  input.estimated_state->sample_time_s = 11.0;
+  const auto accelerated = controller.compute(input);
+  const auto repeated = controller.compute(input);
+
+  ASSERT_TRUE(accelerated.has_value());
+  ASSERT_TRUE(repeated.has_value());
+  ASSERT_TRUE(repeated->effective_relative_velocity_gain.has_value());
+  ASSERT_TRUE(repeated->estimated_deck_acceleration_xy.has_value());
+  EXPECT_DOUBLE_EQ(*repeated->effective_relative_velocity_gain, 1.0);
+  EXPECT_TRUE(repeated->estimated_deck_acceleration_xy->isApprox(Eigen::Vector2d{0.6, 0.0}));
+}
+
+TEST(MovingTargetTrackingControllerTest, AdaptiveGainPersistsDuringShortLossAndResetClearsIt)
+{
+  auto parameters = permissive_parameters(
+    TrackingControlMode::kEstimatedPositionVelocityFeedforward);
+  parameters.adaptive_relative_velocity_gain_enabled = true;
+  parameters.adaptive_relative_velocity_gain_parameters.min_gain = 0.25;
+  parameters.adaptive_relative_velocity_gain_parameters.max_gain = 1.0;
+  parameters.adaptive_relative_velocity_gain_parameters.acceleration_low_threshold_mps2 = 0.10;
+  parameters.adaptive_relative_velocity_gain_parameters.acceleration_high_threshold_mps2 = 0.50;
+  parameters.adaptive_relative_velocity_gain_parameters.max_acceleration_mps2 = 1.0;
+  parameters.adaptive_relative_velocity_gain_parameters.acceleration_filter_gain = 1.0;
+  MovingTargetTrackingController controller(parameters);
+  auto input = make_input();
+  input.estimated_state = make_estimate(
+    Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero());
+  ASSERT_TRUE(controller.compute(input).has_value());
+  input.estimated_state = make_estimate(
+    Eigen::Vector3d::Zero(), Eigen::Vector3d{0.6, 0.0, 0.0});
+  input.estimated_state->sample_time_s = 11.0;
+  ASSERT_TRUE(controller.compute(input).has_value());
+
+  input.visual_fresh = false;
+  input.estimate_age_s = 0.5;
+  const auto short_loss = controller.compute(input);
+  ASSERT_TRUE(short_loss.has_value());
+  ASSERT_TRUE(short_loss->effective_relative_velocity_gain.has_value());
+  EXPECT_DOUBLE_EQ(*short_loss->effective_relative_velocity_gain, 1.0);
+
+  controller.reset();
+  input.visual_fresh = true;
+  input.estimate_age_s = 0.0;
+  const auto after_reset = controller.compute(input);
+  ASSERT_TRUE(after_reset.has_value());
+  ASSERT_TRUE(after_reset->effective_relative_velocity_gain.has_value());
+  EXPECT_DOUBLE_EQ(*after_reset->effective_relative_velocity_gain, 0.25);
 }
 
 TEST(MovingTargetTrackingControllerTest, LimitsPositionBySpeedAndPerCycleStep)
@@ -313,6 +444,12 @@ TEST(MovingTargetTrackingControllerTest, RejectsInvalidParametersAndInputs)
 
   invalid_parameters = permissive_parameters(TrackingControlMode::kRawVisualPosition);
   invalid_parameters.relative_velocity_gain = -0.1;
+  EXPECT_THROW(
+    MovingTargetTrackingController invalid_controller(invalid_parameters),
+    std::invalid_argument);
+
+  invalid_parameters = permissive_parameters(TrackingControlMode::kRawVisualPosition);
+  invalid_parameters.adaptive_relative_velocity_gain_parameters.max_gain = -1.0;
   EXPECT_THROW(
     MovingTargetTrackingController invalid_controller(invalid_parameters),
     std::invalid_argument);

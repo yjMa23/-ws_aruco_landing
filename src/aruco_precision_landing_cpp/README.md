@@ -68,7 +68,7 @@ MicroXRCEAgent udp4 -p 8888
 cd ~/PX4-Autopilot
 PX4_GZ_STANDALONE=1 \
 PX4_GZ_WORLD=aruco \
-PX4_GZ_MODEL_POSE=0,0,2.2 \
+PX4_GZ_MODEL_POSE=-4,0,0.2 \
 make px4_sitl gz_x500_mono_cam_down
 ```
 
@@ -314,6 +314,8 @@ ros2 launch aruco_precision_landing_cpp px4_aruco_landing.launch.py \
 | `/landing/estimated_deck_odometry` | `nav_msgs/msg/Odometry` | 估计位置、速度和协方差 |
 | `/landing/predicted_deck_pose` | `geometry_msgs/msg/PoseStamped` | 控制时刻预测位置 |
 | `/landing/tracking_velocity_setpoint` | `geometry_msgs/msg/TwistStamped` | 实际水平速度前馈调试值 |
+| `/landing/effective_relative_velocity_gain` | `std_msgs/msg/Float64` | 当前实际使用的相对速度阻尼增益 |
+| `/landing/estimated_deck_acceleration` | `geometry_msgs/msg/TwistStamped` | local NED 过滤后甲板水平加速度 |
 
 监控：
 
@@ -324,6 +326,8 @@ ros2 topic echo /landing/target_pose
 ros2 topic echo /landing/estimated_deck_odometry
 ros2 topic echo /landing/predicted_deck_pose
 ros2 topic echo /landing/tracking_velocity_setpoint
+ros2 topic echo /landing/effective_relative_velocity_gain
+ros2 topic echo /landing/estimated_deck_acceleration
 ```
 
 ## 10. 主要参数
@@ -337,10 +341,29 @@ ros2 topic echo /landing/tracking_velocity_setpoint
 | `tracking.max_position_target_speed_mps` | `2.0` | 位置目标最大移动速度 |
 | `tracking.max_position_target_step_m` | `0.20` | 单周期最大位置变化 |
 | `tracking.velocity_feedforward_gain` | `1.0` | 甲板速度前馈系数 |
-| `tracking.relative_velocity_gain` | `0.25` | 相对速度阻尼系数 |
+| `tracking.relative_velocity_gain` | `0.25` | 调度关闭时使用的固定相对速度阻尼系数 |
+| `tracking.adaptive_relative_velocity_gain.enabled` | `true` | 启用加速度感知连续增益调度 |
+| `tracking.adaptive_relative_velocity_gain.min_gain` | `0.25` | 匀速阶段最小阻尼增益 |
+| `tracking.adaptive_relative_velocity_gain.max_gain` | `1.20` | 加速和换向阶段最大阻尼增益 |
+| `tracking.adaptive_relative_velocity_gain.acceleration_low_threshold_mps2` | `0.05` | 开始提升增益的加速度阈值 |
+| `tracking.adaptive_relative_velocity_gain.acceleration_high_threshold_mps2` | `0.35` | 达到最大增益的加速度阈值 |
+| `tracking.adaptive_relative_velocity_gain.max_acceleration_mps2` | `1.50` | 速度差分加速度模长上限 |
+| `tracking.adaptive_relative_velocity_gain.acceleration_filter_gain` | `0.20` | 加速度一阶低通系数 |
 | `tracking.max_velocity_feedforward_mps` | `1.5` | 前馈速度上限 |
 | `tracking.max_velocity_feedforward_acceleration_mps2` | `1.0` | 前馈加速度上限 |
 | `tracking.max_prediction_age_s` | `0.75` | 短时预测最大年龄 |
+| `deck_attitude.filter_gain` | `0.20` | Marker 向上法向量低通系数 |
+| `landing_window.enter_horizontal_error_m` | `0.15` | 窗口进入水平误差阈值 |
+| `landing_window.exit_horizontal_error_m` | `0.25` | 窗口退出水平误差阈值 |
+| `landing_window.enter_relative_speed_mps` | `0.15` | 窗口进入相对速度阈值 |
+| `landing_window.exit_relative_speed_mps` | `0.25` | 窗口退出相对速度阈值 |
+| `landing_window.enter_max_tilt_deg` | `5.0` | 窗口进入甲板倾角阈值 |
+| `landing_window.exit_max_tilt_deg` | `8.0` | 窗口退出甲板倾角阈值 |
+| `landing_window.required_duration_s` | `1.0` | 所有进入条件连续满足时间 |
+| `vehicle_pose_history.history_duration_s` | `2.0` | PX4 local NED 位姿历史时长 |
+| `vehicle_pose_history.max_endpoint_hold_s` | `0.03` | 图像时刻最多允许的端点保持时间 |
+| `vehicle_pose_history.clock_offset_filter_gain` | `0.05` | PX4→ROS 时钟偏移低通更新系数 |
+| `vehicle_pose_history.max_clock_offset_jump_s` | `0.10` | 触发历史重置的最大时钟偏移跳变 |
 | `enable_auto_land` | `false` | 禁止自动降落 |
 
 全部参数见：
@@ -365,7 +388,7 @@ colcon test-result --verbose
 当前结果：
 
 ```text
-93 tests
+154 tests
 0 errors
 0 failures
 0 skipped
@@ -380,6 +403,10 @@ colcon test-result --verbose
 - `target_state_estimator_test`
 - `motion_predictor_test`
 - `moving_target_tracking_controller_test`
+- `vehicle_pose_history_test`
+- `deck_attitude_estimator_test`
+- `landing_window_test`
+- `relative_descent_controller_test`
 
 详细文档：
 
@@ -388,6 +415,12 @@ docs/P3_VISUAL_STATE_ESTIMATION_PLAN.md
 docs/P3_VISUAL_STATE_ESTIMATION_VALIDATION.md
 docs/P4_MOVING_TARGET_TRACKING_PLAN.md
 docs/P4_MOVING_TARGET_TRACKING_VALIDATION.md
+docs/P4_5_EXECUTION_PLAN.md
+docs/P4_5_TIME_ALIGNMENT_VALIDATION.md
+docs/P5A_DECK_DYNAMICS_AND_LANDING_WINDOW_PLAN.md
+docs/P5A_DECK_DYNAMICS_AND_LANDING_WINDOW_VALIDATION.md
+docs/P5B_RELATIVE_DESCENT_PLAN.md
+docs/P5B_RELATIVE_DESCENT_VALIDATION.md
 ```
 
 ## 12. 当前验收边界
@@ -402,16 +435,13 @@ docs/P4_MOVING_TARGET_TRACKING_VALIDATION.md
 - 原始视觉模式可通过 YAML 恢复；
 - 全程保持安全高度。
 
-尚需用户真实 PX4 SITL 验证：
+P4～P4.6 已完成静止、`0.2 m/s`、`0.4 m/s`、正弦、时间对齐和参数扫描。
+P4.7 已完成加速度感知连续增益调度，并设为统一默认：0.4 m/s 匀速位置 RMSE 为
+`0.0554 m`，XY 正弦位置 RMSE 为 `0.3490 m`，Marker 丢失和 GNSS 恢复均为 0。
 
-- 静止、`0.2 m/s`、`0.4 m/s` 和正弦甲板水平 RMSE；
-- 原始视觉、速度前馈、预测前馈的定量对比；
-- 实际无人机速度、加速度和 Marker 丢失次数；
-- 参数稳定性与必要调参。
-
-真实跟踪验收通过前，不进入 P5 下降阶段。
+P5A 已完成视觉甲板倾角估计、规则式着陆窗口、`WAIT_LANDING_WINDOW` 和五场景 PX4 SITL 验收。P5B 已完成静止、0.4 m/s 匀速和升沉甲板下降到 `0.50 m` 安全测试高度，以及恢复到 `2.0 m` 和恢复后重新授权锁止。当前进入 P5C：低高度垂直状态估计与误差标定。
 
 ## 13. 安全提示
 
-节点会自动发送 Offboard 和 Arm 命令，只应先在 SITL 中运行。P4 默认不下降、不发送 Land。
+节点会自动发送 Offboard 和 Arm 命令，只应先在 SITL 中运行。相对下降默认关闭；显式启用时只下降到 `0.50 m` 安全测试高度，不触地、不发送 Land 或 Disarm。
 实机测试前必须重新核对相机外参、时间同步、PX4 坐标系、速度/加速度限制、failsafe、人工接管和解锁策略。

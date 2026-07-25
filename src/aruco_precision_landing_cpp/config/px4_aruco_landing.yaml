@@ -48,9 +48,46 @@ px4_aruco_landing_node:
     tracking.max_position_target_step_m: 0.20
     tracking.velocity_feedforward_gain: 1.0
     tracking.relative_velocity_gain: 0.25
+    tracking.adaptive_relative_velocity_gain.enabled: true
+    tracking.adaptive_relative_velocity_gain.min_gain: 0.25
+    tracking.adaptive_relative_velocity_gain.max_gain: 1.20
+    tracking.adaptive_relative_velocity_gain.acceleration_low_threshold_mps2: 0.05
+    tracking.adaptive_relative_velocity_gain.acceleration_high_threshold_mps2: 0.35
+    tracking.adaptive_relative_velocity_gain.max_acceleration_mps2: 1.50
+    tracking.adaptive_relative_velocity_gain.acceleration_filter_gain: 0.20
     tracking.max_velocity_feedforward_mps: 1.5
     tracking.max_velocity_feedforward_acceleration_mps2: 1.0
     tracking.max_prediction_age_s: 0.75
+
+    deck_attitude.filter_gain: 0.20
+    deck_attitude.minimum_upward_normal_component: 0.50
+
+    landing_window.enter_horizontal_error_m: 0.15
+    landing_window.exit_horizontal_error_m: 0.25
+    landing_window.enter_relative_speed_mps: 0.15
+    landing_window.exit_relative_speed_mps: 0.25
+    landing_window.enter_max_tilt_deg: 5.0
+    landing_window.exit_max_tilt_deg: 8.0
+    landing_window.max_visual_age_s: 0.20
+    landing_window.minimum_relative_height_m: 0.20
+    landing_window.maximum_relative_height_m: 6.00
+    landing_window.required_duration_s: 1.00
+
+    descent.enabled: false
+    descent.minimum_test_height_m: 0.50
+    descent.fast_height_threshold_m: 2.00
+    descent.slow_height_threshold_m: 0.80
+    descent.fast_rate_mps: 0.30
+    descent.medium_rate_mps: 0.15
+    descent.slow_rate_mps: 0.05
+    descent.recovery_height_m: 2.00
+    descent.recovery_rate_mps: 0.30
+    descent.max_reference_tracking_error_m: 0.50
+
+    vehicle_pose_history.history_duration_s: 2.0
+    vehicle_pose_history.max_endpoint_hold_s: 0.03
+    vehicle_pose_history.clock_offset_filter_gain: 0.05
+    vehicle_pose_history.max_clock_offset_jump_s: 0.10
 
     expected_aruco_pose_frame_id: camera_link
     camera_extrinsic.translation_frd_m: [0.0, 0.0, -0.10]

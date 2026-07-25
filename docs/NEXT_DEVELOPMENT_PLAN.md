@@ -20,7 +20,7 @@
 → 丢失恢复、安全中止和批量评测
 ```
 
-本文档是传统基线的阶段执行计划。当前已完成 `P2.0`～`P3`，并完成 P4 安全高度移动甲板水平跟踪的代码、单元测试和消息级验收。进入 P5 前，下一任务是完成 P4 真实 PX4 SITL 跟踪对比与调参。
+本文档是传统基线的阶段执行计划。当前已完成 `P2.0`～`P5B` 的代码与真实 PX4 SITL 验收。P5B 已实现静止、0.4 m/s 匀速和升沉甲板的相对高度分阶段下降，在 `0.50 m` 安全测试高度停止，并完成恢复到 `2.0 m` 和恢复后重新授权锁止。当前进入 P5C：低高度垂直状态估计与误差标定。
 
 ---
 
@@ -39,7 +39,11 @@
 | `P2C` GNSS 会合与移动甲板上方粗跟踪 | 已完成 | 实现 WGS84→local NED、GNSS 校验、会合目标限幅、移动中心搜索和超时回退 |
 | `P2D` GNSS—视觉接管与下降前恢复 | 已完成 | 实现完整相机外参、Marker local NED、线性接管、视觉跟踪、短时保持和长时 GNSS 恢复 |
 | `P3` 视觉状态估计与短时预测 | 已完成 | 实现三维常速度 Kalman Filter、离群/时间异常处理、位置速度协方差和受限短时预测 |
-| `P4` 安全高度移动甲板水平跟踪 | 代码与消息级验收完成 | 实现四种跟踪模式、预测位置目标、水平速度前馈、位置/速度/加速度限制和丢失恢复；真实 PX4 RMSE 待确认 |
+| `P4` 安全高度移动甲板水平跟踪 | 已完成 | 实现四种跟踪模式、预测位置目标、水平速度前馈、位置/速度/加速度限制和丢失恢复，并完成静止、匀速和正弦真实 PX4 SITL 验收 |
+| `P4.5` 实验可复现与视觉时间对齐 | 已完成 | 新增 rosbag 自动评测、统一 `use_sim_time`、PX4 位姿历史、PX4→ROS 时间映射、图像时刻位姿插值和四场景 SITL 回归 |
+| `P4.6` 正弦参数优化 | 已完成 | 完成预测时域、控制模式和相对速度阻尼扫描，识别固定增益无法兼顾匀速和换向 |
+| `P4.7` 加速度感知增益调度 | 已完成 | 统一参数在 0.4 m/s 匀速达到 `0.0554 m` RMSE、正弦达到 `0.3490 m` RMSE |
+| `P5A` 动态甲板与规则式着陆窗口 | 已完成 | S3/S4/S5、Marker 法向量倾角估计、迟滞窗口、`WAIT_LANDING_WINDOW` 和五场景 SITL 验收 |
 
 ### 2.2 当前已有 ROS 2 包
 
@@ -51,7 +55,7 @@ src/moving_deck_sim
 
 ### 2.3 当前控制器能力
 
-`aruco_precision_landing_cpp` 当前 P4 主路径已经具备：
+`aruco_precision_landing_cpp` 当前 P5A 主路径已经具备：
 
 - PX4 Offboard 预发布、自动切换 Offboard、解锁和起飞。
 - 使用 PX4 `VehicleLocalPosition.ref_lat/ref_lon/ref_alt` 建立 local NED 地理参考。
@@ -59,8 +63,10 @@ src/moving_deck_sim
 - 使用受限位置目标飞到移动甲板 GNSS 上方，并围绕实时船舶中心搜索 ArUco。
 - 使用 `T_local_ned_body_frd * T_body_frd_camera_optical * T_camera_optical_marker` 转换完整视觉位姿。
 - 检查 GNSS—视觉一致性、ArUco frame、采样顺序和视觉测量跳变。
-- 实现 `VISUAL_HANDOVER`、`TRACK_TARGET` 和 `RECOVER_TO_GNSS`。
-- 接管、视觉跟踪和恢复全程保持固定安全高度。
+- 实现 `VISUAL_HANDOVER`、`TRACK_TARGET`、`WAIT_LANDING_WINDOW` 和 `RECOVER_TO_GNSS`。
+- 使用 Marker 向上法向量估计甲板 roll、pitch 和总倾角。
+- 使用位置误差、相对速度、视觉年龄、预测有效性、甲板倾角和相对高度判断迟滞着陆窗口。
+- 接管、视觉跟踪、窗口等待和恢复全程保持固定安全高度。
 - 发布 GNSS 和 Marker local NED 调试位姿及当前引导来源。
 - 使用视觉采样时间运行三维常速度 Kalman Filter，估计甲板位置、速度和协方差。
 - 发布 `/landing/estimated_deck_odometry` 和 `/landing/predicted_deck_pose`。
@@ -73,11 +79,9 @@ src/moving_deck_sim
 
 ### 2.4 当前核心缺口
 
-- 图像采样时刻的 PX4 位姿历史插值和严格跨时间域对齐尚未实现。
-- P4 静止、匀速和正弦真实 PX4 仿真 RMSE、模式对比与增益调参尚未完成。
-- 没有基于相对速度和甲板姿态的着陆窗口。
-- 没有相对甲板高度控制。
-- 最终下降阶段过早退出 Offboard 水平跟踪。
+- 没有相对甲板高度参考和分阶段下降控制。
+- 没有窗口恶化时暂停下降、恢复高度和低高度视觉丢失策略。
+- 最终触地前仍缺少持续 Offboard 水平跟踪方案。
 - 没有触地确认、恢复、失败分类和批量评测。
 
 ---
@@ -1244,18 +1248,13 @@ docs/P4_MOVING_TARGET_TRACKING_PLAN.md
 docs/P4_MOVING_TARGET_TRACKING_VALIDATION.md
 ```
 
-## 真实 PX4 验收待办
+## P4.5 SITL 回归结果
 
-在进入 P5 前，用户需要依次验证：
+P4.5 已使用新的图像—PX4 位姿时间对齐实现完成静止、`0.2 m/s`、`0.4 m/s` 和
+XY 正弦四个场景回归。四轮均无丢标、无 GNSS 恢复、无时间同步或位姿历史告警；
+详细指标见 `docs/P4_5_TIME_ALIGNMENT_VALIDATION.md`。
 
-- 静止甲板。
-- `0.2 m/s` 匀速甲板。
-- `0.4 m/s` 匀速甲板。
-- XY 正弦甲板。
-- 原始视觉、估计+前馈、预测+前馈三种模式的水平 RMSE。
-- 实际速度、加速度、Marker 丢失次数和 GNSS 恢复次数。
-
-Ground Truth 只进入 rosbag 离线评测。
+Ground Truth 仍只进入 rosbag 离线评测。P5A 计划与验收见 `docs/P5A_DECK_DYNAMICS_AND_LANDING_WINDOW_PLAN.md` 和 `docs/P5A_DECK_DYNAMICS_AND_LANDING_WINDOW_VALIDATION.md`；P5B 计划与验收见 `docs/P5B_RELATIVE_DESCENT_PLAN.md` 和 `docs/P5B_RELATIVE_DESCENT_VALIDATION.md`。下一任务为 P5C：低高度垂直状态估计与误差标定。
 
 ## 建议标签
 

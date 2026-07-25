@@ -4,8 +4,10 @@
 #ifndef ARUCO_PRECISION_LANDING_CPP__MOVING_TARGET_TRACKING_CONTROLLER_HPP_
 #define ARUCO_PRECISION_LANDING_CPP__MOVING_TARGET_TRACKING_CONTROLLER_HPP_
 
+#include "aruco_precision_landing_cpp/adaptive_relative_velocity_gain.hpp"
 #include "aruco_precision_landing_cpp/target_state_estimator.hpp"
 
+#include <memory>
 #include <optional>
 #include <string>
 
@@ -52,6 +54,8 @@ struct MovingTargetTrackingParameters
   double max_position_target_step_m{0.20};
   double velocity_feedforward_gain{1.0};
   double relative_velocity_gain{0.25};
+  bool adaptive_relative_velocity_gain_enabled{false};
+  AdaptiveRelativeVelocityGainParameters adaptive_relative_velocity_gain_parameters{};
   double max_velocity_feedforward_mps{1.5};
   double max_velocity_feedforward_acceleration_mps2{1.0};
   double max_prediction_age_s{0.75};
@@ -80,6 +84,8 @@ struct MovingTargetTrackingCommand
 {
   Eigen::Vector2d position_target_xy{Eigen::Vector2d::Zero()};
   std::optional<Eigen::Vector2d> velocity_feedforward_xy;
+  std::optional<double> effective_relative_velocity_gain;
+  std::optional<Eigen::Vector2d> estimated_deck_acceleration_xy;
   TrackingControlMode mode{TrackingControlMode::kRawVisualPosition};
   bool used_prediction{false};
   bool used_short_loss_prediction{false};
@@ -127,13 +133,22 @@ private:
     const MovingTargetTrackingInput & input,
     bool & used_prediction) const;
   std::optional<Eigen::Vector2d> compute_velocity_feedforward(
-    const MovingTargetTrackingInput & input);
+    const MovingTargetTrackingInput & input,
+    double & effective_relative_velocity_gain,
+    std::optional<Eigen::Vector2d> & estimated_deck_acceleration_xy);
+  std::optional<AdaptiveRelativeVelocityGainOutput> update_adaptive_gain(
+    const TargetStateEstimate & estimate,
+    double fallback_dt_s);
   std::optional<Eigen::Vector2d> limit_position_target(
     const Eigen::Vector2d & current_target_xy,
     const Eigen::Vector2d & desired_target_xy,
     double dt_s) const;
 
   MovingTargetTrackingParameters parameters_;
+  std::unique_ptr<AdaptiveRelativeVelocityGain> adaptive_gain_scheduler_;
+  std::optional<AdaptiveRelativeVelocityGainOutput> last_adaptive_gain_output_;
+  double last_adaptive_estimate_sample_time_s_{0.0};
+  bool have_last_adaptive_estimate_sample_time_{false};
   Eigen::Vector2d last_velocity_feedforward_xy_{Eigen::Vector2d::Zero()};
   bool have_last_velocity_feedforward_{false};
 };

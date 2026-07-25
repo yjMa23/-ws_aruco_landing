@@ -26,6 +26,11 @@ add_library(
   src/target_state_estimator.cpp
   src/motion_predictor.cpp
   src/moving_target_tracking_controller.cpp
+  src/adaptive_relative_velocity_gain.cpp
+  src/vehicle_pose_history.cpp
+  src/landing_window.cpp
+  src/deck_attitude_estimator.cpp
+  src/relative_descent_controller.cpp
 )
 target_compile_features(aruco_landing_math PUBLIC cxx_std_17)
 target_include_directories(
@@ -125,6 +130,36 @@ if(BUILD_TESTING)
     test/moving_target_tracking_controller_test.cpp
   )
   target_link_libraries(moving_target_tracking_controller_test aruco_landing_math)
+
+  ament_add_gtest(
+    vehicle_pose_history_test
+    test/vehicle_pose_history_test.cpp
+  )
+  target_link_libraries(vehicle_pose_history_test aruco_landing_math)
+
+  ament_add_gtest(
+    adaptive_relative_velocity_gain_test
+    test/adaptive_relative_velocity_gain_test.cpp
+  )
+  target_link_libraries(adaptive_relative_velocity_gain_test aruco_landing_math)
+
+  ament_add_gtest(
+    landing_window_test
+    test/landing_window_test.cpp
+  )
+  target_link_libraries(landing_window_test aruco_landing_math)
+
+  ament_add_gtest(
+    deck_attitude_estimator_test
+    test/deck_attitude_estimator_test.cpp
+  )
+  target_link_libraries(deck_attitude_estimator_test aruco_landing_math)
+
+  ament_add_gtest(
+    relative_descent_controller_test
+    test/relative_descent_controller_test.cpp
+  )
+  target_link_libraries(relative_descent_controller_test aruco_landing_math)
 endif()
 
 ament_export_dependencies(Eigen3)

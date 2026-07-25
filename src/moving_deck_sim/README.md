@@ -1,6 +1,6 @@
 # moving_deck_sim
 
-`moving_deck_sim` 为 PX4 SITL + Gazebo Harmonic 提供可重复的水平移动甲板。
+`moving_deck_sim` 为 PX4 SITL + Gazebo Harmonic 提供可重复的水平、升沉、横摇/纵摇和组合移动甲板。
 甲板包含 `5 m × 5 m` 碰撞面和位于中心的 `DICT_4X4_50 / ID 0 / 0.5 m`
 Marker。运动使用 Gazebo 原生 `VelocityControl`，Ground Truth 使用原生
 `OdometryPublisher`，控制器不会接收该真值。
@@ -23,7 +23,7 @@ PX4；它会等待 Gazebo 就绪：
 cd ~/PX4-Autopilot
 PX4_GZ_STANDALONE=1 \
 PX4_GZ_WORLD=aruco \
-PX4_GZ_MODEL_POSE=0,0,2.2 \
+PX4_GZ_MODEL_POSE=-4,0,0.2 \
 make px4_sitl gz_x500_mono_cam_down
 ```
 
@@ -46,7 +46,7 @@ launch 会将 Gazebo Transport 固定到 `GZ_IP=127.0.0.1`，与 PX4 的 `gz_*` 
 ros2 launch moving_deck_sim moving_deck_sim.launch.py headless:=true
 ```
 
-选择静止或水平正弦配置：
+选择静止、水平正弦、升沉、横摇/纵摇或组合配置：
 
 ```bash
 SHARE=$(ros2 pkg prefix --share moving_deck_sim)
@@ -54,6 +54,12 @@ ros2 launch moving_deck_sim moving_deck_sim.launch.py \
   config_file:=$SHARE/config/static.yaml
 ros2 launch moving_deck_sim moving_deck_sim.launch.py \
   config_file:=$SHARE/config/sinusoidal_xy.yaml
+ros2 launch moving_deck_sim moving_deck_sim.launch.py \
+  config_file:=$SHARE/config/heave.yaml
+ros2 launch moving_deck_sim moving_deck_sim.launch.py \
+  config_file:=$SHARE/config/roll_pitch.yaml
+ros2 launch moving_deck_sim moving_deck_sim.launch.py \
+  config_file:=$SHARE/config/combined.yaml
 ```
 
 主 launch 默认同时启动理想船舶 GNSS。切换为含噪、延迟配置，或临时关闭 GNSS：
@@ -84,12 +90,17 @@ world 内部名称仍为 `aruco`，PX4 生成的相机话题继续使用：
 | --- | --- | --- |
 | `world_name` | string | Gazebo world 名称，默认 `aruco`。 |
 | `model_name` | string | 甲板模型名称，默认 `moving_deck`。 |
-| `scenario` | string | `S0_STATIC`、`S1_CONSTANT_XY` 或 `S2_SINUSOIDAL_XY`。 |
+| `scenario` | string | `S0_STATIC`、`S1_CONSTANT_XY`、`S2_SINUSOIDAL_XY`、`S3_HEAVE`、`S4_ROLL_PITCH` 或 `S5_COMBINED`。 |
 | `initial_position_enu` | double[3] | 甲板表面中心初始 ENU 位置，单位为米。 |
 | `velocity_xy` | double[2] | 匀速场景的 ENU XY 速度，单位为米每秒。 |
 | `amplitude_xy` | double[2] | 正弦场景的 ENU XY 幅值，单位为米。 |
 | `period_xy` | double[2] | 正弦场景的 XY 周期，单位为秒且必须大于零。 |
-| `update_rate_hz` | double | 速度指令更新频率，必须为有限正数。 |
+| `amplitude_z_m` | double | 升沉幅值，单位为米。 |
+| `period_z_s` | double | 升沉周期，单位为秒且必须大于零。 |
+| `initial_rpy_deg` | double[3] | 初始 roll/pitch/yaw，单位为度。 |
+| `amplitude_rpy_deg` | double[3] | 姿态正弦幅值，单位为度。 |
+| `period_rpy_s` | double[3] | 姿态正弦周期，单位为秒且必须大于零。 |
+| `update_rate_hz` | double | 线速度和角速度指令更新频率，必须为有限正数。 |
 | `random_seed` | int | Gazebo 随机种子，范围为 `uint32`。 |
 
 三个场景均从 `initial_position_enu` 开始。正弦场景使用：
@@ -110,9 +121,9 @@ Gazebo 实际甲板状态发布到：
 /simulation/deck/ground_truth  nav_msgs/msg/Odometry
 ```
 
-`header.frame_id` 为 `world`，`child_frame_id` 为 `moving_deck`，位置和速度均采用
-Gazebo ENU。启动或重置成功时会立即发布确定的初始状态；随后 `0.1 s` 内使用解析轨迹
-速度替换 Gazebo 位姿差分产生的瞬时尖峰，之后透传 Gazebo 原始里程计。该话题只能由
+`header.frame_id` 为 `world`，`child_frame_id` 为 `moving_deck`，位置、姿态和线速度采用
+Gazebo ENU，角速度使用机体系。启动或重置成功时会立即发布确定的初始状态；随后 `0.1 s`
+内使用解析线速度和角速度替换 Gazebo 位姿差分产生的瞬时尖峰，之后透传 Gazebo 原始里程计。该话题只能由
 后续评测器使用，禁止接入降落控制器。
 
 重置甲板：
@@ -171,5 +182,5 @@ colcon test --packages-select moving_deck_sim
 colcon test-result --verbose
 ```
 
-P1/P2B 当前只覆盖水平甲板运动与 GNSS 传感器特性，不包含升沉、横摇、纵摇、风扰、
-随机相位或视觉噪声。
+P5A 已覆盖静止、匀速、水平正弦、升沉、横摇/纵摇和组合运动。当前仍不包含复杂海浪
+水动力学、随机相位、风扰或视觉噪声模型。

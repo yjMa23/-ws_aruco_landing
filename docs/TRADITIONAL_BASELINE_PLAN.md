@@ -56,12 +56,11 @@
    - `P2C` GNSS 会合与移动甲板上方粗跟踪已完成，验收记录见 `docs/P2C_GNSS_RENDEZVOUS_VALIDATION.md`。
    - `P2D` ArUco 完整变换与 GNSS—视觉接管已完成，验收记录见 `docs/P2D_GNSS_VISION_HANDOVER_VALIDATION.md`。
    - `P3` 视觉状态估计与短时预测已完成，验收记录见 `docs/P3_VISUAL_STATE_ESTIMATION_VALIDATION.md`。
-   - `P4` 移动甲板安全高度水平跟踪代码、单元测试和消息级验收已完成，真实 PX4 跟踪 RMSE 待确认，见 `docs/P4_MOVING_TARGET_TRACKING_VALIDATION.md`。
+   - `P4` 移动甲板安全高度水平跟踪代码、测试和真实 PX4 SITL 验收已完成，见 `docs/P4_MOVING_TARGET_TRACKING_VALIDATION.md`。
+   - `P4.5` 离线评测、统一仿真时钟、PX4 位姿历史、图像采样时刻时间对齐和四场景完整 SITL 回归已完成，见 `docs/P4_5_TIME_ALIGNMENT_VALIDATION.md`。
 
 5. 当前控制器主要缺口如下：
-   - 图像采样时刻的 PX4 位姿历史插值和严格跨时间域对齐尚未实现。
-   - P4 静止、匀速和正弦真实 PX4 跟踪 RMSE、模式对比与增益调参尚未完成。
-   - 尚未估计甲板姿态动态和角速度。
+   - P4.7 加速度感知增益调度已完成，下一步需要估计和使用甲板姿态动态与角速度。
    - 下降速度固定，没有基于相对速度、甲板倾角和可见性的着陆窗口。
    - `FINAL_LAND` 过早切换 PX4 自动降落，移动甲板继续运动时可能失去水平跟踪。
    - 没有触地检测、批量实验、指标统计和失败原因归类。
@@ -1067,16 +1066,14 @@ colcon test-result --verbose
 
 ## 16. Codex 下一步默认任务
 
-`P0`～`P3` 已完成；`P4` 代码、单元测试和消息级验收已完成。当前不直接实现 MPC、强化学习或 P5。
+`P0`～`P5A` 已完成。当前不直接实现 MPC 或强化学习，进入 `P5B：相对高度分阶段下降`。
 
 下一项任务：
 
 ```text
-在真实 PX4 SITL + Gazebo 相机链路中完成 P4 跟踪验收，
-依次运行静止、0.2 m/s、0.4 m/s 和 XY 正弦移动甲板，
-对比 RAW_VISUAL_POSITION、ESTIMATED_POSITION_VELOCITY_FF 和 PREDICTED_POSITION_VELOCITY_FF，
-使用 rosbag 离线统计水平位置 RMSE、相对速度 RMSE、最大误差、Marker 丢失和 GNSS 恢复次数，
-根据结果调节前馈增益、相对速度增益、速度/加速度限制和预测时域。
+实现纯 C++ relative_descent_controller，
+使用预测甲板 z 与无人机 local NED z 计算相对高度，
+只有着陆窗口打开时降低相对高度参考，窗口恶化时暂停，严重失效时恢复高度，
+第一版最低只下降到 0.5 m 安全测试高度，持续保持 P4.7 水平跟踪，
+不接旧 DESCEND_WITH_TRACKING，不触地、不 Land、不 Disarm。
 ```
-
-用户确认 P4 真实跟踪正常后，再进入 `P5：规则式着陆窗口与下降`。

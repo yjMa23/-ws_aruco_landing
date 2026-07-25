@@ -404,12 +404,16 @@ enable_auto_land: false
 - P4 NED East `0.4 m/s` 连续输入估计速度约 `0.4 m/s`，水平 East 前馈约 `0.5 m/s`。
 - PX4 `TrajectorySetpoint.velocity` 与 `/landing/tracking_velocity_setpoint` 一致。
 - 视觉长时丢失后按 `TRACK_TARGET → RECOVER_TO_GNSS → ACQUIRE_ARUCO` 恢复。
+- P4.5 位姿历史完成位置线性插值、四元数 Slerp、端点保持、时间异常拒绝和历史裁剪测试。
+- P4 rosbag 可通过 `scripts/evaluate_p4_bag.py` 自动复现统一指标。
+- P5A S3/S4/S5、Marker 法向量姿态估计和规则式着陆窗口测试。
+- P5A rosbag 可通过 `scripts/evaluate_p5a_bag.py` 自动检查窗口、倾角和高度安全边界。
 
 完整工作区结果：
 
 ```text
 3 packages finished
-93 tests
+154 tests
 0 errors
 0 failures
 0 skipped
@@ -417,13 +421,18 @@ enable_auto_land: false
 
 尚未声明通过：
 
-- 真实 PX4 动力学下的 GNSS—视觉联合飞行。
-- 匀速和正弦移动甲板的视觉跟踪 RMSE。
-- 真实图像和 PX4 动力学下的估计位置/速度 RMSE。
-- 图像采样时刻的 PX4 位姿插值和严格时间对齐。
-- P4 静止、`0.2 m/s`、`0.4 m/s` 和正弦甲板的真实 PX4 跟踪 RMSE。
-- `RAW_VISUAL_POSITION`、估计前馈和预测前馈模式的定量对比与调参。
-- 着陆窗口、下降、触地和批量评测。
+- 低高度垂直状态估计与 Marker z 动态偏差标定。
+- `0.50 m` 以下最终下降、触地检测和批量评测。
+
+已新增：
+
+- P4.6 正弦参数扫描，固定高阻尼最佳 RMSE `0.3439 m`；
+- P4.7 加速度感知增益调度，统一参数下匀速 RMSE `0.0554 m`、正弦 RMSE `0.3490 m`；
+- `/landing/effective_relative_velocity_gain` 和 `/landing/estimated_deck_acceleration` 调试话题；
+- P5A 升沉/倾斜/组合甲板、`WAIT_LANDING_WINDOW` 和窗口调试话题；
+- 静止、匀速、升沉、倾斜和组合五场景 P5A PX4 SITL 验收；
+- P5B 静止、0.4 m/s 匀速和升沉甲板 `0.50 m` 安全下降验收；
+- P5B 恢复到 `2.0 m`、恢复后重新授权锁止和组合运动负向验证。
 
 当前 Gazebo 环境仍有相机插件问题：
 

@@ -457,7 +457,7 @@ elevation = 0 m
 当前启动命令将 PX4 模型放在：
 
 ```text
-PX4_GZ_MODEL_POSE=0,0,2.2
+PX4_GZ_MODEL_POSE=-4,0,0.2
 ```
 
 注意以下两个原点不是同一个概念：
@@ -478,10 +478,11 @@ ref_alt = first_uav_gps_alt
 
 因此 PX4 local NED 原点对应无人机启动时的首个 GPS 参考位置，而不是无条件等于 Gazebo world 原点。
 
-当前无人机启动时 ENU 水平位置为 `(0,0)`，所以在默认启动配置下：
+当前无人机启动时 ENU 水平位置为 `(-4,0)`，所以在默认启动配置下：
 
-- Gazebo spherical origin 与 PX4 local origin 的水平经纬度近似一致。
-- PX4 `ref_alt` 对应无人机初始海拔，包含约 `2.2 m` 的启动高度。
+- PX4 local origin 相对 Gazebo spherical origin 有明确水平偏移，评测 Ground Truth
+  必须先转换到 PX4 local NED，不能直接交换 ENU/NED 分量。
+- PX4 `ref_alt` 对应无人机初始海拔，包含约 `0.2 m` 的启动高度。
 - Gazebo `world_enu.z = 0` 与 PX4 `local_ned.z = 0` 不能直接视为同一垂直原点。
 
 如果后续改变 `PX4_GZ_MODEL_POSE` 的 x/y，或者设置 `PX4_HOME_LAT/LON/ALT`，上述水平重合关系也会改变。
@@ -563,9 +564,7 @@ D = -ENU.z
 
 ## 11. 时间戳契约
 
-本阶段只冻结坐标语义，不实现跨传感器插值。
-
-后续实现必须区分：
+P4.5 已实现图像与 PX4 位姿的跨时间域对齐。实现仍必须严格区分：
 
 - 图像采样时间。
 - ArUco 位姿采样时间。
@@ -575,7 +574,10 @@ D = -ENU.z
 
 坐标模块本身只处理同一时刻的几何量，不自行猜测时间对齐。
 
-P2D 接入视觉时，必须确认 ROS 与 PX4 时间域后再决定最近邻或插值策略。
+当前控制器使用 `VehicleOdometry.timestamp` 估计 PX4→ROS 时钟偏移，使用
+`timestamp_sample` 得到机体位姿采样时刻，并在 `VehiclePoseHistory` 中对位置执行
+线性插值、对姿态执行四元数 Slerp。ArUco 坐标变换只允许使用图像采样时刻对应的
+机体位姿；时间戳为零、历史不足或超出端点保持范围时拒绝视觉帧。
 
 ---
 
@@ -762,5 +764,9 @@ Marker local NED ≈ [0.0, 0.0, 0.2] m
 docs/P2D_GNSS_VISION_HANDOVER_VALIDATION.md
 ```
 
-当前仍未解决图像采样时刻与 PX4 位姿的时间对齐。P3 将基于视觉消息采样时间实现状态
-估计、异常 `dt` 处理和短时运动预测。
+P4.5 已解决图像采样时刻与 PX4 位姿的时间对齐。详细实现与验收边界见：
+
+```text
+docs/P4_5_EXECUTION_PLAN.md
+docs/P4_5_TIME_ALIGNMENT_VALIDATION.md
+```

@@ -110,6 +110,8 @@ MovingTargetTrackingController::MovingTargetTrackingController(
   {
     throw std::invalid_argument("Tracking velocity gains must be finite and non-negative");
   }
+  adaptive_gain_scheduler_ = std::make_unique<AdaptiveRelativeVelocityGain>(
+    parameters_.adaptive_relative_velocity_gain_parameters);
 }
 
 std::optional<MovingTargetTrackingCommand> MovingTargetTrackingController::compute(
@@ -144,19 +146,29 @@ std::optional<MovingTargetTrackingCommand> MovingTargetTrackingController::compu
     parameters_.mode == TrackingControlMode::kPredictedPositionVelocityFeedforward;
 
   std::optional<Eigen::Vector2d> velocity_feedforward;
+  std::optional<double> effective_relative_velocity_gain;
+  std::optional<Eigen::Vector2d> estimated_deck_acceleration_xy;
   if (velocity_feedforward_mode) {
-    velocity_feedforward = compute_velocity_feedforward(input);
+    double effective_gain = parameters_.relative_velocity_gain;
+    velocity_feedforward = compute_velocity_feedforward(
+      input, effective_gain, estimated_deck_acceleration_xy);
     if (!velocity_feedforward.has_value()) {
       return std::nullopt;
     }
+    effective_relative_velocity_gain = effective_gain;
   } else {
     have_last_velocity_feedforward_ = false;
     last_velocity_feedforward_xy_.setZero();
+    adaptive_gain_scheduler_->reset();
+    last_adaptive_gain_output_.reset();
+    have_last_adaptive_estimate_sample_time_ = false;
   }
 
   MovingTargetTrackingCommand command;
   command.position_target_xy = *limited_position;
   command.velocity_feedforward_xy = velocity_feedforward;
+  command.effective_relative_velocity_gain = effective_relative_velocity_gain;
+  command.estimated_deck_acceleration_xy = estimated_deck_acceleration_xy;
   command.mode = parameters_.mode;
   command.used_prediction = used_prediction;
   command.used_short_loss_prediction = used_prediction && !input.visual_fresh;
@@ -167,6 +179,10 @@ void MovingTargetTrackingController::reset()
 {
   last_velocity_feedforward_xy_.setZero();
   have_last_velocity_feedforward_ = false;
+  adaptive_gain_scheduler_->reset();
+  last_adaptive_gain_output_.reset();
+  last_adaptive_estimate_sample_time_s_ = 0.0;
+  have_last_adaptive_estimate_sample_time_ = false;
 }
 
 TrackingControlMode MovingTargetTrackingController::mode() const
@@ -218,7 +234,9 @@ MovingTargetTrackingController::select_position_reference(
 
 std::optional<Eigen::Vector2d>
 MovingTargetTrackingController::compute_velocity_feedforward(
-  const MovingTargetTrackingInput & input)
+  const MovingTargetTrackingInput & input,
+  double & effective_relative_velocity_gain,
+  std::optional<Eigen::Vector2d> & estimated_deck_acceleration_xy)
 {
   if (!input.estimated_state.has_value() ||
     !estimate_is_finite(*input.estimated_state))
@@ -228,14 +246,25 @@ MovingTargetTrackingController::compute_velocity_feedforward(
 
   const Eigen::Vector2d deck_velocity_xy =
     input.estimated_state->velocity_ned.head<2>();
+  effective_relative_velocity_gain = parameters_.relative_velocity_gain;
+  estimated_deck_acceleration_xy.reset();
+  if (parameters_.adaptive_relative_velocity_gain_enabled) {
+    const auto adaptive_output = update_adaptive_gain(*input.estimated_state, input.dt_s);
+    if (!adaptive_output.has_value()) {
+      return std::nullopt;
+    }
+    effective_relative_velocity_gain = adaptive_output->gain;
+    estimated_deck_acceleration_xy = adaptive_output->filtered_acceleration_xy;
+  }
+
   Eigen::Vector2d desired_velocity =
     parameters_.velocity_feedforward_gain * deck_velocity_xy;
 
-  if (parameters_.relative_velocity_gain > 0.0) {
+  if (effective_relative_velocity_gain > 0.0) {
     if (!input.uav_velocity_xy.has_value() || !input.uav_velocity_xy->allFinite()) {
       return std::nullopt;
     }
-    desired_velocity += parameters_.relative_velocity_gain *
+    desired_velocity += effective_relative_velocity_gain *
       (deck_velocity_xy - *input.uav_velocity_xy);
   }
 
@@ -265,6 +294,48 @@ MovingTargetTrackingController::compute_velocity_feedforward(
   last_velocity_feedforward_xy_ = limited_velocity;
   have_last_velocity_feedforward_ = true;
   return limited_velocity;
+}
+
+std::optional<AdaptiveRelativeVelocityGainOutput>
+MovingTargetTrackingController::update_adaptive_gain(
+  const TargetStateEstimate & estimate,
+  double fallback_dt_s)
+{
+  if (!estimate_is_finite(estimate) || !is_positive_finite(fallback_dt_s)) {
+    return std::nullopt;
+  }
+
+  const Eigen::Vector2d deck_velocity_xy = estimate.velocity_ned.head<2>();
+  if (!have_last_adaptive_estimate_sample_time_) {
+    const auto output = adaptive_gain_scheduler_->update(deck_velocity_xy, fallback_dt_s);
+    if (!output.has_value()) {
+      return std::nullopt;
+    }
+    last_adaptive_estimate_sample_time_s_ = estimate.sample_time_s;
+    have_last_adaptive_estimate_sample_time_ = true;
+    last_adaptive_gain_output_ = output;
+    return output;
+  }
+
+  const double estimate_dt_s =
+    estimate.sample_time_s - last_adaptive_estimate_sample_time_s_;
+  if (estimate_dt_s < 0.0) {
+    adaptive_gain_scheduler_->reset();
+    last_adaptive_gain_output_.reset();
+    have_last_adaptive_estimate_sample_time_ = false;
+    return update_adaptive_gain(estimate, fallback_dt_s);
+  }
+  if (estimate_dt_s == 0.0) {
+    return last_adaptive_gain_output_;
+  }
+
+  const auto output = adaptive_gain_scheduler_->update(deck_velocity_xy, estimate_dt_s);
+  if (!output.has_value()) {
+    return std::nullopt;
+  }
+  last_adaptive_estimate_sample_time_s_ = estimate.sample_time_s;
+  last_adaptive_gain_output_ = output;
+  return output;
 }
 
 std::optional<Eigen::Vector2d>

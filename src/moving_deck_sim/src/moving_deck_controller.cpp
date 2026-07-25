@@ -28,6 +28,7 @@ namespace
 
 constexpr unsigned int kGazeboServiceTimeoutMs = 1000;
 constexpr double kResetOdometryGuardDurationS = 0.1;
+constexpr double kDegreesToRadians = 3.14159265358979323846 / 180.0;
 
 template<std::size_t Size>
 std::array<double, Size> to_array(
@@ -43,6 +44,37 @@ std::array<double, Size> to_array(
     result[index] = values[index];
   }
   return result;
+}
+
+template<std::size_t Size>
+std::array<double, Size> degrees_to_radians(
+  const std::array<double, Size> & degrees)
+{
+  std::array<double, Size> radians{};
+  for (std::size_t index = 0; index < Size; ++index) {
+    radians[index] = degrees[index] * kDegreesToRadians;
+  }
+  return radians;
+}
+
+std::array<double, 4> quaternion_wxyz_from_rpy(
+  const std::array<double, 3> & rpy)
+{
+  const double half_roll = 0.5 * rpy[0];
+  const double half_pitch = 0.5 * rpy[1];
+  const double half_yaw = 0.5 * rpy[2];
+  const double cr = std::cos(half_roll);
+  const double sr = std::sin(half_roll);
+  const double cp = std::cos(half_pitch);
+  const double sp = std::sin(half_pitch);
+  const double cy = std::cos(half_yaw);
+  const double sy = std::sin(half_yaw);
+  return {
+    cr * cp * cy + sr * sp * sy,
+    sr * cp * cy - cr * sp * sy,
+    cr * sp * cy + sr * cp * sy,
+    cr * cp * sy - sr * sp * cy,
+  };
 }
 
 }  // namespace
@@ -74,6 +106,14 @@ public:
       "amplitude_xy", {1.0, 0.5});
     const auto period_xy = declare_parameter<std::vector<double>>(
       "period_xy", {10.0, 6.0});
+    const double amplitude_z_m = declare_parameter<double>("amplitude_z_m", 0.0);
+    const double period_z_s = declare_parameter<double>("period_z_s", 8.0);
+    const auto initial_rpy_deg = declare_parameter<std::vector<double>>(
+      "initial_rpy_deg", {0.0, 0.0, 0.0});
+    const auto amplitude_rpy_deg = declare_parameter<std::vector<double>>(
+      "amplitude_rpy_deg", {0.0, 0.0, 0.0});
+    const auto period_rpy_s = declare_parameter<std::vector<double>>(
+      "period_rpy_s", {8.0, 6.0, 10.0});
     update_rate_hz_ = declare_parameter<double>("update_rate_hz", 50.0);
     const std::int64_t random_seed = declare_parameter<std::int64_t>("random_seed", 1);
 
@@ -93,8 +133,16 @@ public:
     parameters.velocity_xy = to_array<2>(velocity_xy, "velocity_xy");
     parameters.amplitude_xy = to_array<2>(amplitude_xy, "amplitude_xy");
     parameters.period_xy = to_array<2>(period_xy, "period_xy");
+    parameters.amplitude_z_m = amplitude_z_m;
+    parameters.period_z_s = period_z_s;
+    parameters.initial_rpy_rad = degrees_to_radians(
+      to_array<3>(initial_rpy_deg, "initial_rpy_deg"));
+    parameters.amplitude_rpy_rad = degrees_to_radians(
+      to_array<3>(amplitude_rpy_deg, "amplitude_rpy_deg"));
+    parameters.period_rpy_s = to_array<3>(period_rpy_s, "period_rpy_s");
     parameters.update_rate_hz = update_rate_hz_;
     initial_position_enu_ = parameters.initial_position_enu;
+    initial_rpy_rad_ = parameters.initial_rpy_rad;
     motion_profile_ = std::make_unique<MotionProfile>(parameters);
 
     velocity_publisher_ = gz_node_.Advertise<gz::msgs::Twist>(
@@ -146,7 +194,11 @@ private:
     request.mutable_position()->set_x(initial_position_enu_[0]);
     request.mutable_position()->set_y(initial_position_enu_[1]);
     request.mutable_position()->set_z(initial_position_enu_[2]);
-    request.mutable_orientation()->set_w(1.0);
+    const auto orientation = quaternion_wxyz_from_rpy(initial_rpy_rad_);
+    request.mutable_orientation()->set_w(orientation[0]);
+    request.mutable_orientation()->set_x(orientation[1]);
+    request.mutable_orientation()->set_y(orientation[2]);
+    request.mutable_orientation()->set_z(orientation[3]);
     gz::msgs::Boolean response;
     bool result = false;
     const bool executed = gz_node_.Request(
@@ -155,15 +207,18 @@ private:
     return executed && result && response.data();
   }
 
-  void publish_velocity(const std::array<double, 3> & velocity_enu)
+  void publish_motion_command(const MotionSample & sample)
   {
     gz::msgs::Twist command;
-    command.mutable_linear()->set_x(velocity_enu[0]);
-    command.mutable_linear()->set_y(velocity_enu[1]);
-    command.mutable_linear()->set_z(velocity_enu[2]);
+    command.mutable_linear()->set_x(sample.velocity_enu[0]);
+    command.mutable_linear()->set_y(sample.velocity_enu[1]);
+    command.mutable_linear()->set_z(sample.velocity_enu[2]);
+    command.mutable_angular()->set_x(sample.angular_velocity_body[0]);
+    command.mutable_angular()->set_y(sample.angular_velocity_body[1]);
+    command.mutable_angular()->set_z(sample.angular_velocity_body[2]);
     if (!velocity_publisher_.Publish(command)) {
       RCLCPP_WARN_THROTTLE(
-        get_logger(), *get_clock(), 5000, "Failed to publish Gazebo deck velocity");
+        get_logger(), *get_clock(), 5000, "Failed to publish Gazebo deck motion command");
     }
   }
 
@@ -177,16 +232,23 @@ private:
     ground_truth.pose.pose.position.x = sample.position_enu[0];
     ground_truth.pose.pose.position.y = sample.position_enu[1];
     ground_truth.pose.pose.position.z = sample.position_enu[2];
-    ground_truth.pose.pose.orientation.w = 1.0;
+    const auto orientation = quaternion_wxyz_from_rpy(sample.orientation_rpy_enu);
+    ground_truth.pose.pose.orientation.w = orientation[0];
+    ground_truth.pose.pose.orientation.x = orientation[1];
+    ground_truth.pose.pose.orientation.y = orientation[2];
+    ground_truth.pose.pose.orientation.z = orientation[3];
     ground_truth.twist.twist.linear.x = sample.velocity_enu[0];
     ground_truth.twist.twist.linear.y = sample.velocity_enu[1];
     ground_truth.twist.twist.linear.z = sample.velocity_enu[2];
+    ground_truth.twist.twist.angular.x = sample.angular_velocity_body[0];
+    ground_truth.twist.twist.angular.y = sample.angular_velocity_body[1];
+    ground_truth.twist.twist.angular.z = sample.angular_velocity_body[2];
     ground_truth_publisher_->publish(ground_truth);
   }
 
   bool initialize_deck()
   {
-    publish_velocity({0.0, 0.0, 0.0});
+    publish_motion_command(MotionSample{});
     if (!request_seed() || !request_initial_pose()) {
       initialized_ = false;
       return false;
@@ -199,7 +261,7 @@ private:
     reset_count.data = ++reset_count_;
     reset_count_publisher_->publish(reset_count);
 
-    publish_velocity(motion_profile_->sample(0.0).velocity_enu);
+    publish_motion_command(motion_profile_->sample(0.0));
     publish_initial_ground_truth();
     return true;
   }
@@ -226,7 +288,7 @@ private:
     }
 
     const double elapsed_s = (current_time - trajectory_start_).seconds();
-    publish_velocity(motion_profile_->sample(elapsed_s).velocity_enu);
+    publish_motion_command(motion_profile_->sample(elapsed_s));
   }
 
   void on_raw_ground_truth(const nav_msgs::msg::Odometry::SharedPtr message)
@@ -249,9 +311,9 @@ private:
       ground_truth.twist.twist.linear.x = sample.velocity_enu[0];
       ground_truth.twist.twist.linear.y = sample.velocity_enu[1];
       ground_truth.twist.twist.linear.z = sample.velocity_enu[2];
-      ground_truth.twist.twist.angular.x = 0.0;
-      ground_truth.twist.twist.angular.y = 0.0;
-      ground_truth.twist.twist.angular.z = 0.0;
+      ground_truth.twist.twist.angular.x = sample.angular_velocity_body[0];
+      ground_truth.twist.twist.angular.y = sample.angular_velocity_body[1];
+      ground_truth.twist.twist.angular.z = sample.angular_velocity_body[2];
     }
     ground_truth_publisher_->publish(ground_truth);
   }
@@ -261,6 +323,7 @@ private:
   double update_rate_hz_{50.0};
   std::uint32_t random_seed_{1};
   std::array<double, 3> initial_position_enu_{};
+  std::array<double, 3> initial_rpy_rad_{};
   std::unique_ptr<MotionProfile> motion_profile_;
 
   gz::transport::Node gz_node_;

@@ -20,6 +20,7 @@ namespace
 {
 
 constexpr double kMinimumQuaternionNorm = 1.0e-6;
+constexpr double kDegreesToRadians = 3.14159265358979323846 / 180.0;
 
 bool is_positive_finite(double value)
 {
@@ -110,6 +111,22 @@ Px4ArucoLandingNode::Px4ArucoLandingNode()
   tracking_parameters.velocity_feedforward_gain =
     tracking_velocity_feedforward_gain_;
   tracking_parameters.relative_velocity_gain = tracking_relative_velocity_gain_;
+  tracking_parameters.adaptive_relative_velocity_gain_enabled =
+    tracking_adaptive_relative_velocity_gain_enabled_;
+  tracking_parameters.adaptive_relative_velocity_gain_parameters.min_gain =
+    tracking_adaptive_relative_velocity_gain_min_;
+  tracking_parameters.adaptive_relative_velocity_gain_parameters.max_gain =
+    tracking_adaptive_relative_velocity_gain_max_;
+  tracking_parameters.adaptive_relative_velocity_gain_parameters.
+  acceleration_low_threshold_mps2 =
+    tracking_adaptive_acceleration_low_threshold_mps2_;
+  tracking_parameters.adaptive_relative_velocity_gain_parameters.
+  acceleration_high_threshold_mps2 =
+    tracking_adaptive_acceleration_high_threshold_mps2_;
+  tracking_parameters.adaptive_relative_velocity_gain_parameters.max_acceleration_mps2 =
+    tracking_adaptive_max_acceleration_mps2_;
+  tracking_parameters.adaptive_relative_velocity_gain_parameters.acceleration_filter_gain =
+    tracking_adaptive_acceleration_filter_gain_;
   tracking_parameters.max_velocity_feedforward_mps =
     tracking_max_velocity_feedforward_mps_;
   tracking_parameters.max_velocity_feedforward_acceleration_mps2 =
@@ -117,6 +134,55 @@ Px4ArucoLandingNode::Px4ArucoLandingNode()
   tracking_parameters.max_prediction_age_s = tracking_max_prediction_age_s_;
   tracking_controller_ =
     std::make_unique<MovingTargetTrackingController>(tracking_parameters);
+
+  VehiclePoseHistoryParameters pose_history_parameters;
+  pose_history_parameters.history_duration_s = vehicle_pose_history_duration_s_;
+  pose_history_parameters.max_endpoint_hold_s =
+    vehicle_pose_history_max_endpoint_hold_s_;
+  vehicle_pose_history_ =
+    std::make_unique<VehiclePoseHistory>(pose_history_parameters);
+
+  DeckAttitudeEstimatorParameters attitude_parameters;
+  attitude_parameters.filter_gain = deck_attitude_filter_gain_;
+  attitude_parameters.minimum_upward_normal_component =
+    deck_attitude_minimum_upward_normal_component_;
+  deck_attitude_estimator_ =
+    std::make_unique<DeckAttitudeEstimator>(attitude_parameters);
+
+  LandingWindowParameters landing_window_parameters;
+  landing_window_parameters.enter_horizontal_error_m =
+    landing_window_enter_horizontal_error_m_;
+  landing_window_parameters.exit_horizontal_error_m =
+    landing_window_exit_horizontal_error_m_;
+  landing_window_parameters.enter_relative_speed_mps =
+    landing_window_enter_relative_speed_mps_;
+  landing_window_parameters.exit_relative_speed_mps =
+    landing_window_exit_relative_speed_mps_;
+  landing_window_parameters.enter_max_tilt_rad =
+    landing_window_enter_max_tilt_deg_ * kDegreesToRadians;
+  landing_window_parameters.exit_max_tilt_rad =
+    landing_window_exit_max_tilt_deg_ * kDegreesToRadians;
+  landing_window_parameters.max_visual_age_s = landing_window_max_visual_age_s_;
+  landing_window_parameters.minimum_relative_height_m =
+    landing_window_minimum_relative_height_m_;
+  landing_window_parameters.maximum_relative_height_m =
+    landing_window_maximum_relative_height_m_;
+  landing_window_parameters.required_duration_s = landing_window_required_duration_s_;
+  landing_window_ = std::make_unique<LandingWindow>(landing_window_parameters);
+
+  RelativeDescentParameters descent_parameters;
+  descent_parameters.minimum_test_height_m = descent_minimum_test_height_m_;
+  descent_parameters.fast_height_threshold_m = descent_fast_height_threshold_m_;
+  descent_parameters.slow_height_threshold_m = descent_slow_height_threshold_m_;
+  descent_parameters.fast_rate_mps = descent_fast_rate_mps_;
+  descent_parameters.medium_rate_mps = descent_medium_rate_mps_;
+  descent_parameters.slow_rate_mps = descent_slow_rate_mps_;
+  descent_parameters.recovery_height_m = descent_recovery_height_m_;
+  descent_parameters.recovery_rate_mps = descent_recovery_rate_mps_;
+  descent_parameters.max_reference_tracking_error_m =
+    descent_max_reference_tracking_error_m_;
+  relative_descent_controller_ =
+    std::make_unique<RelativeDescentController>(descent_parameters);
 
   body_camera_pose_.translation = Eigen::Vector3d{
     camera_translation_frd_m_[0],
@@ -215,12 +281,74 @@ void Px4ArucoLandingNode::declare_and_load_parameters()
     "tracking.velocity_feedforward_gain", 1.0);
   tracking_relative_velocity_gain_ = declare_parameter<double>(
     "tracking.relative_velocity_gain", 0.25);
+  tracking_adaptive_relative_velocity_gain_enabled_ = declare_parameter<bool>(
+    "tracking.adaptive_relative_velocity_gain.enabled", true);
+  tracking_adaptive_relative_velocity_gain_min_ = declare_parameter<double>(
+    "tracking.adaptive_relative_velocity_gain.min_gain", 0.25);
+  tracking_adaptive_relative_velocity_gain_max_ = declare_parameter<double>(
+    "tracking.adaptive_relative_velocity_gain.max_gain", 1.2);
+  tracking_adaptive_acceleration_low_threshold_mps2_ = declare_parameter<double>(
+    "tracking.adaptive_relative_velocity_gain.acceleration_low_threshold_mps2", 0.05);
+  tracking_adaptive_acceleration_high_threshold_mps2_ = declare_parameter<double>(
+    "tracking.adaptive_relative_velocity_gain.acceleration_high_threshold_mps2", 0.35);
+  tracking_adaptive_max_acceleration_mps2_ = declare_parameter<double>(
+    "tracking.adaptive_relative_velocity_gain.max_acceleration_mps2", 1.50);
+  tracking_adaptive_acceleration_filter_gain_ = declare_parameter<double>(
+    "tracking.adaptive_relative_velocity_gain.acceleration_filter_gain", 0.20);
   tracking_max_velocity_feedforward_mps_ = declare_parameter<double>(
     "tracking.max_velocity_feedforward_mps", 1.5);
   tracking_max_velocity_feedforward_acceleration_mps2_ = declare_parameter<double>(
     "tracking.max_velocity_feedforward_acceleration_mps2", 1.0);
   tracking_max_prediction_age_s_ = declare_parameter<double>(
     "tracking.max_prediction_age_s", 0.75);
+  deck_attitude_filter_gain_ = declare_parameter<double>(
+    "deck_attitude.filter_gain", 0.20);
+  deck_attitude_minimum_upward_normal_component_ = declare_parameter<double>(
+    "deck_attitude.minimum_upward_normal_component", 0.50);
+  landing_window_enter_horizontal_error_m_ = declare_parameter<double>(
+    "landing_window.enter_horizontal_error_m", 0.15);
+  landing_window_exit_horizontal_error_m_ = declare_parameter<double>(
+    "landing_window.exit_horizontal_error_m", 0.25);
+  landing_window_enter_relative_speed_mps_ = declare_parameter<double>(
+    "landing_window.enter_relative_speed_mps", 0.15);
+  landing_window_exit_relative_speed_mps_ = declare_parameter<double>(
+    "landing_window.exit_relative_speed_mps", 0.25);
+  landing_window_enter_max_tilt_deg_ = declare_parameter<double>(
+    "landing_window.enter_max_tilt_deg", 5.0);
+  landing_window_exit_max_tilt_deg_ = declare_parameter<double>(
+    "landing_window.exit_max_tilt_deg", 8.0);
+  landing_window_max_visual_age_s_ = declare_parameter<double>(
+    "landing_window.max_visual_age_s", 0.20);
+  landing_window_minimum_relative_height_m_ = declare_parameter<double>(
+    "landing_window.minimum_relative_height_m", 0.20);
+  landing_window_maximum_relative_height_m_ = declare_parameter<double>(
+    "landing_window.maximum_relative_height_m", 6.00);
+  landing_window_required_duration_s_ = declare_parameter<double>(
+    "landing_window.required_duration_s", 1.00);
+  relative_descent_enabled_ = declare_parameter<bool>("descent.enabled", false);
+  descent_minimum_test_height_m_ = declare_parameter<double>(
+    "descent.minimum_test_height_m", 0.50);
+  descent_fast_height_threshold_m_ = declare_parameter<double>(
+    "descent.fast_height_threshold_m", 2.00);
+  descent_slow_height_threshold_m_ = declare_parameter<double>(
+    "descent.slow_height_threshold_m", 0.80);
+  descent_fast_rate_mps_ = declare_parameter<double>("descent.fast_rate_mps", 0.30);
+  descent_medium_rate_mps_ = declare_parameter<double>("descent.medium_rate_mps", 0.15);
+  descent_slow_rate_mps_ = declare_parameter<double>("descent.slow_rate_mps", 0.05);
+  descent_recovery_height_m_ = declare_parameter<double>(
+    "descent.recovery_height_m", 2.00);
+  descent_recovery_rate_mps_ = declare_parameter<double>(
+    "descent.recovery_rate_mps", 0.30);
+  descent_max_reference_tracking_error_m_ = declare_parameter<double>(
+    "descent.max_reference_tracking_error_m", 0.50);
+  vehicle_pose_history_duration_s_ = declare_parameter<double>(
+    "vehicle_pose_history.history_duration_s", 2.0);
+  vehicle_pose_history_max_endpoint_hold_s_ = declare_parameter<double>(
+    "vehicle_pose_history.max_endpoint_hold_s", 0.03);
+  px4_clock_offset_filter_gain_ = declare_parameter<double>(
+    "vehicle_pose_history.clock_offset_filter_gain", 0.05);
+  px4_clock_offset_max_jump_s_ = declare_parameter<double>(
+    "vehicle_pose_history.max_clock_offset_jump_s", 0.10);
   offboard_prestream_count_ = declare_parameter<int>("offboard_prestream_count", 20);
   stable_detect_count_ = declare_parameter<int>("stable_detect_count", 10);
   camera_x_to_body_y_sign_ =
@@ -326,6 +454,10 @@ void Px4ArucoLandingNode::validate_parameters() const
     "tracking.max_velocity_feedforward_acceleration_mps2",
     tracking_max_velocity_feedforward_acceleration_mps2_);
   require_positive("tracking.max_prediction_age_s", tracking_max_prediction_age_s_);
+  require_positive(
+    "vehicle_pose_history.history_duration_s", vehicle_pose_history_duration_s_);
+  require_positive(
+    "vehicle_pose_history.max_clock_offset_jump_s", px4_clock_offset_max_jump_s_);
   require_positive("max_xy_step", max_xy_step_);
   require_positive("center_xy_threshold", center_xy_threshold_);
   require_positive("max_descent_rate", max_descent_rate_);
@@ -393,6 +525,72 @@ void Px4ArucoLandingNode::validate_parameters() const
     tracking_relative_velocity_gain_ < 0.0)
   {
     throw std::invalid_argument("Tracking velocity gains must be finite and non-negative");
+  }
+  AdaptiveRelativeVelocityGainParameters adaptive_gain_parameters;
+  adaptive_gain_parameters.min_gain = tracking_adaptive_relative_velocity_gain_min_;
+  adaptive_gain_parameters.max_gain = tracking_adaptive_relative_velocity_gain_max_;
+  adaptive_gain_parameters.acceleration_low_threshold_mps2 =
+    tracking_adaptive_acceleration_low_threshold_mps2_;
+  adaptive_gain_parameters.acceleration_high_threshold_mps2 =
+    tracking_adaptive_acceleration_high_threshold_mps2_;
+  adaptive_gain_parameters.max_acceleration_mps2 =
+    tracking_adaptive_max_acceleration_mps2_;
+  adaptive_gain_parameters.acceleration_filter_gain =
+    tracking_adaptive_acceleration_filter_gain_;
+  static_cast<void>(AdaptiveRelativeVelocityGain(adaptive_gain_parameters));
+
+  DeckAttitudeEstimatorParameters attitude_parameters;
+  attitude_parameters.filter_gain = deck_attitude_filter_gain_;
+  attitude_parameters.minimum_upward_normal_component =
+    deck_attitude_minimum_upward_normal_component_;
+  static_cast<void>(DeckAttitudeEstimator(attitude_parameters));
+
+  LandingWindowParameters landing_window_parameters;
+  landing_window_parameters.enter_horizontal_error_m =
+    landing_window_enter_horizontal_error_m_;
+  landing_window_parameters.exit_horizontal_error_m =
+    landing_window_exit_horizontal_error_m_;
+  landing_window_parameters.enter_relative_speed_mps =
+    landing_window_enter_relative_speed_mps_;
+  landing_window_parameters.exit_relative_speed_mps =
+    landing_window_exit_relative_speed_mps_;
+  landing_window_parameters.enter_max_tilt_rad =
+    landing_window_enter_max_tilt_deg_ * kDegreesToRadians;
+  landing_window_parameters.exit_max_tilt_rad =
+    landing_window_exit_max_tilt_deg_ * kDegreesToRadians;
+  landing_window_parameters.max_visual_age_s = landing_window_max_visual_age_s_;
+  landing_window_parameters.minimum_relative_height_m =
+    landing_window_minimum_relative_height_m_;
+  landing_window_parameters.maximum_relative_height_m =
+    landing_window_maximum_relative_height_m_;
+  landing_window_parameters.required_duration_s = landing_window_required_duration_s_;
+  static_cast<void>(LandingWindow(landing_window_parameters));
+
+  RelativeDescentParameters descent_parameters;
+  descent_parameters.minimum_test_height_m = descent_minimum_test_height_m_;
+  descent_parameters.fast_height_threshold_m = descent_fast_height_threshold_m_;
+  descent_parameters.slow_height_threshold_m = descent_slow_height_threshold_m_;
+  descent_parameters.fast_rate_mps = descent_fast_rate_mps_;
+  descent_parameters.medium_rate_mps = descent_medium_rate_mps_;
+  descent_parameters.slow_rate_mps = descent_slow_rate_mps_;
+  descent_parameters.recovery_height_m = descent_recovery_height_m_;
+  descent_parameters.recovery_rate_mps = descent_recovery_rate_mps_;
+  descent_parameters.max_reference_tracking_error_m =
+    descent_max_reference_tracking_error_m_;
+  static_cast<void>(RelativeDescentController(descent_parameters));
+
+  if (!std::isfinite(vehicle_pose_history_max_endpoint_hold_s_) ||
+    vehicle_pose_history_max_endpoint_hold_s_ < 0.0 ||
+    vehicle_pose_history_max_endpoint_hold_s_ > vehicle_pose_history_duration_s_)
+  {
+    throw std::invalid_argument(
+            "vehicle_pose_history.max_endpoint_hold_s must be finite, non-negative, and not exceed history_duration_s");
+  }
+  if (!std::isfinite(px4_clock_offset_filter_gain_) ||
+    px4_clock_offset_filter_gain_ <= 0.0 || px4_clock_offset_filter_gain_ > 1.0)
+  {
+    throw std::invalid_argument(
+            "vehicle_pose_history.clock_offset_filter_gain must be within (0, 1]");
   }
   if (!tracking_control_mode_from_string(tracking_mode_string_).has_value()) {
     throw std::invalid_argument("Parameter 'tracking.mode' is unsupported");
@@ -529,6 +727,35 @@ void Px4ArucoLandingNode::create_ros_interfaces()
     create_publisher<geometry_msgs::msg::TwistStamped>(
     "/landing/tracking_velocity_setpoint",
     rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  effective_relative_velocity_gain_pub_ = create_publisher<std_msgs::msg::Float64>(
+    "/landing/effective_relative_velocity_gain",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  estimated_deck_acceleration_pub_ =
+    create_publisher<geometry_msgs::msg::TwistStamped>(
+    "/landing/estimated_deck_acceleration",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  estimated_deck_attitude_pub_ =
+    create_publisher<geometry_msgs::msg::Vector3Stamped>(
+    "/landing/estimated_deck_attitude",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  landing_window_open_pub_ = create_publisher<std_msgs::msg::Bool>(
+    "/landing/window_open",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  landing_window_reject_reasons_pub_ = create_publisher<std_msgs::msg::UInt32>(
+    "/landing/window_reject_reasons",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  landing_window_satisfied_duration_pub_ = create_publisher<std_msgs::msg::Float64>(
+    "/landing/window_satisfied_duration",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  relative_height_pub_ = create_publisher<std_msgs::msg::Float64>(
+    "/landing/relative_height",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  relative_height_reference_pub_ = create_publisher<std_msgs::msg::Float64>(
+    "/landing/relative_height_reference",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  descent_phase_pub_ = create_publisher<std_msgs::msg::String>(
+    "/landing/descent_phase",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
   guidance_source_pub_ = create_publisher<std_msgs::msg::String>(
     "/landing/guidance_source",
     rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
@@ -550,19 +777,25 @@ void Px4ArucoLandingNode::aruco_pose_callback(
   const int64_t sample_stamp_ns =
     static_cast<int64_t>(msg->header.stamp.sec) * 1000000000LL +
     static_cast<int64_t>(msg->header.stamp.nanosec);
-  if (sample_stamp_ns > 0 && have_last_aruco_sample_stamp_ &&
-    sample_stamp_ns <= last_aruco_sample_stamp_ns_)
+  if (sample_stamp_ns <= 0) {
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 5000,
+      "Rejected ArUco pose because the image sample timestamp is invalid");
+    return;
+  }
+  if (have_last_aruco_sample_stamp_ && sample_stamp_ns <= last_aruco_sample_stamp_ns_)
   {
     RCLCPP_WARN_THROTTLE(
       get_logger(), *get_clock(), 5000, "Rejected repeated or out-of-order ArUco sample");
     return;
   }
 
+  const double sample_time_s = static_cast<double>(sample_stamp_ns) * 1.0e-9;
   aruco_pose_ = *msg;
   have_aruco_pose_ = true;
 
   Pose3d marker_pose_ned;
-  if (!compute_marker_pose_ned(marker_pose_ned)) {
+  if (!compute_marker_pose_ned(sample_time_s, marker_pose_ned)) {
     RCLCPP_WARN_THROTTLE(
       get_logger(), *get_clock(), 5000,
       "Rejected ArUco pose because full camera-to-NED transform failed");
@@ -572,12 +805,21 @@ void Px4ArucoLandingNode::aruco_pose_callback(
   const bool visual_state =
     state_ == LandingState::ACQUIRE_ARUCO ||
     state_ == LandingState::VISUAL_HANDOVER ||
-    state_ == LandingState::TRACK_TARGET;
+    state_ == LandingState::TRACK_TARGET ||
+    state_ == LandingState::WAIT_LANDING_WINDOW ||
+    state_ == LandingState::DESCEND ||
+    state_ == LandingState::TEST_HEIGHT_HOLD ||
+    state_ == LandingState::RECOVER_CLIMB;
   if (!visual_state) {
     return;
   }
 
-  if (state_ != LandingState::TRACK_TARGET) {
+  if (state_ != LandingState::TRACK_TARGET &&
+    state_ != LandingState::WAIT_LANDING_WINDOW &&
+    state_ != LandingState::DESCEND &&
+    state_ != LandingState::TEST_HEIGHT_HOLD &&
+    state_ != LandingState::RECOVER_CLIMB)
+  {
     const auto gnss_estimate = gnss_guidance_->estimate(receipt_time.seconds());
     if (!gnss_estimate.has_value() ||
       !visual_guidance_->consistent_with_gnss(
@@ -599,8 +841,8 @@ void Px4ArucoLandingNode::aruco_pose_callback(
     return;
   }
 
-  const double sample_time_s = sample_stamp_ns > 0 ?
-    static_cast<double>(sample_stamp_ns) * 1.0e-9 : receipt_time.seconds();
+  update_estimated_deck_attitude(marker_pose_ned.rotation, receipt_time);
+
   const TargetStateUpdateResult estimator_result =
     target_state_estimator_->update(marker_pose_ned.translation, sample_time_s);
   switch (estimator_result.status) {
@@ -642,10 +884,8 @@ void Px4ArucoLandingNode::aruco_pose_callback(
   have_marker_pose_ned_ = true;
   last_aruco_pose_time_ = receipt_time;
 
-  if (sample_stamp_ns > 0) {
-    last_aruco_sample_stamp_ns_ = sample_stamp_ns;
-    have_last_aruco_sample_stamp_ = true;
-  }
+  last_aruco_sample_stamp_ns_ = sample_stamp_ns;
+  have_last_aruco_sample_stamp_ = true;
 }
 
 void Px4ArucoLandingNode::aruco_visible_callback(
@@ -748,11 +988,47 @@ void Px4ArucoLandingNode::vehicle_local_position_callback(
 void Px4ArucoLandingNode::vehicle_odometry_callback(
   const px4_msgs::msg::VehicleOdometry::SharedPtr msg)
 {
+  const rclcpp::Time receipt_time = get_clock()->now();
   vehicle_odometry_ = *msg;
   have_vehicle_odometry_ = true;
 
-  if (quaternion_is_valid(vehicle_odometry_.q.data())) {
-    current_yaw_ = quaternion_to_yaw(vehicle_odometry_.q.data());
+  const bool position_valid =
+    std::isfinite(vehicle_odometry_.position[0]) &&
+    std::isfinite(vehicle_odometry_.position[1]) &&
+    std::isfinite(vehicle_odometry_.position[2]);
+  if (vehicle_odometry_.pose_frame !=
+      px4_msgs::msg::VehicleOdometry::POSE_FRAME_NED ||
+    !position_valid || !quaternion_is_valid(vehicle_odometry_.q.data()))
+  {
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 5000,
+      "Rejected PX4 odometry sample with invalid NED pose");
+    return;
+  }
+
+  current_yaw_ = quaternion_to_yaw(vehicle_odometry_.q.data());
+  const auto sample_time_s = update_px4_to_ros_time_offset(*msg, receipt_time);
+  if (!sample_time_s.has_value()) {
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 5000,
+      "Rejected PX4 odometry sample because timestamp synchronization failed");
+    return;
+  }
+
+  const Pose3d local_body_pose{
+    Eigen::Vector3d{
+      vehicle_odometry_.position[0],
+      vehicle_odometry_.position[1],
+      vehicle_odometry_.position[2]},
+    Eigen::Quaterniond{
+      vehicle_odometry_.q[0],
+      vehicle_odometry_.q[1],
+      vehicle_odometry_.q[2],
+      vehicle_odometry_.q[3]}};
+  if (!vehicle_pose_history_->add_sample(local_body_pose, *sample_time_s)) {
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 5000,
+      "Rejected PX4 odometry sample because pose history insertion failed");
   }
 }
 
@@ -768,6 +1044,8 @@ void Px4ArucoLandingNode::control_timer_callback()
   dt = std::min(dt, 0.5);
 
   clear_velocity_feedforward();
+  landing_window_result_valid_ = false;
+  relative_descent_debug_valid_ = false;
   publish_offboard_control_mode();
   run_state_machine(now, dt);
   publish_trajectory_setpoint();
@@ -778,6 +1056,11 @@ void Px4ArucoLandingNode::control_timer_callback()
   publish_estimated_deck_odometry(now);
   publish_predicted_deck_pose(now);
   publish_tracking_velocity_setpoint(now);
+  publish_effective_relative_velocity_gain();
+  publish_estimated_deck_acceleration(now);
+  publish_estimated_deck_attitude();
+  publish_landing_window_debug();
+  publish_relative_descent_debug();
   publish_guidance_source();
 }
 
@@ -1042,6 +1325,10 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
       }
 
     case LandingState::TRACK_TARGET:
+    case LandingState::WAIT_LANDING_WINDOW:
+    case LandingState::DESCEND:
+    case LandingState::TEST_HEIGHT_HOLD:
+    case LandingState::RECOVER_CLIMB:
       {
         const auto visual_position = visual_guidance_->visual_position(now.seconds());
         const bool visual_valid = visual_position.has_value() && marker_is_fresh(now);
@@ -1051,7 +1338,7 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
         if (loss_state == VisualLossState::kLongLoss) {
           transition_to(
             LandingState::RECOVER_TO_GNSS,
-            "visual pose was lost for the long timeout before descent");
+            "visual pose was lost for the long timeout during visual guidance");
           break;
         }
 
@@ -1064,6 +1351,7 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
           estimate.has_value() && have_estimator_measurement_receipt_time_ ?
           now.seconds() - last_estimator_state_receipt_time_s_ :
           std::numeric_limits<double>::infinity();
+        std::optional<Eigen::Vector3d> predicted_position_ned;
         std::optional<Eigen::Vector2d> predicted_position_xy;
         if (estimate.has_value() &&
           std::isfinite(estimator_state_age_s) && estimator_state_age_s >= 0.0)
@@ -1071,6 +1359,7 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
           const auto prediction = motion_predictor_->predict(
             *estimate, estimator_state_age_s);
           if (prediction.has_value()) {
+            predicted_position_ned = prediction->position_ned;
             predicted_position_xy = prediction->position_ned.head<2>();
           }
         }
@@ -1086,16 +1375,27 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
         tracking_input.predicted_position_xy = predicted_position_xy;
         tracking_input.uav_position_xy =
           Eigen::Vector2d{local_position_.x, local_position_.y};
+        std::optional<Eigen::Vector2d> uav_velocity_xy;
         if (local_position_.v_xy_valid &&
           std::isfinite(local_position_.vx) &&
           std::isfinite(local_position_.vy))
         {
-          tracking_input.uav_velocity_xy =
-            Eigen::Vector2d{local_position_.vx, local_position_.vy};
+          uav_velocity_xy = Eigen::Vector2d{local_position_.vx, local_position_.vy};
+          tracking_input.uav_velocity_xy = uav_velocity_xy;
         }
         tracking_input.visual_fresh = visual_valid;
         tracking_input.estimate_age_s = valid_measurement_age_s;
         tracking_input.dt_s = dt;
+
+        if (state_ != LandingState::TRACK_TARGET) {
+          update_landing_window(
+            now,
+            visual_valid,
+            valid_measurement_age_s,
+            estimate,
+            predicted_position_xy,
+            uav_velocity_xy);
+        }
 
         const auto command = tracking_controller_->compute(tracking_input);
         if (!command.has_value()) {
@@ -1103,23 +1403,94 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
           RCLCPP_WARN_THROTTLE(
             get_logger(), *get_clock(), 5000,
             "Moving target tracking input unavailable; holding the latest safe position target");
+          const bool relative_descent_state =
+            state_ == LandingState::DESCEND ||
+            state_ == LandingState::TEST_HEIGHT_HOLD ||
+            state_ == LandingState::RECOVER_CLIMB ||
+            (state_ == LandingState::WAIT_LANDING_WINDOW &&
+            relative_descent_enabled_ && relative_descent_controller_->initialized());
           set_target(
             target_valid_ ? target_x_ : local_position_.x,
             target_valid_ ? target_y_ : local_position_.y,
-            -rendezvous_altitude_m_,
+            relative_descent_state && target_valid_ ? target_z_ : -rendezvous_altitude_m_,
             current_yaw_);
           break;
+        }
+
+        double vertical_target_z = -rendezvous_altitude_m_;
+        std::optional<RelativeDescentOutput> descent_output;
+        const bool descent_state =
+          state_ == LandingState::DESCEND ||
+          state_ == LandingState::TEST_HEIGHT_HOLD ||
+          state_ == LandingState::RECOVER_CLIMB;
+        const bool may_start_descent =
+          state_ == LandingState::WAIT_LANDING_WINDOW &&
+          relative_descent_enabled_ &&
+          !descent_reentry_locked_ &&
+          landing_window_result_valid_ &&
+          landing_window_result_.window_open;
+        const bool continue_relative_height_hold =
+          state_ == LandingState::WAIT_LANDING_WINDOW &&
+          relative_descent_enabled_ &&
+          relative_descent_controller_->initialized();
+        if (descent_state || may_start_descent || continue_relative_height_hold) {
+          descent_output = update_relative_descent(
+            estimate, predicted_position_ned, visual_valid, dt);
+          if (descent_output.has_value() && predicted_position_ned.has_value()) {
+            vertical_target_z =
+              predicted_position_ned->z() - descent_output->height_reference_m;
+          } else if (target_valid_) {
+            vertical_target_z = target_z_;
+          }
         }
 
         set_target(
           command->position_target_xy.x(),
           command->position_target_xy.y(),
-          -rendezvous_altitude_m_,
+          vertical_target_z,
           current_yaw_);
         if (command->velocity_feedforward_xy.has_value()) {
           set_velocity_feedforward(
             command->velocity_feedforward_xy->x(),
             command->velocity_feedforward_xy->y());
+        }
+        set_adaptive_tracking_debug(
+          command->effective_relative_velocity_gain,
+          command->estimated_deck_acceleration_xy);
+
+        if (state_ == LandingState::TRACK_TARGET) {
+          transition_to(
+            LandingState::WAIT_LANDING_WINDOW,
+            "visual tracking command is valid; begin landing-window evaluation");
+        } else if (may_start_descent && descent_output.has_value()) {
+          transition_to(
+            LandingState::DESCEND,
+            "landing window opened and relative descent is explicitly enabled");
+        } else if (state_ == LandingState::DESCEND && descent_output.has_value()) {
+          if (descent_output->phase == RelativeDescentPhase::kTestHeightHold) {
+            transition_to(
+              LandingState::TEST_HEIGHT_HOLD,
+              "minimum P5B test height reached");
+          } else if (descent_output->phase == RelativeDescentPhase::kRecovering) {
+            transition_to(
+              LandingState::RECOVER_CLIMB,
+              "relative descent controller requested recovery climb");
+          }
+        } else if (state_ == LandingState::TEST_HEIGHT_HOLD &&
+          descent_output.has_value() &&
+          descent_output->phase == RelativeDescentPhase::kRecovering)
+        {
+          transition_to(
+            LandingState::RECOVER_CLIMB,
+            "landing window became unsafe at the test height");
+        } else if (state_ == LandingState::RECOVER_CLIMB &&
+          descent_output.has_value() &&
+          descent_output->phase == RelativeDescentPhase::kPaused &&
+          descent_output->height_reference_m >= descent_recovery_height_m_)
+        {
+          transition_to(
+            LandingState::WAIT_LANDING_WINDOW,
+            "recovery height reached; wait for a new landing window");
         }
         break;
       }
@@ -1292,15 +1663,30 @@ void Px4ArucoLandingNode::transition_to(
     return;
   }
 
+  const LandingState previous_state = state_;
   RCLCPP_INFO(
     get_logger(),
     "Landing state: %s -> %s; reason: %s",
-    state_name(state_),
+    state_name(previous_state),
     state_name(new_state),
     reason);
   state_ = new_state;
-  clear_velocity_feedforward();
-  tracking_controller_->reset();
+
+  const auto is_visual_tracking_state = [](LandingState state) {
+      return state == LandingState::TRACK_TARGET ||
+             state == LandingState::WAIT_LANDING_WINDOW ||
+             state == LandingState::DESCEND ||
+             state == LandingState::TEST_HEIGHT_HOLD ||
+             state == LandingState::RECOVER_CLIMB;
+    };
+  const bool preserve_visual_tracking_history =
+    is_visual_tracking_state(previous_state) && is_visual_tracking_state(new_state);
+  if (!preserve_visual_tracking_history) {
+    clear_velocity_feedforward();
+    tracking_controller_->reset();
+    relative_descent_controller_->reset();
+    relative_descent_debug_valid_ = false;
+  }
 
   switch (state_) {
     case LandingState::OFFBOARD_PRE_STREAM:
@@ -1327,8 +1713,12 @@ void Px4ArucoLandingNode::transition_to(
       have_marker_pose_ned_ = false;
       have_last_aruco_sample_stamp_ = false;
       have_estimator_measurement_receipt_time_ = false;
+      have_estimated_deck_attitude_ = false;
       visual_guidance_->reset();
       target_state_estimator_->reset();
+      deck_attitude_estimator_->reset();
+      landing_window_->reset();
+      landing_window_result_valid_ = false;
       set_target(
         local_position_.x,
         local_position_.y,
@@ -1352,8 +1742,12 @@ void Px4ArucoLandingNode::transition_to(
       have_marker_pose_ned_ = false;
       have_last_aruco_sample_stamp_ = false;
       have_estimator_measurement_receipt_time_ = false;
+      have_estimated_deck_attitude_ = false;
       visual_guidance_->reset();
       target_state_estimator_->reset();
+      deck_attitude_estimator_->reset();
+      landing_window_->reset();
+      landing_window_result_valid_ = false;
       set_target(
         target_valid_ ? target_x_ : local_position_.x,
         target_valid_ ? target_y_ : local_position_.y,
@@ -1371,11 +1765,39 @@ void Px4ArucoLandingNode::transition_to(
       break;
 
     case LandingState::TRACK_TARGET:
+      landing_window_->reset();
+      landing_window_result_valid_ = false;
+      descent_reentry_locked_ = false;
       set_target(
         target_valid_ ? target_x_ : local_position_.x,
         target_valid_ ? target_y_ : local_position_.y,
         -rendezvous_altitude_m_,
         current_yaw_);
+      break;
+
+    case LandingState::WAIT_LANDING_WINDOW:
+      landing_window_->reset();
+      if (previous_state == LandingState::RECOVER_CLIMB) {
+        descent_reentry_locked_ = true;
+        RCLCPP_WARN(
+          get_logger(),
+          "Relative descent re-entry is locked after recovery; a new visual handover is required");
+      } else {
+        relative_descent_controller_->reset();
+        relative_descent_debug_valid_ = false;
+      }
+      landing_window_result_valid_ = false;
+      set_target(
+        target_valid_ ? target_x_ : local_position_.x,
+        target_valid_ ? target_y_ : local_position_.y,
+        previous_state == LandingState::RECOVER_CLIMB && target_valid_ ?
+        target_z_ : -rendezvous_altitude_m_,
+        current_yaw_);
+      break;
+
+    case LandingState::DESCEND:
+    case LandingState::TEST_HEIGHT_HOLD:
+    case LandingState::RECOVER_CLIMB:
       break;
 
     case LandingState::RECOVER_TO_GNSS:
@@ -1384,8 +1806,12 @@ void Px4ArucoLandingNode::transition_to(
       have_marker_pose_ned_ = false;
       have_last_aruco_sample_stamp_ = false;
       have_estimator_measurement_receipt_time_ = false;
+      have_estimated_deck_attitude_ = false;
       visual_guidance_->reset();
       target_state_estimator_->reset();
+      deck_attitude_estimator_->reset();
+      landing_window_->reset();
+      landing_window_result_valid_ = false;
       set_target(
         target_valid_ ? target_x_ : local_position_.x,
         target_valid_ ? target_y_ : local_position_.y,
@@ -1419,7 +1845,11 @@ void Px4ArucoLandingNode::transition_to(
 
     case LandingState::ABORT:
       have_estimator_measurement_receipt_time_ = false;
+      have_estimated_deck_attitude_ = false;
       target_state_estimator_->reset();
+      deck_attitude_estimator_->reset();
+      landing_window_->reset();
+      landing_window_result_valid_ = false;
       set_target(
         local_position_.x,
         local_position_.y,
@@ -1475,24 +1905,77 @@ bool Px4ArucoLandingNode::should_retry_command(const rclcpp::Time & now) const
          (now - last_command_time_).seconds() >= command_retry_interval_;
 }
 
-bool Px4ArucoLandingNode::compute_marker_pose_ned(Pose3d & marker_pose_ned) const
+std::optional<double> Px4ArucoLandingNode::update_px4_to_ros_time_offset(
+  const px4_msgs::msg::VehicleOdometry & odometry,
+  const rclcpp::Time & receipt_time)
 {
-  if (!have_vehicle_odometry_ || !have_aruco_pose_ ||
-    vehicle_odometry_.pose_frame != px4_msgs::msg::VehicleOdometry::POSE_FRAME_NED)
+  const uint64_t sample_timestamp_us =
+    odometry.timestamp_sample > 0U ? odometry.timestamp_sample : odometry.timestamp;
+  const uint64_t sync_timestamp_us =
+    odometry.timestamp > 0U ? odometry.timestamp : sample_timestamp_us;
+  const double receipt_time_s = receipt_time.seconds();
+  if (sample_timestamp_us == 0U || sync_timestamp_us == 0U ||
+    !std::isfinite(receipt_time_s) || receipt_time_s <= 0.0)
   {
+    return std::nullopt;
+  }
+
+  if (have_last_time_sync_observation_) {
+    const bool ros_time_reset = receipt_time_s < last_time_sync_receipt_s_;
+    const bool px4_time_reset = sync_timestamp_us < last_px4_sync_timestamp_us_;
+    if (ros_time_reset || px4_time_reset) {
+      vehicle_pose_history_->reset();
+      have_px4_to_ros_time_offset_ = false;
+      have_last_time_sync_observation_ = false;
+    } else if (sync_timestamp_us == last_px4_sync_timestamp_us_) {
+      return std::nullopt;
+    }
+  }
+
+  const double observed_offset_s =
+    receipt_time_s - static_cast<double>(sync_timestamp_us) * 1.0e-6;
+  if (!std::isfinite(observed_offset_s)) {
+    return std::nullopt;
+  }
+
+  if (!have_px4_to_ros_time_offset_) {
+    px4_to_ros_time_offset_s_ = observed_offset_s;
+    have_px4_to_ros_time_offset_ = true;
+  } else {
+    const double offset_error_s = observed_offset_s - px4_to_ros_time_offset_s_;
+    if (std::abs(offset_error_s) > px4_clock_offset_max_jump_s_) {
+      // 时钟发生明显跳变时清空旧历史，以免跨时间域插值。
+      vehicle_pose_history_->reset();
+      px4_to_ros_time_offset_s_ = observed_offset_s;
+    } else {
+      px4_to_ros_time_offset_s_ +=
+        px4_clock_offset_filter_gain_ * offset_error_s;
+    }
+  }
+
+  last_time_sync_receipt_s_ = receipt_time_s;
+  last_px4_sync_timestamp_us_ = sync_timestamp_us;
+  have_last_time_sync_observation_ = true;
+
+  const double sample_time_s =
+    static_cast<double>(sample_timestamp_us) * 1.0e-6 + px4_to_ros_time_offset_s_;
+  return std::isfinite(sample_time_s) && sample_time_s > 0.0 ?
+         std::optional<double>(sample_time_s) : std::nullopt;
+}
+
+bool Px4ArucoLandingNode::compute_marker_pose_ned(
+  double image_sample_time_s,
+  Pose3d & marker_pose_ned) const
+{
+  if (!have_aruco_pose_ || !std::isfinite(image_sample_time_s)) {
     return false;
   }
 
-  const Pose3d local_body_pose{
-    Eigen::Vector3d{
-      vehicle_odometry_.position[0],
-      vehicle_odometry_.position[1],
-      vehicle_odometry_.position[2]},
-    Eigen::Quaterniond{
-      vehicle_odometry_.q[0],
-      vehicle_odometry_.q[1],
-      vehicle_odometry_.q[2],
-      vehicle_odometry_.q[3]}};
+  const auto local_body_pose = vehicle_pose_history_->lookup(image_sample_time_s);
+  if (!local_body_pose.has_value()) {
+    return false;
+  }
+
   const Pose3d camera_marker_pose{
     Eigen::Vector3d{
       aruco_pose_.pose.position.x,
@@ -1505,7 +1988,7 @@ bool Px4ArucoLandingNode::compute_marker_pose_ned(Pose3d & marker_pose_ned) cons
       aruco_pose_.pose.orientation.z}};
 
   const auto transformed = transform_marker_to_local_ned(
-    local_body_pose,
+    *local_body_pose,
     PoseReferenceFrame::kLocalNed,
     body_camera_pose_,
     camera_marker_pose);
@@ -1536,6 +2019,133 @@ bool Px4ArucoLandingNode::compute_local_marker_error(
   return std::isfinite(error_north) && std::isfinite(error_east);
 }
 
+void Px4ArucoLandingNode::update_estimated_deck_attitude(
+  const Eigen::Quaterniond & marker_to_ned_rotation,
+  const rclcpp::Time & sample_time)
+{
+  const auto estimate = deck_attitude_estimator_->update(marker_to_ned_rotation);
+  if (!estimate.has_value()) {
+    have_estimated_deck_attitude_ = false;
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 5000,
+      "Rejected Marker attitude because its upward normal is invalid or flipped");
+    return;
+  }
+
+  estimated_deck_attitude_ = *estimate;
+  last_estimated_deck_attitude_time_ = sample_time;
+  have_estimated_deck_attitude_ = true;
+}
+
+void Px4ArucoLandingNode::update_landing_window(
+  const rclcpp::Time & now,
+  bool visual_valid,
+  double visual_age_s,
+  const std::optional<TargetStateEstimate> & estimate,
+  const std::optional<Eigen::Vector2d> & predicted_position_xy,
+  const std::optional<Eigen::Vector2d> & uav_velocity_xy)
+{
+  LandingWindowInput input;
+  input.visual_fresh = visual_valid;
+  input.visual_age_s = visual_age_s;
+  input.prediction_valid =
+    predicted_position_xy.has_value() && predicted_position_xy->allFinite();
+  input.now_s = now.seconds();
+
+  const bool estimate_valid =
+    estimate.has_value() &&
+    estimate->position_ned.allFinite() &&
+    estimate->velocity_ned.allFinite() &&
+    estimate->covariance.allFinite() &&
+    std::isfinite(estimate->sample_time_s);
+  input.estimate_valid = estimate_valid;
+
+  if (estimate_valid) {
+    input.horizontal_error_m =
+      (estimate->position_ned.head<2>() -
+      Eigen::Vector2d{local_position_.x, local_position_.y}).norm();
+    input.relative_height_m = estimate->position_ned.z() - local_position_.z;
+    if (uav_velocity_xy.has_value() && uav_velocity_xy->allFinite()) {
+      input.horizontal_relative_speed_mps =
+        (estimate->velocity_ned.head<2>() - *uav_velocity_xy).norm();
+    } else {
+      input.horizontal_relative_speed_mps = std::numeric_limits<double>::infinity();
+    }
+  } else {
+    input.horizontal_error_m = std::numeric_limits<double>::infinity();
+    input.horizontal_relative_speed_mps = std::numeric_limits<double>::infinity();
+    input.relative_height_m = std::numeric_limits<double>::quiet_NaN();
+  }
+
+  const bool attitude_fresh =
+    have_estimated_deck_attitude_ &&
+    now >= last_estimated_deck_attitude_time_ &&
+    (now - last_estimated_deck_attitude_time_).seconds() <=
+    landing_window_max_visual_age_s_;
+  if (attitude_fresh) {
+    input.deck_roll_rad = estimated_deck_attitude_.roll_rad;
+    input.deck_pitch_rad = estimated_deck_attitude_.pitch_rad;
+  } else {
+    input.deck_roll_rad = std::numeric_limits<double>::quiet_NaN();
+    input.deck_pitch_rad = std::numeric_limits<double>::quiet_NaN();
+  }
+
+  landing_window_result_ = landing_window_->update(input);
+  landing_window_result_valid_ = true;
+}
+
+std::optional<RelativeDescentOutput> Px4ArucoLandingNode::update_relative_descent(
+  const std::optional<TargetStateEstimate> & estimate,
+  const std::optional<Eigen::Vector3d> & predicted_position_ned,
+  bool visual_valid,
+  double dt)
+{
+  const bool estimate_valid =
+    estimate.has_value() &&
+    estimate->position_ned.allFinite() &&
+    estimate->velocity_ned.allFinite();
+  const bool prediction_valid =
+    predicted_position_ned.has_value() && predicted_position_ned->allFinite();
+
+  RelativeDescentInput input;
+  input.vertical_reference_valid =
+    estimate_valid && prediction_valid && std::isfinite(local_position_.z);
+  if (estimate_valid && std::isfinite(local_position_.z)) {
+    input.current_relative_height_m = estimate->position_ned.z() - local_position_.z;
+  } else {
+    input.current_relative_height_m = std::numeric_limits<double>::quiet_NaN();
+  }
+  input.window_open =
+    landing_window_result_valid_ && landing_window_result_.window_open;
+
+  const std::uint32_t hard_failure_mask =
+    landing_window_reason_mask(LandingWindowRejectReason::kVisualUnavailable) |
+    landing_window_reason_mask(LandingWindowRejectReason::kVisualTooOld) |
+    landing_window_reason_mask(LandingWindowRejectReason::kEstimateInvalid) |
+    landing_window_reason_mask(LandingWindowRejectReason::kPredictionInvalid) |
+    landing_window_reason_mask(LandingWindowRejectReason::kRelativeHeight) |
+    landing_window_reason_mask(LandingWindowRejectReason::kInvalidTime);
+  const bool hard_window_failure =
+    !landing_window_result_valid_ ||
+    (landing_window_result_.reject_reasons & hard_failure_mask) != 0U;
+  input.severe_failure =
+    state_ == LandingState::RECOVER_CLIMB ||
+    !visual_valid || hard_window_failure;
+  input.dt_s = dt;
+
+  const auto output = relative_descent_controller_->update(input);
+  if (!output.has_value()) {
+    relative_descent_debug_valid_ = false;
+    return std::nullopt;
+  }
+
+  relative_height_m_ = input.current_relative_height_m;
+  relative_height_reference_m_ = output->height_reference_m;
+  relative_descent_phase_ = output->phase;
+  relative_descent_debug_valid_ = true;
+  return output;
+}
+
 void Px4ArucoLandingNode::set_target(double x, double y, double z, double yaw)
 {
   target_x_ = x;
@@ -1560,11 +2170,33 @@ void Px4ArucoLandingNode::set_velocity_feedforward(
     std::isfinite(velocity_feedforward_east_mps_);
 }
 
+void Px4ArucoLandingNode::set_adaptive_tracking_debug(
+  const std::optional<double> & effective_gain,
+  const std::optional<Eigen::Vector2d> & estimated_deck_acceleration_xy)
+{
+  effective_relative_velocity_gain_valid_ =
+    effective_gain.has_value() && std::isfinite(*effective_gain);
+  if (effective_relative_velocity_gain_valid_) {
+    effective_relative_velocity_gain_ = *effective_gain;
+  }
+
+  estimated_deck_acceleration_valid_ =
+    estimated_deck_acceleration_xy.has_value() &&
+    estimated_deck_acceleration_xy->allFinite();
+  if (estimated_deck_acceleration_valid_) {
+    estimated_deck_acceleration_xy_ = *estimated_deck_acceleration_xy;
+  }
+}
+
 void Px4ArucoLandingNode::clear_velocity_feedforward()
 {
   velocity_feedforward_north_mps_ = 0.0;
   velocity_feedforward_east_mps_ = 0.0;
   velocity_feedforward_valid_ = false;
+  effective_relative_velocity_gain_ = 0.0;
+  effective_relative_velocity_gain_valid_ = false;
+  estimated_deck_acceleration_xy_.setZero();
+  estimated_deck_acceleration_valid_ = false;
 }
 
 void Px4ArucoLandingNode::publish_offboard_control_mode()
@@ -1798,6 +2430,86 @@ void Px4ArucoLandingNode::publish_tracking_velocity_setpoint(
   tracking_velocity_setpoint_pub_->publish(msg);
 }
 
+void Px4ArucoLandingNode::publish_effective_relative_velocity_gain()
+{
+  if (!effective_relative_velocity_gain_valid_) {
+    return;
+  }
+
+  std_msgs::msg::Float64 msg;
+  msg.data = effective_relative_velocity_gain_;
+  effective_relative_velocity_gain_pub_->publish(msg);
+}
+
+void Px4ArucoLandingNode::publish_estimated_deck_acceleration(
+  const rclcpp::Time & now)
+{
+  if (!estimated_deck_acceleration_valid_) {
+    return;
+  }
+
+  geometry_msgs::msg::TwistStamped msg;
+  msg.header.stamp = now;
+  msg.header.frame_id = target_pose_frame_id_;
+  msg.twist.linear.x = estimated_deck_acceleration_xy_.x();
+  msg.twist.linear.y = estimated_deck_acceleration_xy_.y();
+  msg.twist.linear.z = 0.0;
+  estimated_deck_acceleration_pub_->publish(msg);
+}
+
+void Px4ArucoLandingNode::publish_estimated_deck_attitude()
+{
+  if (!have_estimated_deck_attitude_) {
+    return;
+  }
+
+  geometry_msgs::msg::Vector3Stamped msg;
+  msg.header.stamp = last_estimated_deck_attitude_time_;
+  msg.header.frame_id = target_pose_frame_id_;
+  msg.vector.x = estimated_deck_attitude_.roll_rad;
+  msg.vector.y = estimated_deck_attitude_.pitch_rad;
+  msg.vector.z = estimated_deck_attitude_.tilt_rad;
+  estimated_deck_attitude_pub_->publish(msg);
+}
+
+void Px4ArucoLandingNode::publish_landing_window_debug()
+{
+  if (!landing_window_result_valid_) {
+    return;
+  }
+
+  std_msgs::msg::Bool open_msg;
+  open_msg.data = landing_window_result_.window_open;
+  landing_window_open_pub_->publish(open_msg);
+
+  std_msgs::msg::UInt32 reasons_msg;
+  reasons_msg.data = landing_window_result_.reject_reasons;
+  landing_window_reject_reasons_pub_->publish(reasons_msg);
+
+  std_msgs::msg::Float64 duration_msg;
+  duration_msg.data = landing_window_result_.satisfied_duration_s;
+  landing_window_satisfied_duration_pub_->publish(duration_msg);
+}
+
+void Px4ArucoLandingNode::publish_relative_descent_debug()
+{
+  if (!relative_descent_debug_valid_) {
+    return;
+  }
+
+  std_msgs::msg::Float64 height_msg;
+  height_msg.data = relative_height_m_;
+  relative_height_pub_->publish(height_msg);
+
+  std_msgs::msg::Float64 reference_msg;
+  reference_msg.data = relative_height_reference_m_;
+  relative_height_reference_pub_->publish(reference_msg);
+
+  std_msgs::msg::String phase_msg;
+  phase_msg.data = relative_descent_phase_name(relative_descent_phase_);
+  descent_phase_pub_->publish(phase_msg);
+}
+
 void Px4ArucoLandingNode::publish_guidance_source()
 {
   std_msgs::msg::String msg;
@@ -1829,6 +2541,23 @@ void Px4ArucoLandingNode::publish_guidance_source()
           msg.data = "VISION_PREDICTED_FF";
           break;
       }
+      break;
+    case LandingState::WAIT_LANDING_WINDOW:
+      if (descent_reentry_locked_) {
+        msg.data = "LANDING_WINDOW_REAUTH_REQUIRED";
+      } else {
+        msg.data = landing_window_result_valid_ && landing_window_result_.window_open ?
+          "LANDING_WINDOW_OPEN" : "LANDING_WINDOW_WAIT";
+      }
+      break;
+    case LandingState::DESCEND:
+      msg.data = "RELATIVE_DESCENT";
+      break;
+    case LandingState::TEST_HEIGHT_HOLD:
+      msg.data = "TEST_HEIGHT_HOLD";
+      break;
+    case LandingState::RECOVER_CLIMB:
+      msg.data = "RECOVER_CLIMB";
       break;
     case LandingState::RECOVER_TO_GNSS:
       msg.data = "GNSS_RECOVERY";
@@ -1865,6 +2594,14 @@ const char * Px4ArucoLandingNode::state_name(LandingState state)
       return "VISUAL_HANDOVER";
     case LandingState::TRACK_TARGET:
       return "TRACK_TARGET";
+    case LandingState::WAIT_LANDING_WINDOW:
+      return "WAIT_LANDING_WINDOW";
+    case LandingState::DESCEND:
+      return "DESCEND";
+    case LandingState::TEST_HEIGHT_HOLD:
+      return "TEST_HEIGHT_HOLD";
+    case LandingState::RECOVER_CLIMB:
+      return "RECOVER_CLIMB";
     case LandingState::RECOVER_TO_GNSS:
       return "RECOVER_TO_GNSS";
     case LandingState::GOTO_ARUCO_AREA:
@@ -1881,6 +2618,24 @@ const char * Px4ArucoLandingNode::state_name(LandingState state)
       return "DONE";
     case LandingState::ABORT:
       return "ABORT";
+  }
+  return "UNKNOWN";
+}
+
+const char * Px4ArucoLandingNode::relative_descent_phase_name(
+  RelativeDescentPhase phase)
+{
+  switch (phase) {
+    case RelativeDescentPhase::kWaitingWindow:
+      return "WAITING_WINDOW";
+    case RelativeDescentPhase::kDescending:
+      return "DESCENDING";
+    case RelativeDescentPhase::kPaused:
+      return "PAUSED";
+    case RelativeDescentPhase::kRecovering:
+      return "RECOVERING";
+    case RelativeDescentPhase::kTestHeightHold:
+      return "TEST_HEIGHT_HOLD";
   }
   return "UNKNOWN";
 }
