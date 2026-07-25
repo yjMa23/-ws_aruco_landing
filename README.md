@@ -2,25 +2,25 @@
 
 `ws_aruco_landing` 是一个基于 **PX4 SITL + Gazebo Harmonic + ROS 2 Humble** 的移动船舶无人机自主降落传统基线工作空间。
 
-当前已经完成从船舶 GNSS 粗引导到视觉预测跟踪的完整安全高度链路：
+当前已经完成从船舶 GNSS 粗引导到低高度安全下降和触地证据评估的传统方法链路：
 
 ```text
 船舶 GNSS 会合
 → 移动中心搜索 ArUco
 → GNSS—视觉平滑接管
-→ 甲板视觉状态估计
-→ 短时运动预测
+→ 甲板视觉状态估计与短时预测
 → 预测位置 + 自适应水平速度前馈跟踪
-→ 视觉甲板倾角估计
-→ 规则式着陆窗口判断
+→ 视觉甲板倾角估计与规则式着陆窗口
 → 相对高度分阶段下降
-→ 低高度垂直状态估计与速度前馈
-→ 视觉丢失时恢复到 GNSS
+→ 独立垂直状态估计与甲板垂直速度前馈
+→ PX4 land detector + 视觉高度 + 垂直速度多源触地评估
+→ 显式授权的低速最终下降
+→ 视觉或状态失效时安全暂停/恢复
 ```
 
-当前阶段为 **P6：触地确认、最终下降与安全中止**。P5C 已完成相机 z 外参修正、独立垂直状态估计、低高度误差标定和甲板垂直速度前馈；静止 `0.50 m` 与升沉 `0.70 m` PX4 SITL 验收均通过。
+当前阶段为 **P6B：近距多尺度视觉与真实接触正向验收**。P5C 和 P6A 已完成；P6B 已实现最终下降控制器、`FINAL_DESCENT / TOUCHDOWN_CANDIDATE_HOLD / TOUCHDOWN_HOLD` 状态以及触地后保持逻辑。首次真实接触试验因原 `0.50 m` Marker 在近距超出相机视场而安全恢复，未发生盲降。当前已加入远距 ID0 与近距 ID1 多尺度 Marker，并完成 `5 m` 静止回归，下一步验证 `0.50 m` 自动切换后再次执行真实接触试验。
 
-> 相对下降默认关闭，只有显式传入 `--enable-relative-descent` 才允许下降到 `0.50 m`。当前不会触地、不会发送 `NAV_LAND`，也不会自动 Disarm。
+> 相对下降和最终下降均默认关闭。P6B 只有在静止甲板场景同时显式传入 `--enable-relative-descent --enable-final-descent` 时才允许进入 `0.50 m` 以下；当前仍不会发送 `NAV_LAND`，也不会自动 Disarm。
 
 ---
 
@@ -43,18 +43,28 @@
 | P5B 相对高度下降 | 已完成 | 分阶段下降到 `0.50 m`、窗口暂停、恢复到 `2.0 m` 和恢复后重新授权锁止 | — |
 | P5C 垂直状态估计与标定 | 已完成 | 相机 z 外参修正、独立垂直估计、低高度标定和 z 速度前馈 | — |
 | P6A 多源触地确认 | 已完成 | PX4 land detector、视觉高度和垂直速度联合判据及负向 SITL 验收 | — |
-| P6B 最终下降与真实接触 | 当前阶段 | 显式授权的最终下降、真实接触正向验收和触地后保持 | — |
+| P6B 最终下降与真实接触 | 进行中 | 已完成最终下降控制器、触地候选/确认保持状态和默认关闭回归；正在验证远近距多尺度 Marker 与真实接触正向链路 | — |
 | P7/P8 评测与消融 | 未开始 | 批量实验、指标统计和传统方法消融 | — |
 
 当前完整工作区测试结果：
 
 ```text
 3 packages finished
-182 tests
+205 tests
 0 errors
 0 failures
 0 skipped
 ```
+
+### 最新验收摘要
+
+- **P5C**：静止甲板 `0.50 m` 和升沉甲板 `0.70 m` 低高度验收通过；相机 z 外参系统偏差已消除，甲板垂直速度前馈默认增益为 `1.0`。
+- **P6A**：静止 `0.50 m`、升沉 `0.70 m` 和恢复爬升三类负向场景中，触地候选与确认均为 `0`，未发送 `NAV_LAND` 或 Disarm。
+- **P6B 默认关闭回归**：只进入 `TEST_HEIGHT_HOLD`，没有任何最终下降状态或最终下降阶段输出。
+- **P6B 首次真实接触试验**：最终下降参考最低 `0.4266 m`、Ground Truth 最低 `0.3924 m`；近距大 Marker 丢失后进入 GNSS 恢复，没有触地候选、Land 或 Disarm。
+- **多尺度 Marker 远距回归**：静止 `5 m` 水平 RMSE `0.0260 m`，最大误差 `0.0642 m`，Marker 丢失和 GNSS 恢复均为 `0`；偏置 ID0 补偿后的甲板中心水平偏差约为厘米级。
+
+当前下一步：在静止甲板 `0.50 m` 验证远距 ID0 到近距 ID1 的自动切换与中心连续性，通过后重新执行 P6B 真实接触正向试验。
 
 ---
 
@@ -62,9 +72,9 @@
 
 | 包 | 说明 |
 | --- | --- |
-| [`src/aruco_detector`](src/aruco_detector/README.md) | 检测指定 ArUco Marker，发布位姿、可见性和调试图像。 |
-| [`src/aruco_precision_landing_cpp`](src/aruco_precision_landing_cpp/README.md) | 完成 PX4 Offboard、GNSS 会合、视觉接管、状态估计、预测和移动目标跟踪。 |
-| [`src/moving_deck_sim`](src/moving_deck_sim/README.md) | 提供移动甲板、船舶 GNSS 传感器模型和仅供评测使用的 Ground Truth。 |
+| [`src/aruco_detector`](src/aruco_detector/README.md) | 支持远近距多 Marker 配置、优先级/面积选择、统一甲板中心补偿，并发布位姿、可见性、ID 和调试图像。 |
+| [`src/aruco_precision_landing_cpp`](src/aruco_precision_landing_cpp/README.md) | 完成 PX4 Offboard、GNSS—视觉接管、状态估计、移动目标跟踪、着陆窗口、相对下降、触地评估和显式授权的最终下降。 |
+| [`src/moving_deck_sim`](src/moving_deck_sim/README.md) | 提供水平、升沉、倾斜和组合运动甲板、船舶 GNSS 模型、多尺度 Marker 甲板以及仅供评测使用的 Ground Truth。 |
 
 控制器禁止订阅：
 
@@ -120,7 +130,7 @@ colcon test-result --verbose
 预期结果：
 
 ```text
-182 tests, 0 errors, 0 failures, 0 skipped
+205 tests, 0 errors, 0 failures, 0 skipped
 ```
 
 如果 `px4_msgs` 位于其他工作空间，请替换：
@@ -145,7 +155,33 @@ source ~/ws_sensor_combined/install/setup.bash
 ./scripts/start_sitl.sh --scenario constant02 --headless --record  # 0.2 m/s
 ./scripts/start_sitl.sh --scenario constant --headless --record    # 0.4 m/s
 ./scripts/start_sitl.sh --scenario sinusoidal
+./scripts/start_sitl.sh --scenario heave --headless --record
+./scripts/start_sitl.sh --scenario rollpitch --headless --record
+./scripts/start_sitl.sh --scenario combined --headless --record
 ```
+
+P5B 相对下降到安全测试高度：
+
+```bash
+./scripts/start_sitl.sh \
+  --scenario static \
+  --headless \
+  --record \
+  --enable-relative-descent
+```
+
+P6B 最终下降仅允许静止甲板，并要求双重显式授权：
+
+```bash
+./scripts/start_sitl.sh \
+  --scenario static \
+  --headless \
+  --record \
+  --enable-relative-descent \
+  --enable-final-descent
+```
+
+脚本会拒绝在非静止场景启用 P6B，并将最终下降速率限制在不超过 `0.03 m/s`。
 
 脚本会启动 Agent、PX4、Gazebo、甲板/GNSS、相机桥接和 ArUco 检测；确认 PX4/QGroundControl 状态后按回车，才会启动自动 Offboard/Arm 的控制器。`Ctrl-C` 会统一关闭本次启动的进程。如果 PX4 或 `px4_msgs` 不在默认目录，可通过 `PX4_DIR` 和 `PX4_MSGS_WS` 覆盖。
 
@@ -342,25 +378,47 @@ ros2 bag record \
   /landing/deck_gnss_pose_ned \
   /landing/marker_pose_ned \
   /landing/estimated_deck_odometry \
+  /landing/vertical_state \
+  /landing/raw_relative_height \
+  /landing/relative_vertical_velocity \
   /landing/predicted_deck_pose \
   /landing/tracking_velocity_setpoint \
+  /landing/window_open \
+  /landing/relative_height \
+  /landing/relative_height_reference \
+  /landing/descent_phase \
+  /landing/final_descent_phase \
+  /landing/touchdown_status \
+  /landing/touchdown_evidence \
+  /landing/touchdown_candidate_duration \
+  /landing/touchdown_confirmed \
+  /landing/active_marker_id \
   /simulation/deck/ground_truth \
   /aruco/visible \
+  /aruco/id \
   /aruco/pose \
   /fmu/out/vehicle_local_position_v1 \
+  /fmu/out/vehicle_land_detected \
   /fmu/out/vehicle_odometry \
-  /fmu/in/trajectory_setpoint
+  /fmu/in/trajectory_setpoint \
+  /fmu/in/vehicle_command
 ```
 
-记录完成后使用统一评测入口：
+记录完成后根据阶段使用对应评测入口：
 
 ```bash
 source /opt/ros/humble/setup.bash
 source ~/ws_sensor_combined/install/setup.bash
+
 python3 scripts/evaluate_p4_bag.py bags/<bag_name>
+python3 scripts/evaluate_p5a_bag.py bags/<bag_name>
+python3 scripts/evaluate_p5b_bag.py bags/<bag_name>
+python3 scripts/evaluate_p5c_vertical_estimation.py bags/<bag_name>
+python3 scripts/evaluate_p6a_touchdown.py bags/<bag_name>
+python3 scripts/evaluate_p6b_touchdown.py bags/<bag_name>
 ```
 
-`bags/` 默认被 Git 忽略，Ground Truth 只在该离线脚本中用于误差统计。
+`bags/` 默认被 Git 忽略，Ground Truth 只在离线评测脚本中用于误差和安全边界统计，禁止进入控制器。
 
 常用监控命令：
 
@@ -371,6 +429,11 @@ ros2 topic echo /landing/target_pose
 ros2 topic echo /landing/estimated_deck_odometry
 ros2 topic echo /landing/predicted_deck_pose
 ros2 topic echo /landing/tracking_velocity_setpoint
+ros2 topic echo /landing/relative_height
+ros2 topic echo /landing/relative_height_reference
+ros2 topic echo /landing/touchdown_status
+ros2 topic echo /landing/touchdown_evidence
+ros2 topic echo /landing/active_marker_id
 ```
 
 ---
@@ -408,7 +471,7 @@ ros2 launch aruco_precision_landing_cpp px4_aruco_landing.launch.py \
 
 # 6. 正常运行时的状态链
 
-正常情况下状态应依次经过：
+默认未启用下降时：
 
 ```text
 INIT
@@ -420,31 +483,45 @@ INIT
 → ACQUIRE_ARUCO
 → VISUAL_HANDOVER
 → TRACK_TARGET
+→ WAIT_LANDING_WINDOW
 ```
 
-视觉长时丢失后：
+显式启用 P5B 后：
 
 ```text
-TRACK_TARGET
+WAIT_LANDING_WINDOW
+→ DESCEND
+→ TEST_HEIGHT_HOLD
+```
+
+着陆窗口或视觉状态严重失效时：
+
+```text
+DESCEND / TEST_HEIGHT_HOLD
+→ RECOVER_CLIMB
+→ WAIT_LANDING_WINDOW
+```
+
+恢复后会锁止再次下降，必须重新完成视觉接管或重启任务才会解除。
+
+静止甲板同时显式启用 P6B 后，目标状态链为：
+
+```text
+TEST_HEIGHT_HOLD
+→ FINAL_DESCENT
+→ TOUCHDOWN_CANDIDATE_HOLD
+→ TOUCHDOWN_HOLD
+```
+
+当前真实接触正向链路仍在验收中；首次试验在近距 Marker 丢失后按安全规则进入：
+
+```text
+FINAL_DESCENT
 → RECOVER_TO_GNSS
 → ACQUIRE_ARUCO 或 RENDEZVOUS_GNSS
 ```
 
-P4 当前主路径不能进入：
-
-```text
-DESCEND_WITH_TRACKING
-FINAL_LAND
-DONE
-```
-
-运行时高度目标应持续为：
-
-```text
-/landing/target_pose.pose.position.z ≈ -5.0 m
-```
-
-PX4 使用 NED 坐标，负 z 表示向上。
+旧状态 `DESCEND_WITH_TRACKING / FINAL_LAND / DONE` 仅作为历史基线保留，当前主路径不可达。PX4 使用 NED 坐标，负 z 表示向上。
 
 ---
 
@@ -705,19 +782,25 @@ ps -ef | grep -E \
 - [P5C 垂直状态估计与标定验收](docs/P5C_VERTICAL_STATE_ESTIMATION_VALIDATION.md)
 - [P6A 多源触地确认计划](docs/P6_TOUCHDOWN_CONFIRMATION_PLAN.md)
 - [P6A 多源触地确认验收](docs/P6_TOUCHDOWN_CONFIRMATION_VALIDATION.md)
+- [P6B 最终下降与真实接触计划](docs/P6B_FINAL_DESCENT_AND_TOUCHDOWN_PLAN.md)
+- [P6B 近距多尺度视觉子计划](docs/P6B_CLOSE_RANGE_VISUAL_PLAN.md)
 
 ---
 
 # 14. 安全提示
 
-控制节点会自动发送 Offboard 和 Arm 命令。当前 P5A 默认：
+控制节点会自动发送 Offboard 和 Arm 命令。当前默认：
 
 ```yaml
 enable_auto_land: false
 rendezvous_altitude_m: 5.0
+descent.enabled: false
+final_descent.enabled: false
 ```
 
-相对下降默认关闭；显式启用时只允许下降到 `0.50 m` 安全测试高度，并继续保持水平跟踪。当前不会触地或发送 Land/Disarm 命令，仅应先在 SITL 中验证。
+相对下降默认关闭；显式启用 P5B 时下降到配置的安全测试高度并继续保持水平跟踪。P6B 最终下降还需要额外显式授权，并且启动脚本当前只允许静止甲板场景。触地确认后只保持当前位置，不发送 `NAV_LAND` 或 Disarm。
+
+首次 P6B 真实接触试验已证明原单一大 Marker 在近距会超出相机视场，系统按规则停止并恢复。当前多尺度 Marker 已完成远距 `5 m` 回归，但 `0.50 m` 自动切换与真实接触正向验收尚未完成，因此不得将当前版本视为可用于实机自动触地的稳定版本。
 
 实机测试前必须重新确认：
 
