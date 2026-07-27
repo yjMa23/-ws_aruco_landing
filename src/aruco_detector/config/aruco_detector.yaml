@@ -6,11 +6,13 @@ aruco_detector:
     marker_length: 0.5
     target_id: 0
     dictionary: DICT_4X4_50
-    # ID 0 是偏置布置的远距 0.50 m Marker，ID 1 是甲板中心近距 0.16 m Marker。
-    marker_ids: [0, 1]
-    marker_lengths_m: [0.50, 0.16]
-    marker_priorities: [0, 1]
+    # ID 0/1/2/3 分别覆盖远距、中距、近距和超近距，统一按图像角点面积自动选择。
+    marker_ids: [0, 1, 2, 3]
+    marker_lengths_m: [0.50, 0.20, 0.04, 0.02]
+    # 越近距的 Marker 优先级越高；只有其真正被检测到时才会提前接管。
+    marker_priorities: [3, 2, 1, 0]
+    # ID0 位于 x=+0.45 m，ID1 位于 x=-0.18 m，ID2 位于 x=+0.05 m，ID3 位于甲板中心。
     # 每个三元组表示 Marker 坐标系中从 Marker 中心到统一甲板中心的平移。
-    marker_target_offsets_m: [-0.35, 0.0, 0.0, 0.0, 0.0, 0.0]
+    marker_target_offsets_m: [-0.45, 0.0, 0.0, 0.18, 0.0, 0.0, -0.05, 0.0, 0.0, 0.0, 0.0, 0.0]
     # 近似时间同步队列用于容纳图像与 CameraInfo 的小幅时间戳偏差。
     sync_queue_size: 10
