@@ -142,6 +142,7 @@ private:
     const std::optional<TargetStateEstimate> & estimate,
     const std::optional<Eigen::Vector3d> & predicted_position_ned,
     bool visual_valid,
+    VisualLossState visual_loss_state,
     double dt);
   std::optional<FinalDescentOutput> update_final_descent(
     const std::optional<TargetStateEstimate> & estimate,
@@ -247,10 +248,13 @@ private:
   double touchdown_low_height_exit_m_{0.28};
   double touchdown_max_relative_vertical_speed_mps_{0.12};
   double touchdown_max_uav_vertical_speed_mps_{0.15};
+  double touchdown_max_relative_horizontal_speed_mps_{0.15};
   double touchdown_candidate_required_duration_s_{0.50};
   bool final_descent_enabled_{false};
   double final_descent_entry_height_m_{0.50};
-  double final_descent_rate_mps_{0.03};
+  double final_descent_approach_rate_mps_{0.12};
+  double final_descent_contact_rate_mps_{0.03};
+  double final_descent_contact_slowdown_height_m_{0.25};
   double final_descent_minimum_command_height_m_{0.15};
   double final_descent_max_reference_tracking_error_m_{0.20};
   double additional_prediction_horizon_s_{0.10};
@@ -279,16 +283,16 @@ private:
   double landing_window_enter_max_tilt_deg_{5.0};
   double landing_window_exit_max_tilt_deg_{8.0};
   double landing_window_max_visual_age_s_{0.20};
-  double landing_window_minimum_relative_height_m_{0.20};
+  double landing_window_minimum_relative_height_m_{0.08};
   double landing_window_maximum_relative_height_m_{6.00};
   double landing_window_required_duration_s_{1.00};
   bool relative_descent_enabled_{false};
   double descent_minimum_test_height_m_{0.50};
   double descent_fast_height_threshold_m_{2.00};
   double descent_slow_height_threshold_m_{0.80};
-  double descent_fast_rate_mps_{0.30};
-  double descent_medium_rate_mps_{0.15};
-  double descent_slow_rate_mps_{0.05};
+  double descent_fast_rate_mps_{0.50};
+  double descent_medium_rate_mps_{0.30};
+  double descent_slow_rate_mps_{0.12};
   double descent_recovery_height_m_{2.00};
   double descent_recovery_rate_mps_{0.30};
   double descent_max_reference_tracking_error_m_{0.50};

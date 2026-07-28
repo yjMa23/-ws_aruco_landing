@@ -17,6 +17,7 @@ namespace aruco_precision_landing_cpp
 enum class VisualLossState
 {
   kFresh,
+  kGraceHold,
   kShortLoss,
   kLongLoss
 };
@@ -89,8 +90,9 @@ public:
    *
    * @param currently_valid 当前控制周期是否得到可用于控制的视觉位置。
    * @param now_s 当前控制时间，单位为秒。
-   * @return 当前有效为 `kFresh`；尚未达到长时阈值为 `kShortLoss`；无历史、时间
-   *         非法或超过长时阈值为 `kLongLoss`。
+   * @return 当前有效为 `kFresh`；丢失时间未超过短时阈值为 `kGraceHold`；短时与
+   *         长时阈值之间为 `kShortLoss`；无历史、时间非法或超过长时阈值为
+   *         `kLongLoss`。
    */
   VisualLossState loss_state(bool currently_valid, double now_s) const;
 

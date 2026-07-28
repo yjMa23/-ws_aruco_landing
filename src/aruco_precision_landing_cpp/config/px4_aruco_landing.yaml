@@ -65,12 +65,16 @@ px4_aruco_landing_node:
     touchdown_detector.low_height_exit_m: 0.28
     touchdown_detector.max_relative_vertical_speed_mps: 0.12
     touchdown_detector.max_uav_vertical_speed_mps: 0.15
+    # PX4 在移动甲板上可能报告世界系水平运动；相对甲板速度低于该值仍可形成候选。
+    touchdown_detector.max_relative_horizontal_speed_mps: 0.15
     touchdown_detector.candidate_required_duration_s: 0.50
 
-    # P6B 默认关闭，必须通过启动参数显式授权。
+    # P6B 默认关闭。0.50→0.25 m 快速接近，0.25 m 以下低速接触。
     final_descent.enabled: false
     final_descent.entry_height_m: 0.50
-    final_descent.rate_mps: 0.03
+    final_descent.approach_rate_mps: 0.12
+    final_descent.contact_rate_mps: 0.03
+    final_descent.contact_slowdown_height_m: 0.25
     final_descent.minimum_command_height_m: 0.15
     final_descent.max_reference_tracking_error_m: 0.20
 
@@ -105,7 +109,7 @@ px4_aruco_landing_node:
     landing_window.enter_max_tilt_deg: 5.0
     landing_window.exit_max_tilt_deg: 8.0
     landing_window.max_visual_age_s: 0.20
-    landing_window.minimum_relative_height_m: 0.20
+    landing_window.minimum_relative_height_m: 0.08
     landing_window.maximum_relative_height_m: 6.00
     landing_window.required_duration_s: 1.00
 
@@ -113,9 +117,9 @@ px4_aruco_landing_node:
     descent.minimum_test_height_m: 0.50
     descent.fast_height_threshold_m: 2.00
     descent.slow_height_threshold_m: 0.80
-    descent.fast_rate_mps: 0.30
-    descent.medium_rate_mps: 0.15
-    descent.slow_rate_mps: 0.05
+    descent.fast_rate_mps: 0.50
+    descent.medium_rate_mps: 0.30
+    descent.slow_rate_mps: 0.12
     descent.recovery_height_m: 2.00
     descent.recovery_rate_mps: 0.30
     descent.max_reference_tracking_error_m: 0.50

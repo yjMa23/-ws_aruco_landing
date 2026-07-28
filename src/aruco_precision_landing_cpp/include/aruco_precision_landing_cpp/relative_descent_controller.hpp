@@ -29,9 +29,9 @@ struct RelativeDescentParameters
   double minimum_test_height_m{0.50};
   double fast_height_threshold_m{2.00};
   double slow_height_threshold_m{0.80};
-  double fast_rate_mps{0.30};
-  double medium_rate_mps{0.15};
-  double slow_rate_mps{0.05};
+  double fast_rate_mps{0.50};
+  double medium_rate_mps{0.30};
+  double slow_rate_mps{0.12};
   double recovery_height_m{2.00};
   double recovery_rate_mps{0.30};
   double max_reference_tracking_error_m{0.50};

@@ -22,6 +22,7 @@ TouchdownDetectorParameters test_parameters()
   parameters.low_height_exit_m = 0.28;
   parameters.max_relative_vertical_speed_mps = 0.12;
   parameters.max_uav_vertical_speed_mps = 0.15;
+  parameters.max_relative_horizontal_speed_mps = 0.15;
   parameters.candidate_required_duration_s = 0.30;
   return parameters;
 }
@@ -38,6 +39,8 @@ TouchdownDetectorInput base_input(double time_s)
   input.relative_height_m = 0.10;
   input.relative_vertical_velocity_mps = 0.01;
   input.uav_vertical_velocity_mps = 0.01;
+  input.relative_horizontal_speed_valid = true;
+  input.relative_horizontal_speed_mps = 0.01;
   input.close_to_ground = true;
   return input;
 }
@@ -134,18 +137,58 @@ TEST(TouchdownDetectorTest, HighVerticalSpeedClearsCandidate)
   EXPECT_DOUBLE_EQ(output.candidate_duration_s, 0.0);
 }
 
-TEST(TouchdownDetectorTest, ReportedHorizontalOrRotationalMovementRejectsCandidate)
+TEST(TouchdownDetectorTest, HighRelativeHorizontalOrRotationalMovementRejectsCandidate)
 {
   TouchdownDetector detector(test_parameters());
   auto moving = base_input(0.0);
   moving.ground_contact = true;
   moving.horizontal_movement = true;
+  moving.relative_horizontal_speed_mps = 0.40;
   EXPECT_EQ(detector.update(moving).status, TouchdownStatus::kAirborne);
 
   moving.sample_time_s = 0.1;
   moving.horizontal_movement = false;
+  moving.relative_horizontal_speed_mps = 0.01;
   moving.rotational_movement = true;
   EXPECT_EQ(detector.update(moving).status, TouchdownStatus::kAirborne);
+}
+
+TEST(TouchdownDetectorTest, MovingDeckCanConfirmAtLowRelativeHorizontalSpeed)
+{
+  TouchdownDetector detector(test_parameters());
+
+  TouchdownDetectorOutput output;
+  for (int index = 0; index <= 3; ++index) {
+    auto input = base_input(index * 0.1);
+    input.ground_contact = true;
+    input.horizontal_movement = true;
+    input.relative_horizontal_speed_mps = 0.04;
+    output = detector.update(input);
+  }
+
+  EXPECT_EQ(output.status, TouchdownStatus::kConfirmed);
+  EXPECT_TRUE(output.confirmed_latched);
+  EXPECT_NE(
+    output.evidence_mask &
+    touchdown_evidence_mask(TouchdownEvidence::kLowRelativeHorizontalSpeed),
+    0U);
+  EXPECT_EQ(
+    output.evidence_mask & touchdown_evidence_mask(TouchdownEvidence::kNoReportedMovement),
+    0U);
+}
+
+TEST(TouchdownDetectorTest, MovingDeckNeedsRelativeHorizontalSpeedEstimate)
+{
+  TouchdownDetector detector(test_parameters());
+  auto input = base_input(0.0);
+  input.ground_contact = true;
+  input.horizontal_movement = true;
+  input.relative_horizontal_speed_valid = false;
+
+  const auto output = detector.update(input);
+
+  EXPECT_EQ(output.status, TouchdownStatus::kInsufficientEvidence);
+  EXPECT_FALSE(output.confirmed_latched);
 }
 
 TEST(TouchdownDetectorTest, LandedAndAtRestDoNotConfirmWhileMovementIsReported)
@@ -299,6 +342,12 @@ TEST(TouchdownDetectorTest, RejectsInvalidInputAndParameters)
 
   parameters = test_parameters();
   parameters.low_height_exit_m = parameters.low_height_enter_m;
+  EXPECT_THROW(
+    {TouchdownDetector invalid_detector(parameters);},
+    std::invalid_argument);
+
+  parameters = test_parameters();
+  parameters.max_relative_horizontal_speed_mps = 0.0;
   EXPECT_THROW(
     {TouchdownDetector invalid_detector(parameters);},
     std::invalid_argument);

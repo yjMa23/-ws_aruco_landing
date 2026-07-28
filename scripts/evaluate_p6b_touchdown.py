@@ -8,6 +8,7 @@ import bisect
 import collections
 import json
 import math
+import statistics
 import sys
 from pathlib import Path
 from typing import Any, Optional, Sequence
@@ -106,6 +107,27 @@ def maximum_step(samples: Sequence[TimedVector]) -> float:
     return max(
         abs(current.values[0] - previous.values[0])
         for previous, current in zip(samples, samples[1:])
+    )
+
+
+def reference_rate_medians(
+    samples: Sequence[TimedVector], slowdown_height_m: float, tolerance_m: float
+) -> tuple[float, float]:
+    approach_rates: list[float] = []
+    contact_rates: list[float] = []
+    for previous, current in zip(samples, samples[1:]):
+        dt_s = current.time_s - previous.time_s
+        decrease_m = previous.values[0] - current.values[0]
+        if dt_s <= 0.0 or decrease_m <= tolerance_m:
+            continue
+        rate_mps = decrease_m / dt_s
+        if previous.values[0] > slowdown_height_m + tolerance_m:
+            approach_rates.append(rate_mps)
+        else:
+            contact_rates.append(rate_mps)
+    return (
+        statistics.median(approach_rates) if approach_rates else math.nan,
+        statistics.median(contact_rates) if contact_rates else math.nan,
     )
 
 
@@ -251,18 +273,65 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
     ]
 
     actual_heights: list[TimedVector] = []
+    horizontal_errors_m: list[float] = []
+    deck_positions_final: list[TimedVector] = []
     for time_s, message in local_position:
-        if time_s < final_start_s or not bool(message.z_valid) or not math.isfinite(message.z):
+        if (
+            time_s < final_start_s
+            or not bool(message.xy_valid)
+            or not bool(message.z_valid)
+            or not finite_values((message.x, message.y, message.z))
+        ):
             continue
         deck = interpolate(ground_truth_ned, time_s)
         if deck is None:
             continue
         actual_heights.append(TimedVector(time_s, (deck[2] - float(message.z),)))
+        horizontal_errors_m.append(
+            math.hypot(deck[0] - float(message.x), deck[1] - float(message.y))
+        )
+        deck_positions_final.append(TimedVector(time_s, (deck[0], deck[1])))
 
     references_final = values_after(references, final_start_s)
     target_final = values_after(target_z, final_start_s)
     velocity_final = values_after(trajectory_z_velocity, final_start_s)
     actual_final = values_after(actual_heights, final_start_s)
+    approach_rate_mps, contact_rate_mps = reference_rate_medians(
+        references_final,
+        args.slowdown_height_m,
+        args.reference_tolerance_m,
+    )
+    horizontal_rmse_m = (
+        math.sqrt(sum(value * value for value in horizontal_errors_m) / len(horizontal_errors_m))
+        if horizontal_errors_m
+        else math.nan
+    )
+    horizontal_max_m = max(horizontal_errors_m, default=math.nan)
+    deck_horizontal_displacement_m = math.nan
+    if deck_positions_final:
+        start_xy = deck_positions_final[0].values
+        deck_horizontal_displacement_m = max(
+            math.hypot(sample.values[0] - start_xy[0], sample.values[1] - start_xy[1])
+            for sample in deck_positions_final
+        )
+    rate_profile_passed = (
+        math.isfinite(approach_rate_mps)
+        and math.isfinite(contact_rate_mps)
+        and approach_rate_mps > contact_rate_mps
+        and approach_rate_mps <= args.maximum_approach_rate_mps
+        and contact_rate_mps <= args.maximum_contact_rate_mps
+    )
+    moving_deck_passed = (
+        not args.require_moving_deck
+        or (
+            math.isfinite(deck_horizontal_displacement_m)
+            and deck_horizontal_displacement_m >= args.minimum_deck_displacement_m
+        )
+    )
+    horizontal_tracking_passed = (
+        math.isfinite(horizontal_max_m)
+        and horizontal_max_m <= args.maximum_horizontal_error_m
+    )
 
     reference_decreases_after_candidate = 0
     if candidate_start_s is not None:
@@ -324,6 +393,15 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
             (sample.values[0] for sample in actual_final), default=math.nan
         ),
         "maximum_target_z_step_m": maximum_step(target_final),
+        "approach_reference_rate_mps": approach_rate_mps,
+        "contact_reference_rate_mps": contact_rate_mps,
+        "rate_profile_passed": rate_profile_passed,
+        "horizontal_error_rmse_m": horizontal_rmse_m,
+        "horizontal_error_max_m": horizontal_max_m,
+        "horizontal_tracking_passed": horizontal_tracking_passed,
+        "deck_horizontal_displacement_m": deck_horizontal_displacement_m,
+        "moving_deck_required": args.require_moving_deck,
+        "moving_deck_passed": moving_deck_passed,
         "maximum_candidate_duration_s": max(
             (sample.values[0] for sample in touchdown_duration), default=0.0
         ),
@@ -339,6 +417,9 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
             and confirmed_start_s is not None
             and hold_start_s is not None
             and reference_decreases_after_candidate == 0
+            and rate_profile_passed
+            and horizontal_tracking_passed
+            and moving_deck_passed
             and hold_duration_s >= args.minimum_hold_duration_s
             and math.isfinite(target_span_after_hold)
             and target_span_after_hold <= args.maximum_hold_target_span_m
@@ -368,6 +449,19 @@ def print_human_readable(result: dict[str, Any]) -> None:
         f"{result['ground_truth_height_min_m']:.4f} m"
     )
     print(f"Maximum target-z step: {result['maximum_target_z_step_m']:.5f} m")
+    print(
+        "Approach / contact reference rate: "
+        f"{result['approach_reference_rate_mps']} / "
+        f"{result['contact_reference_rate_mps']} m/s; "
+        f"profile={'PASS' if result['rate_profile_passed'] else 'FAIL'}"
+    )
+    print(
+        "Horizontal RMSE / max / deck displacement: "
+        f"{result['horizontal_error_rmse_m']} / {result['horizontal_error_max_m']} / "
+        f"{result['deck_horizontal_displacement_m']} m; "
+        f"tracking={'PASS' if result['horizontal_tracking_passed'] else 'FAIL'}, "
+        f"moving={'PASS' if result['moving_deck_passed'] else 'FAIL'}"
+    )
     print(
         "Maximum candidate duration / reference decreases after candidate: "
         f"{result['maximum_candidate_duration_s']:.3f} s / "
@@ -400,6 +494,12 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--minimum-hold-duration-s", type=float, default=10.0)
     parser.add_argument("--maximum-hold-target-span-m", type=float, default=0.05)
     parser.add_argument("--maximum-hold-z-velocity-mps", type=float, default=1.0e-3)
+    parser.add_argument("--slowdown-height-m", type=float, default=0.25)
+    parser.add_argument("--maximum-approach-rate-mps", type=float, default=0.20)
+    parser.add_argument("--maximum-contact-rate-mps", type=float, default=0.05)
+    parser.add_argument("--maximum-horizontal-error-m", type=float, default=0.30)
+    parser.add_argument("--require-moving-deck", action="store_true")
+    parser.add_argument("--minimum-deck-displacement-m", type=float, default=0.25)
     parser.add_argument(
         "--world-origin-latitude", type=float, default=47.397971057728974
     )

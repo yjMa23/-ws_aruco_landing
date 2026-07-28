@@ -51,7 +51,7 @@ TEST(FinalDescentControllerTest, UnauthorizedInputDoesNotDescend)
   EXPECT_DOUBLE_EQ(output->relative_height_reference_m, 0.50);
 }
 
-TEST(FinalDescentControllerTest, AuthorizedInputDescendsAtConfiguredRate)
+TEST(FinalDescentControllerTest, AuthorizedInputUsesApproachRate)
 {
   FinalDescentController controller(FinalDescentParameters{});
   ASSERT_TRUE(controller.update(make_input()).has_value());
@@ -59,22 +59,55 @@ TEST(FinalDescentControllerTest, AuthorizedInputDescendsAtConfiguredRate)
 
   ASSERT_TRUE(output.has_value());
   EXPECT_EQ(output->phase, FinalDescentPhase::kDescending);
-  EXPECT_NEAR(output->relative_height_reference_m, 0.47, 1.0e-12);
-  EXPECT_NEAR(output->vertical_reference_velocity_ned_mps, 0.03, 1.0e-12);
+  EXPECT_NEAR(output->relative_height_reference_m, 0.38, 1.0e-12);
+  EXPECT_NEAR(output->vertical_reference_velocity_ned_mps, 0.12, 1.0e-12);
   EXPECT_TRUE(output->reference_changed);
+}
+
+TEST(FinalDescentControllerTest, SlowsBeforeNearContactSegment)
+{
+  FinalDescentParameters parameters;
+  parameters.approach_rate_mps = 0.20;
+  parameters.contact_rate_mps = 0.03;
+  FinalDescentController controller(parameters);
+  ASSERT_TRUE(controller.update(make_input()).has_value());
+
+  auto output = controller.update(make_input());
+  ASSERT_TRUE(output.has_value());
+  EXPECT_NEAR(output->relative_height_reference_m, 0.30, 1.0e-12);
+  EXPECT_NEAR(output->vertical_reference_velocity_ned_mps, 0.20, 1.0e-12);
+
+  output = controller.update(make_input());
+  ASSERT_TRUE(output.has_value());
+  EXPECT_NEAR(output->relative_height_reference_m, 0.25, 1.0e-12);
+  EXPECT_NEAR(output->vertical_reference_velocity_ned_mps, 0.05, 1.0e-12);
+
+  auto contact_input = make_input();
+  contact_input.current_relative_height_m = 0.25;
+  contact_input.current_reference_height_m = 0.25;
+  output = controller.update(contact_input);
+  ASSERT_TRUE(output.has_value());
+  EXPECT_NEAR(output->relative_height_reference_m, 0.22, 1.0e-12);
+  EXPECT_NEAR(output->vertical_reference_velocity_ned_mps, 0.03, 1.0e-12);
 }
 
 TEST(FinalDescentControllerTest, ClampsAtMinimumCommandHeight)
 {
   FinalDescentParameters parameters;
-  parameters.final_descent_rate_mps = 0.20;
+  parameters.approach_rate_mps = 0.20;
+  parameters.contact_rate_mps = 0.20;
   FinalDescentController controller(parameters);
-  ASSERT_TRUE(controller.update(make_input()).has_value());
+  auto input = make_input();
+  ASSERT_TRUE(controller.update(input).has_value());
 
-  for (int index = 0; index < 10; ++index) {
-    ASSERT_TRUE(controller.update(make_input()).has_value());
+  std::optional<FinalDescentOutput> output;
+  for (int index = 0; index < 3; ++index) {
+    output = controller.update(input);
+    ASSERT_TRUE(output.has_value());
+    input.current_relative_height_m = output->relative_height_reference_m;
+    input.current_reference_height_m = output->relative_height_reference_m;
   }
-  const auto output = controller.update(make_input());
+  output = controller.update(input);
 
   ASSERT_TRUE(output.has_value());
   EXPECT_DOUBLE_EQ(output->relative_height_reference_m, 0.15);
@@ -88,14 +121,14 @@ TEST(FinalDescentControllerTest, CandidateImmediatelyHoldsReference)
   ASSERT_TRUE(controller.update(make_input()).has_value());
   ASSERT_TRUE(controller.update(make_input()).has_value());
   auto candidate = make_input();
-  candidate.current_reference_height_m = 0.47;
+  candidate.current_reference_height_m = 0.38;
   candidate.touchdown_status = TouchdownStatus::kCandidate;
 
   const auto output = controller.update(candidate);
 
   ASSERT_TRUE(output.has_value());
   EXPECT_EQ(output->phase, FinalDescentPhase::kCandidateHold);
-  EXPECT_NEAR(output->relative_height_reference_m, 0.47, 1.0e-12);
+  EXPECT_NEAR(output->relative_height_reference_m, 0.38, 1.0e-12);
   EXPECT_DOUBLE_EQ(output->vertical_reference_velocity_ned_mps, 0.0);
   EXPECT_TRUE(output->touchdown_candidate_hold);
 }
@@ -106,20 +139,20 @@ TEST(FinalDescentControllerTest, CandidateLossCanResumeDescent)
   ASSERT_TRUE(controller.update(make_input()).has_value());
   ASSERT_TRUE(controller.update(make_input()).has_value());
   auto candidate = make_input();
-  candidate.current_reference_height_m = 0.47;
+  candidate.current_reference_height_m = 0.38;
   candidate.touchdown_status = TouchdownStatus::kCandidate;
   ASSERT_EQ(
     controller.update(candidate)->phase,
     FinalDescentPhase::kCandidateHold);
 
   auto resumed = make_input();
-  resumed.current_relative_height_m = 0.47;
-  resumed.current_reference_height_m = 0.47;
+  resumed.current_relative_height_m = 0.38;
+  resumed.current_reference_height_m = 0.38;
   const auto output = controller.update(resumed);
 
   ASSERT_TRUE(output.has_value());
   EXPECT_EQ(output->phase, FinalDescentPhase::kDescending);
-  EXPECT_NEAR(output->relative_height_reference_m, 0.44, 1.0e-12);
+  EXPECT_NEAR(output->relative_height_reference_m, 0.26, 1.0e-12);
 }
 
 TEST(FinalDescentControllerTest, ConfirmationLatchesTouchdownHold)
@@ -230,13 +263,20 @@ TEST(FinalDescentControllerTest, ResetClearsHistoryAndConfirmation)
 TEST(FinalDescentControllerTest, RejectsInvalidParameterSets)
 {
   auto parameters = FinalDescentParameters{};
-  parameters.final_descent_rate_mps = 0.0;
+  parameters.approach_rate_mps = 0.0;
   EXPECT_THROW(
     {FinalDescentController invalid_controller(parameters);},
     std::invalid_argument);
 
   parameters = FinalDescentParameters{};
-  parameters.minimum_command_height_m = parameters.entry_height_m;
+  parameters.contact_slowdown_height_m = parameters.entry_height_m;
+  EXPECT_THROW(
+    {FinalDescentController invalid_controller(parameters);},
+    std::invalid_argument);
+
+  parameters = FinalDescentParameters{};
+  parameters.approach_rate_mps = 0.02;
+  parameters.contact_rate_mps = 0.03;
   EXPECT_THROW(
     {FinalDescentController invalid_controller(parameters);},
     std::invalid_argument);

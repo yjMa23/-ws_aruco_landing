@@ -40,6 +40,11 @@ ros2 launch moving_deck_sim moving_deck_sim.launch.py
 launch 会将 Gazebo Transport 固定到 `GZ_IP=127.0.0.1`，与 PX4 的 `gz_*` make
 目标保持一致；P1 默认仅支持同一台主机上的 PX4 与 Gazebo。
 
+有界面模式默认加载 `config/gazebo_gui.config`，并在当前 X11 桌面上显式使用 Qt
+`xcb` 平台。该最小录屏配置只加载 `MinimalScene`、`GzSceneManager`、
+`InteractiveViewControl` 和播放控制，强制使用 `orbit` 相机控制器；不加载实体选择、
+右键菜单、变换、目标跟随或实体树插件，避免它们拦截 3D 视口的鼠标事件。
+
 无界面运行：
 
 ```bash

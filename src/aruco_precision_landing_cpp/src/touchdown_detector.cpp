@@ -34,6 +34,7 @@ TouchdownDetector::TouchdownDetector(const TouchdownDetectorParameters & paramet
     !positive_finite(parameters_.low_height_exit_m) ||
     !positive_finite(parameters_.max_relative_vertical_speed_mps) ||
     !positive_finite(parameters_.max_uav_vertical_speed_mps) ||
+    !positive_finite(parameters_.max_relative_horizontal_speed_mps) ||
     !positive_finite(parameters_.candidate_required_duration_s))
   {
     throw std::invalid_argument("touchdown detector parameters must be finite and positive");
@@ -128,6 +129,10 @@ TouchdownDetectorOutput TouchdownDetector::update(const TouchdownDetectorInput &
   const bool relative_speed_valid =
     std::isfinite(input.relative_vertical_velocity_mps);
   const bool uav_speed_valid = std::isfinite(input.uav_vertical_velocity_mps);
+  const bool relative_horizontal_speed_valid =
+    input.relative_horizontal_speed_valid &&
+    std::isfinite(input.relative_horizontal_speed_mps) &&
+    input.relative_horizontal_speed_mps >= 0.0;
   const bool low_relative_speed =
     relative_speed_valid &&
     std::abs(input.relative_vertical_velocity_mps) <=
@@ -136,10 +141,20 @@ TouchdownDetectorOutput TouchdownDetector::update(const TouchdownDetectorInput &
     uav_speed_valid &&
     std::abs(input.uav_vertical_velocity_mps) <=
     parameters_.max_uav_vertical_speed_mps;
+  const bool low_relative_horizontal_speed =
+    relative_horizontal_speed_valid &&
+    input.relative_horizontal_speed_mps <=
+    parameters_.max_relative_horizontal_speed_mps;
   const bool no_reported_movement =
     !input.vertical_movement &&
     !input.horizontal_movement &&
     !input.rotational_movement;
+  const bool horizontal_motion_compatible =
+    !input.horizontal_movement || low_relative_horizontal_speed;
+  const bool movement_compatible =
+    !input.vertical_movement &&
+    !input.rotational_movement &&
+    horizontal_motion_compatible;
 
   add_evidence(
     evidence_mask,
@@ -153,21 +168,27 @@ TouchdownDetectorOutput TouchdownDetector::update(const TouchdownDetectorInput &
     evidence_mask,
     no_reported_movement,
     TouchdownEvidence::kNoReportedMovement);
+  add_evidence(
+    evidence_mask,
+    low_relative_horizontal_speed,
+    TouchdownEvidence::kLowRelativeHorizontalSpeed);
 
   const bool strong_touchdown_evidence =
-    input.landed && input.at_rest && no_reported_movement;
+    input.landed && input.at_rest && movement_compatible;
   const bool contact_evidence =
     input.ground_contact || input.maybe_landed || input.landed;
   const bool normal_touchdown_evidence =
     contact_evidence && visual_fresh && visual_low_height_latched_ &&
-    low_relative_speed && low_uav_speed && no_reported_movement;
+    low_relative_speed && low_uav_speed && movement_compatible;
 
   if (!strong_touchdown_evidence && !normal_touchdown_evidence) {
     clear_candidate();
     if (!visual_fresh && !strong_touchdown_evidence) {
       return make_output(TouchdownStatus::kInsufficientEvidence, evidence_mask);
     }
-    if (!relative_speed_valid || !uav_speed_valid) {
+    if (!relative_speed_valid || !uav_speed_valid ||
+      (input.horizontal_movement && !relative_horizontal_speed_valid))
+    {
       return make_output(TouchdownStatus::kInsufficientEvidence, evidence_mask);
     }
     return make_output(TouchdownStatus::kAirborne, evidence_mask);

@@ -30,7 +30,9 @@ enum class FinalDescentPhase
 struct FinalDescentParameters
 {
   double entry_height_m{0.50};
-  double final_descent_rate_mps{0.03};
+  double approach_rate_mps{0.12};
+  double contact_rate_mps{0.03};
+  double contact_slowdown_height_m{0.25};
   double minimum_command_height_m{0.15};
   double maximum_reference_tracking_error_m{0.20};
 };
@@ -64,11 +66,12 @@ struct FinalDescentOutput
 };
 
 /**
- * @brief 从 P5B 测试高度生成低速最终下降参考。
+ * @brief 从 P5B 测试高度生成分段最终下降参考。
  *
- * 控制器不读取 ROS 或 Ground Truth。P6A 进入候选后立即冻结参考；确认后锁存保持。
- * 证据不足时暂停，不安全拒绝时请求恢复。最低命令高度只用于防止无限向甲板内部发送目标，
- * 不能作为触地证据。
+ * 控制器不读取 ROS 或 Ground Truth。进入最终下降后先使用较快接近速率，在
+ * `contact_slowdown_height_m` 以下切换为近接触低速。P6A 进入候选后立即冻结参考；
+ * 确认后锁存保持。证据不足时暂停，不安全拒绝时请求恢复。最低命令高度只用于防止
+ * 无限向甲板内部发送目标，不能作为触地证据。
  */
 class FinalDescentController
 {

@@ -37,6 +37,7 @@ enum class TouchdownEvidence : std::uint32_t
   kLowRelativeVerticalSpeed = 1U << 7,
   kLowUavVerticalSpeed = 1U << 8,
   kNoReportedMovement = 1U << 9,
+  kLowRelativeHorizontalSpeed = 1U << 10,
 };
 
 /**
@@ -50,6 +51,7 @@ struct TouchdownDetectorParameters
   double low_height_exit_m{0.28};
   double max_relative_vertical_speed_mps{0.12};
   double max_uav_vertical_speed_mps{0.15};
+  double max_relative_horizontal_speed_mps{0.15};
   double candidate_required_duration_s{0.50};
 };
 
@@ -79,6 +81,8 @@ struct TouchdownDetectorInput
   double relative_height_m{0.0};
   double relative_vertical_velocity_mps{0.0};
   double uav_vertical_velocity_mps{0.0};
+  bool relative_horizontal_speed_valid{false};
+  double relative_horizontal_speed_mps{0.0};
 };
 
 /**
@@ -93,10 +97,12 @@ struct TouchdownDetectorOutput
 };
 
 /**
- * @brief 使用 PX4 接触状态、低运动状态和视觉低高度联合确认触地。
+ * @brief 使用 PX4 接触状态、相对低运动状态和视觉低高度联合确认触地。
  *
- * 视觉高度只能作为普通触地路径的辅助证据，不能单独确认触地。强触地路径要求
- * PX4 同时报告 `landed` 与 `at_rest`。确认结果会锁存，只有显式 reset 才清除。
+ * 视觉高度只能作为普通触地路径的辅助证据，不能单独确认触地。PX4 报告世界系
+ * 水平运动时，只有无人机相对估计甲板的水平速度足够小才允许形成候选，从而支持
+ * 水平移动平台而不放宽垂直或旋转运动约束。强触地路径要求 PX4 同时报告
+ * `landed` 与 `at_rest`。确认结果会锁存，只有显式 reset 才清除。
  */
 class TouchdownDetector
 {
@@ -111,7 +117,7 @@ public:
   /**
    * @brief 更新一次多源触地判定。
    *
-   * @param input 当前状态、PX4 land detector、视觉高度和垂直速度证据。
+   * @param input 当前状态、PX4 land detector、视觉高度及相对垂直/水平速度证据。
    * @return 当前状态、证据位、连续候选时间和确认锁存标志。
    */
   TouchdownDetectorOutput update(const TouchdownDetectorInput & input);

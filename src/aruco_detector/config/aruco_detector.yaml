@@ -6,13 +6,23 @@ aruco_detector:
     marker_length: 0.5
     target_id: 0
     dictionary: DICT_4X4_50
-    # ID 0/1/2/3 分别覆盖远距、中距、近距和超近距，统一按图像角点面积自动选择。
+    # ID 0/1/2/3 分别覆盖远距、中距、近距和超近距；初次捕获优先物理边长更大的可靠 Marker。
     marker_ids: [0, 1, 2, 3]
     marker_lengths_m: [0.50, 0.20, 0.04, 0.02]
-    # 越近距的 Marker 优先级越高；只有其真正被检测到时才会提前接管。
+    # priority 只在物理边长相同时用于确定性排序，不再允许小 Marker 每帧绝对抢占。
     marker_priorities: [3, 2, 1, 0]
     # ID0 位于 x=+0.45 m，ID1 位于 x=-0.18 m，ID2 位于 x=+0.05 m，ID3 位于甲板中心。
     # 每个三元组表示 Marker 坐标系中从 Marker 中心到统一甲板中心的平移。
     marker_target_offsets_m: [-0.45, 0.0, 0.0, 0.18, 0.0, 0.0, -0.05, 0.0, 0.0, 0.0, 0.0, 0.0]
+    # 每个 Marker 成为新 active 的最小角点面积，顺序与 marker_ids 一致。
+    marker_min_switch_areas_px2: [400.0, 400.0, 400.0, 400.0]
+    # active 保持面积门限 = 对应进入门限 × 该比例，形成进入/退出迟滞。
+    active_hold_area_ratio: 0.60
+    # 当前 Marker 靠近该边界距离时允许挑战；挑战者本身必须不小于该距离。
+    minimum_border_margin_px: 12.0
+    # 同一挑战者必须连续可靠达到该帧数才完成尺度切换。
+    switch_required_consecutive_frames: 5
+    # 仅保留内部 active 状态的短时漏检帧数，不会复用上一帧位姿。
+    active_missing_grace_frames: 2
     # 近似时间同步队列用于容纳图像与 CameraInfo 的小幅时间戳偏差。
     sync_queue_size: 10

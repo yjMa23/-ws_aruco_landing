@@ -84,12 +84,13 @@ TEST(VisualHandoverGuidanceTest, HandoverAlphaAndBlendAreMonotonic)
   EXPECT_NEAR(blended->y(), 2.0, kTolerance);
 }
 
-TEST(VisualHandoverGuidanceTest, ClassifiesFreshShortAndLongLoss)
+TEST(VisualHandoverGuidanceTest, ClassifiesFreshGraceShortAndLongLoss)
 {
   VisualHandoverGuidance guidance(default_parameters());
   ASSERT_TRUE(guidance.update_visual_position({0.0, 0.0, 0.0}, 1.0));
 
   EXPECT_EQ(guidance.loss_state(true, 1.1), VisualLossState::kFresh);
+  EXPECT_EQ(guidance.loss_state(false, 1.2), VisualLossState::kGraceHold);
   EXPECT_EQ(guidance.loss_state(false, 1.6), VisualLossState::kShortLoss);
   EXPECT_EQ(guidance.loss_state(false, 3.0), VisualLossState::kLongLoss);
   EXPECT_FALSE(guidance.visual_position(1.6).has_value());

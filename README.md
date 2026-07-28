@@ -14,13 +14,13 @@
 → 相对高度分阶段下降
 → 独立垂直状态估计与甲板垂直速度前馈
 → PX4 land detector + 视觉高度 + 垂直速度多源触地评估
-→ 显式授权的低速最终下降
+→ 显式授权的分段最终下降
 → 视觉或状态失效时安全暂停/恢复
 ```
 
-当前阶段为 **P6B：近距多尺度视觉与真实接触正向验收**。P5C 和 P6A 已完成；P6B 已实现最终下降控制器、`FINAL_DESCENT / TOUCHDOWN_CANDIDATE_HOLD / TOUCHDOWN_HOLD` 状态以及触地后保持逻辑。首次真实接触试验因原 `0.50 m` Marker 在近距超出相机视场而安全恢复，未发生盲降。当前已加入远距 ID0 与近距 ID1 多尺度 Marker，并完成 `5 m` 静止回归，下一步验证 `0.50 m` 自动切换后再次执行真实接触试验。
+当前阶段为 **P6B：近距多尺度视觉与动态平台真实接触正向验收**。P5C 和 P6A 已完成；P6B 已实现 `FINAL_DESCENT / TOUCHDOWN_CANDIDATE_HOLD / TOUCHDOWN_HOLD`、触地后保持以及“快速接近—近接触减速”的分段参考。四尺度 ID0~ID3 Marker 已接入有状态选择器，代码、`5 m` 静止回归和 `0.50 m` 相对下降验收均已通过。项目已加入 `near=0.02 m` 覆盖模型，并开放静止及纯水平运动甲板的最终下降入口；动态平台真实接触 rosbag 尚未执行，因此 P6B 仍处于进行中。
 
-> 相对下降和最终下降均默认关闭。P6B 只有在静止甲板场景同时显式传入 `--enable-relative-descent --enable-final-descent` 时才允许进入 `0.50 m` 以下；当前仍不会发送 `NAV_LAND`，也不会自动 Disarm。
+> 相对下降和最终下降均默认关闭。P6B 必须同时显式传入 `--enable-relative-descent --enable-final-descent`；当前只开放静止和纯水平运动的 `static / constant02 / constant / sinusoidal` 场景，升沉、倾斜和组合场景仍被脚本阻断。系统不会发送 `NAV_LAND`，也不会自动 Disarm。
 
 ---
 
@@ -43,14 +43,14 @@
 | P5B 相对高度下降 | 已完成 | 分阶段下降到 `0.50 m`、窗口暂停、恢复到 `2.0 m` 和恢复后重新授权锁止 | — |
 | P5C 垂直状态估计与标定 | 已完成 | 相机 z 外参修正、独立垂直估计、低高度标定和 z 速度前馈 | — |
 | P6A 多源触地确认 | 已完成 | PX4 land detector、视觉高度和垂直速度联合判据及负向 SITL 验收 | — |
-| P6B 最终下降与真实接触 | 进行中 | 已完成最终下降控制器、触地候选/确认保持状态和默认关闭回归；正在验证远近距多尺度 Marker 与真实接触正向链路 | — |
+| P6B 最终下降与真实接触 | 进行中 | 已完成分段最终下降、水平动态场景入口、四尺度有状态 Marker 选择器、`near=0.02 m` 相机模型和 222 项测试；`constant02` 动态真实接触 rosbag 待执行 | — |
 | P7/P8 评测与消融 | 未开始 | 批量实验、指标统计和传统方法消融 | — |
 
 当前完整工作区测试结果：
 
 ```text
 3 packages finished
-205 tests
+222 tests
 0 errors
 0 failures
 0 skipped
@@ -62,9 +62,18 @@
 - **P6A**：静止 `0.50 m`、升沉 `0.70 m` 和恢复爬升三类负向场景中，触地候选与确认均为 `0`，未发送 `NAV_LAND` 或 Disarm。
 - **P6B 默认关闭回归**：只进入 `TEST_HEIGHT_HOLD`，没有任何最终下降状态或最终下降阶段输出。
 - **P6B 首次真实接触试验**：最终下降参考最低 `0.4266 m`、Ground Truth 最低 `0.3924 m`；近距大 Marker 丢失后进入 GNSS 恢复，没有触地候选、Land 或 Disarm。
-- **多尺度 Marker 远距回归**：静止 `5 m` 水平 RMSE `0.0260 m`，最大误差 `0.0642 m`，Marker 丢失和 GNSS 恢复均为 `0`；偏置 ID0 补偿后的甲板中心水平偏差约为厘米级。
+- **多尺度 Marker 历史远距回归**：静止 `5 m` 水平 RMSE `0.0260 m`，最大误差 `0.0642 m`，Marker 丢失和 GNSS 恢复均为 `0`；偏置 ID0 补偿后的甲板中心水平偏差约为厘米级。
+- **高处小 Marker 问题**：固定优先级方案中，ID3 在约 `1.05 m` 高度提前接管并将静止甲板倾角噪声放大到约 `17.65 deg`，导致下降停在约 `1.02 m`。
+- **有状态选择器实现**：初次捕获按物理边长、active 保持面积迟滞、边界质量、challenger 连续 `5` 帧和漏检 grace 已完成；新增四个诊断话题，21 项选择器测试通过。
+- **新 5 m 回归**：`bags/p4_static_20260727_215751` 中 ID0 active 占比 `100%`，水平 RMSE `0.0257 m`，最大误差 `0.0511 m`，零丢标、零 GNSS 恢复。
+- **新 0.50 m 回归**：`bags/p5b_static_descent_zff1p0_20260727_220934` 中 ID0 在约 `0.956 m` 切换到 ID1，切换跳变约 `0.0017 m`，全过程零丢标、零恢复，并稳定保持在 `0.50 m`。
 
-当前下一步：在静止甲板 `0.50 m` 验证远距 ID0 到近距 ID1 的自动切换与中心连续性，通过后重新执行 P6B 真实接触正向试验。
+- **最终下降复验**：`bags/p6b_static_final_descent_zff1p0_20260727_222252` 中两次下降均完成 ID1→ID2 平滑切换，但在估计高度约 `0.24 m` 丢失视觉并安全恢复；ID3 从未成为可靠候选，未形成触地候选，无 `NAV_LAND` 或 Disarm。
+- **Near clip 根因诊断**：PX4 默认 `mono_cam` 为 `1280×960`、`horizontal_fov=1.74 rad`、`30 Hz`、`near=0.10 m`、`far=3000 m`；相机向下约 `0.14 m`，因此视觉丢失高度与裁剪面吻合。
+- **工程化近距模型**：项目内 `moving_deck_sim/models/mono_cam` 与 PX4 默认 SDF 的唯一传感器差异为 `near=0.02 m`；`start_sitl.sh` 支持 `px4-default/close-range` A/B，并仅在 `--record-camera-debug` 时增加图像录包。
+- **动态下降丢帧去抖**：`constant02` 首次试验暴露单帧 `aruco_visible=false` 会立即触发 `RECOVER_CLIMB` 并锁止再次下降；现已改为 `<0.5 s` 仅暂停、`0.5~2.0 s` 恢复爬升、`>=2.0 s` 回退 GNSS，控制器包 180 项测试通过。
+
+当前下一步：在 QGroundControl 确认后运行 `constant02 + close-range + final descent`，验证移动甲板上的分段下降、ID2→ID3、低相对水平速度触地候选、触地确认和保持；完成主验收后再按需补做 `near=0.10/0.02 m` A/B。
 
 ---
 
@@ -72,7 +81,7 @@
 
 | 包 | 说明 |
 | --- | --- |
-| [`src/aruco_detector`](src/aruco_detector/README.md) | 支持远近距多 Marker 配置、优先级/面积选择、统一甲板中心补偿，并发布位姿、可见性、ID 和调试图像。 |
+| [`src/aruco_detector`](src/aruco_detector/README.md) | 支持四尺度有状态 Marker 选择、面积/边界迟滞、连续帧切换、统一甲板中心补偿及逐帧诊断。 |
 | [`src/aruco_precision_landing_cpp`](src/aruco_precision_landing_cpp/README.md) | 完成 PX4 Offboard、GNSS—视觉接管、状态估计、移动目标跟踪、着陆窗口、相对下降、触地评估和显式授权的最终下降。 |
 | [`src/moving_deck_sim`](src/moving_deck_sim/README.md) | 提供水平、升沉、倾斜和组合运动甲板、船舶 GNSS 模型、多尺度 Marker 甲板以及仅供评测使用的 Ground Truth。 |
 
@@ -130,7 +139,7 @@ colcon test-result --verbose
 预期结果：
 
 ```text
-205 tests, 0 errors, 0 failures, 0 skipped
+222 tests, 0 errors, 0 failures, 0 skipped
 ```
 
 如果 `px4_msgs` 位于其他工作空间，请替换：
@@ -158,7 +167,11 @@ source ~/ws_sensor_combined/install/setup.bash
 ./scripts/start_sitl.sh --scenario heave --headless --record
 ./scripts/start_sitl.sh --scenario rollpitch --headless --record
 ./scripts/start_sitl.sh --scenario combined --headless --record
+./scripts/start_sitl.sh --camera-model px4-default  # PX4 默认 near=0.10 m 对照
+./scripts/start_sitl.sh --camera-model close-range # 项目模型 near=0.02 m（默认）
 ```
+
+`--record-camera-debug` 会启用录包，并在默认评测话题之外额外记录原始图像、`camera_info` 和 `/aruco/debug_image`；普通 `--record` 不记录这些大体积视觉话题。启动时脚本会打印实际选择的相机模型路径、near clip 和 Gazebo 模型优先目录。
 
 P5B 相对下降到安全测试高度：
 
@@ -170,7 +183,7 @@ P5B 相对下降到安全测试高度：
   --enable-relative-descent
 ```
 
-P6B 最终下降仅允许静止甲板，并要求双重显式授权：
+P6B 最终下降要求双重显式授权。静止甲板回归命令：
 
 ```bash
 ./scripts/start_sitl.sh \
@@ -181,7 +194,41 @@ P6B 最终下降仅允许静止甲板，并要求双重显式授权：
   --enable-final-descent
 ```
 
-脚本会拒绝在非静止场景启用 P6B，并将最终下降速率限制在不超过 `0.03 m/s`。
+水平移动甲板首轮正向验收命令：
+
+```bash
+./scripts/start_sitl.sh \
+  --scenario constant02 \
+  --record-camera-debug \
+  --enable-relative-descent \
+  --enable-final-descent
+```
+
+默认下降参考为：P5B 在高、中、低高度分别使用 `0.50 / 0.30 / 0.12 m/s`；P6B 从 `0.50 m` 到 `0.25 m` 使用 `0.12 m/s`，`0.25 m` 以下切换为 `0.03 m/s`。可通过 `--descent-fast-rate`、`--descent-medium-rate`、`--descent-slow-rate`、`--final-descent-approach-rate`、`--final-descent-contact-rate` 和 `--final-descent-slowdown-height` 覆盖。
+
+脚本允许 `static / constant02 / constant / sinusoidal` 启用 P6B，并继续拒绝 `heave / rollpitch / combined`，避免在垂直运动和倾斜甲板专项验收完成前误触发最终下降。
+
+Near clip A/B 只改变 `--camera-model`：
+
+```bash
+# A：PX4 默认 near=0.10 m
+./scripts/start_sitl.sh \
+  --scenario static \
+  --headless \
+  --record-camera-debug \
+  --camera-model px4-default \
+  --enable-relative-descent \
+  --enable-final-descent
+
+# B：项目近距模型 near=0.02 m
+./scripts/start_sitl.sh \
+  --scenario static \
+  --headless \
+  --record-camera-debug \
+  --camera-model close-range \
+  --enable-relative-descent \
+  --enable-final-descent
+```
 
 脚本会启动 Agent、PX4、Gazebo、甲板/GNSS、相机桥接和 ArUco 检测；确认 PX4/QGroundControl 状态后按回车，才会启动自动 Offboard/Arm 的控制器。`Ctrl-C` 会统一关闭本次启动的进程。如果 PX4 或 `px4_msgs` 不在默认目录，可通过 `PX4_DIR` 和 `PX4_MSGS_WS` 覆盖。
 
@@ -782,8 +829,11 @@ ps -ef | grep -E \
 - [P5C 垂直状态估计与标定验收](docs/P5C_VERTICAL_STATE_ESTIMATION_VALIDATION.md)
 - [P6A 多源触地确认计划](docs/P6_TOUCHDOWN_CONFIRMATION_PLAN.md)
 - [P6A 多源触地确认验收](docs/P6_TOUCHDOWN_CONFIRMATION_VALIDATION.md)
-- [P6B 最终下降与真实接触计划](docs/P6B_FINAL_DESCENT_AND_TOUCHDOWN_PLAN.md)
+- [P6B 最终下降与真实接触计划（含动态平台增量）](docs/P6B_FINAL_DESCENT_AND_TOUCHDOWN_PLAN.md)
 - [P6B 近距多尺度视觉子计划](docs/P6B_CLOSE_RANGE_VISUAL_PLAN.md)
+- [P6B 有状态 Marker 选择执行计划](docs/P6B_STATEFUL_MARKER_SELECTION_PLAN.md)
+- [P6B 相机 Near Clip 诊断计划](docs/P6B_CAMERA_NEAR_CLIP_DIAGNOSTIC_PLAN.md)
+- [P6B 近距多尺度视觉验收记录](docs/P6B_CLOSE_RANGE_VISUAL_VALIDATION.md)
 
 ---
 
@@ -798,9 +848,9 @@ descent.enabled: false
 final_descent.enabled: false
 ```
 
-相对下降默认关闭；显式启用 P5B 时下降到配置的安全测试高度并继续保持水平跟踪。P6B 最终下降还需要额外显式授权，并且启动脚本当前只允许静止甲板场景。触地确认后只保持当前位置，不发送 `NAV_LAND` 或 Disarm。
+相对下降默认关闭；显式启用 P5B 时下降到配置的安全测试高度并继续保持水平跟踪。P6B 最终下降还需要额外显式授权，启动脚本当前只允许静止或纯水平运动甲板，继续阻断升沉、倾斜和组合场景。触地确认后只保持当前位置，不发送 `NAV_LAND` 或 Disarm。
 
-首次 P6B 真实接触试验已证明原单一大 Marker 在近距会超出相机视场，系统按规则停止并恢复。当前多尺度 Marker 已完成远距 `5 m` 回归，但 `0.50 m` 自动切换与真实接触正向验收尚未完成，因此不得将当前版本视为可用于实机自动触地的稳定版本。
+首次 P6B 真实接触试验已证明原单一大 Marker 在近距会超出相机视场，后续固定优先级多尺度方案又暴露高处小 Marker 提前抢占问题。当前有状态选择器代码、`5 m` 和 `0.50 m` SITL 验收已通过；最新最终下降复验已完成 ID0→ID1→ID2 切换，但在无人机相对甲板约 `0.24 m` 时视觉长时丢失。该高度与 PX4 默认相机 `near=0.10 m` 及约 `0.14 m` 安装偏置吻合。项目已提供仅修改 near clip 为 `0.02 m` 的覆盖模型，但真实 A/B Bag 尚未完成，因此 P6B 仍未通过，不得将当前版本视为可用于实机自动触地的稳定版本。
 
 实机测试前必须重新确认：
 

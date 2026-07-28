@@ -48,23 +48,23 @@ TEST(RelativeDescentControllerTest, UsesFastMediumAndSlowRates)
   ASSERT_TRUE(fast_controller.update(make_input(5.0, true)).has_value());
   const auto fast = fast_controller.update(make_input(5.0, true));
   ASSERT_TRUE(fast.has_value());
-  EXPECT_NEAR(fast->height_reference_m, 4.70, 1.0e-12);
-  EXPECT_NEAR(fast->vertical_reference_velocity_ned_mps, 0.30, 1.0e-12);
+  EXPECT_NEAR(fast->height_reference_m, 4.50, 1.0e-12);
+  EXPECT_NEAR(fast->vertical_reference_velocity_ned_mps, 0.50, 1.0e-12);
   EXPECT_EQ(fast->phase, RelativeDescentPhase::kDescending);
 
   RelativeDescentController medium_controller(RelativeDescentParameters{});
   ASSERT_TRUE(medium_controller.update(make_input(1.50, true)).has_value());
   const auto medium = medium_controller.update(make_input(1.50, true));
   ASSERT_TRUE(medium.has_value());
-  EXPECT_NEAR(medium->height_reference_m, 1.35, 1.0e-12);
-  EXPECT_NEAR(medium->vertical_reference_velocity_ned_mps, 0.15, 1.0e-12);
+  EXPECT_NEAR(medium->height_reference_m, 1.20, 1.0e-12);
+  EXPECT_NEAR(medium->vertical_reference_velocity_ned_mps, 0.30, 1.0e-12);
 
   RelativeDescentController slow_controller(RelativeDescentParameters{});
   ASSERT_TRUE(slow_controller.update(make_input(0.70, true)).has_value());
   const auto slow = slow_controller.update(make_input(0.70, true));
   ASSERT_TRUE(slow.has_value());
-  EXPECT_NEAR(slow->height_reference_m, 0.65, 1.0e-12);
-  EXPECT_NEAR(slow->vertical_reference_velocity_ned_mps, 0.05, 1.0e-12);
+  EXPECT_NEAR(slow->height_reference_m, 0.58, 1.0e-12);
+  EXPECT_NEAR(slow->vertical_reference_velocity_ned_mps, 0.12, 1.0e-12);
 }
 
 TEST(RelativeDescentControllerTest, ClampsAtMinimumTestHeight)
@@ -91,12 +91,12 @@ TEST(RelativeDescentControllerTest, ClosedWindowPausesAfterDescentStarts)
   ASSERT_TRUE(controller.update(make_input(3.0, false)).has_value());
   const auto descending = controller.update(make_input(3.0, true));
   ASSERT_TRUE(descending.has_value());
-  ASSERT_NEAR(descending->height_reference_m, 2.70, 1.0e-12);
+  ASSERT_NEAR(descending->height_reference_m, 2.50, 1.0e-12);
 
   const auto paused = controller.update(make_input(2.7, false));
 
   ASSERT_TRUE(paused.has_value());
-  EXPECT_NEAR(paused->height_reference_m, 2.70, 1.0e-12);
+  EXPECT_NEAR(paused->height_reference_m, 2.50, 1.0e-12);
   EXPECT_EQ(paused->phase, RelativeDescentPhase::kPaused);
   EXPECT_FALSE(paused->reference_changed);
 }
@@ -119,13 +119,13 @@ TEST(RelativeDescentControllerTest, LargeReferenceTrackingErrorPauses)
   ASSERT_TRUE(controller.update(make_input(5.0, true)).has_value());
   const auto descending = controller.update(make_input(5.0, true));
   ASSERT_TRUE(descending.has_value());
-  ASSERT_NEAR(descending->height_reference_m, 4.70, 1.0e-12);
+  ASSERT_NEAR(descending->height_reference_m, 4.50, 1.0e-12);
 
   const auto paused = controller.update(make_input(5.30, true));
 
   ASSERT_TRUE(paused.has_value());
   EXPECT_EQ(paused->phase, RelativeDescentPhase::kPaused);
-  EXPECT_NEAR(paused->height_reference_m, 4.70, 1.0e-12);
+  EXPECT_NEAR(paused->height_reference_m, 4.50, 1.0e-12);
 }
 
 TEST(RelativeDescentControllerTest, SevereFailureRaisesReferenceTowardRecoveryHeight)
@@ -134,7 +134,7 @@ TEST(RelativeDescentControllerTest, SevereFailureRaisesReferenceTowardRecoveryHe
   ASSERT_TRUE(controller.update(make_input(1.0, true)).has_value());
   const auto descending = controller.update(make_input(1.0, true));
   ASSERT_TRUE(descending.has_value());
-  ASSERT_NEAR(descending->height_reference_m, 0.85, 1.0e-12);
+  ASSERT_NEAR(descending->height_reference_m, 0.70, 1.0e-12);
 
   auto failure_input = make_input(0.90, false);
   failure_input.severe_failure = true;
@@ -142,7 +142,7 @@ TEST(RelativeDescentControllerTest, SevereFailureRaisesReferenceTowardRecoveryHe
 
   ASSERT_TRUE(recovery.has_value());
   EXPECT_EQ(recovery->phase, RelativeDescentPhase::kRecovering);
-  EXPECT_NEAR(recovery->height_reference_m, 1.15, 1.0e-12);
+  EXPECT_NEAR(recovery->height_reference_m, 1.00, 1.0e-12);
   EXPECT_NEAR(recovery->vertical_reference_velocity_ned_mps, -0.30, 1.0e-12);
   EXPECT_TRUE(recovery->reference_changed);
 

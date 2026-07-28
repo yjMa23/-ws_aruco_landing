@@ -123,7 +123,12 @@ VisualLossState VisualHandoverGuidance::loss_state(
   if (!have_visual_position_ || !std::isfinite(now_s) || now_s < last_visual_time_s_) {
     return VisualLossState::kLongLoss;
   }
-  return (now_s - last_visual_time_s_) >= parameters_.visual_loss_long_timeout_s ?
+
+  const double visual_age_s = now_s - last_visual_time_s_;
+  if (visual_age_s < parameters_.visual_loss_short_timeout_s) {
+    return VisualLossState::kGraceHold;
+  }
+  return visual_age_s >= parameters_.visual_loss_long_timeout_s ?
          VisualLossState::kLongLoss : VisualLossState::kShortLoss;
 }
 

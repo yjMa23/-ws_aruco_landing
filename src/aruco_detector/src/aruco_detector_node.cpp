@@ -3,7 +3,10 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <memory>
+#include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -22,7 +25,9 @@
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/int32.hpp>
+#include <std_msgs/msg/string.hpp>
 
 namespace
 {
@@ -133,6 +138,65 @@ cv::Ptr<cv::aruco::Dictionary> makeDictionary(
   return cv::aruco::getPredefinedDictionary(it->second);
 }
 
+/**
+ * @brief 计算 Marker 四个角点到图像边界的最小有符号距离。
+ *
+ * @param marker_corners Marker 图像角点，坐标单位为像素。
+ * @param image_width 图像宽度，单位为像素。
+ * @param image_height 图像高度，单位为像素。
+ * @return 最小边界距离；角点越界时为负值，输入无效时返回 NaN。
+ */
+double minimumBorderMargin(
+  const std::vector<cv::Point2f> & marker_corners,
+  int image_width,
+  int image_height)
+{
+  if (marker_corners.empty() || image_width <= 0 || image_height <= 0) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+
+  double minimum_margin = std::numeric_limits<double>::infinity();
+  for (const auto & corner : marker_corners) {
+    minimum_margin = std::min(
+      minimum_margin,
+      std::min({
+        static_cast<double>(corner.x),
+        static_cast<double>(image_width - 1) - static_cast<double>(corner.x),
+        static_cast<double>(corner.y),
+        static_cast<double>(image_height - 1) - static_cast<double>(corner.y)}));
+  }
+  return minimum_margin;
+}
+
+/**
+ * @brief 将纯 C++ 选择原因转换为稳定诊断字符串。
+ */
+std::string selectionReasonToString(aruco_detector::MarkerSelectionReason reason)
+{
+  using Reason = aruco_detector::MarkerSelectionReason;
+  switch (reason) {
+    case Reason::NO_VALID_CANDIDATE:
+      return "NO_VALID_CANDIDATE";
+    case Reason::INITIAL_ACQUIRE:
+      return "INITIAL_ACQUIRE";
+    case Reason::HOLD_ACTIVE:
+      return "HOLD_ACTIVE";
+    case Reason::ACTIVE_NEAR_BORDER:
+      return "ACTIVE_NEAR_BORDER";
+    case Reason::ACTIVE_AREA_LOW:
+      return "ACTIVE_AREA_LOW";
+    case Reason::ACTIVE_MISSING:
+      return "ACTIVE_MISSING";
+    case Reason::CHALLENGER_STABILIZING:
+      return "CHALLENGER_STABILIZING";
+    case Reason::SWITCH_STABLE:
+      return "SWITCH_STABLE";
+    case Reason::ACTIVE_CLEARED:
+      return "ACTIVE_CLEARED";
+  }
+  return "NO_VALID_CANDIDATE";
+}
+
 }  // namespace
 
 /**
@@ -171,6 +235,16 @@ public:
       "marker_priorities", std::vector<int64_t>{-1});
     const auto target_offsets = declare_parameter<std::vector<double>>(
       "marker_target_offsets_m", std::vector<double>{0.0, 0.0, 0.0});
+    const auto marker_min_switch_areas = declare_parameter<std::vector<double>>(
+      "marker_min_switch_areas_px2", std::vector<double>{400.0});
+    const double active_hold_area_ratio =
+      declare_parameter<double>("active_hold_area_ratio", 0.60);
+    const double minimum_border_margin_px =
+      declare_parameter<double>("minimum_border_margin_px", 12.0);
+    const int switch_required_consecutive_frames =
+      declare_parameter<int>("switch_required_consecutive_frames", 5);
+    const int active_missing_grace_frames =
+      declare_parameter<int>("active_missing_grace_frames", 2);
     sync_queue_size_ = declare_parameter<int>("sync_queue_size", 10);
 
     const bool use_legacy_marker =
@@ -205,6 +279,16 @@ public:
     }
     aruco_detector::validate_marker_configurations(marker_configurations_);
 
+    aruco_detector::MarkerSelectorParameters selector_parameters;
+    selector_parameters.marker_min_switch_areas_px2 = marker_min_switch_areas;
+    selector_parameters.active_hold_area_ratio = active_hold_area_ratio;
+    selector_parameters.minimum_border_margin_px = minimum_border_margin_px;
+    selector_parameters.switch_required_consecutive_frames =
+      switch_required_consecutive_frames;
+    selector_parameters.active_missing_grace_frames = active_missing_grace_frames;
+    marker_selector_ = std::make_unique<aruco_detector::MarkerSelector>(
+      marker_configurations_, selector_parameters);
+
     if (sync_queue_size_ < 1) {
       RCLCPP_WARN(
         get_logger(),
@@ -218,6 +302,14 @@ public:
     pose_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("/aruco/pose", 10);
     id_pub_ = create_publisher<std_msgs::msg::Int32>("/aruco/id", 10);
     visible_pub_ = create_publisher<std_msgs::msg::Bool>("/aruco/visible", 10);
+    active_marker_id_pub_ =
+      create_publisher<std_msgs::msg::Int32>("/aruco/active_marker_id", 10);
+    selected_corner_area_pub_ =
+      create_publisher<std_msgs::msg::Float64>("/aruco/selected_corner_area_px2", 10);
+    selected_border_margin_pub_ =
+      create_publisher<std_msgs::msg::Float64>("/aruco/selected_border_margin_px", 10);
+    selection_reason_pub_ =
+      create_publisher<std_msgs::msg::String>("/aruco/selection_reason", 10);
     debug_image_pub_ =
       create_publisher<sensor_msgs::msg::Image>("/aruco/debug_image", rclcpp::SensorDataQoS());
 
@@ -275,6 +367,8 @@ private:
         5000,
         "Failed to convert image to bgr8: %s",
         ex.what());
+      const auto selection = marker_selector_->update({});
+      publishSelectionDiagnostics(selection);
       publishVisible(false);
       return;
     }
@@ -299,10 +393,13 @@ private:
         aruco_detector::MarkerDetectionCandidate{
           ids[index],
           std::abs(cv::contourArea(corners[index])),
+          minimumBorderMargin(corners[index], debug_image.cols, debug_image.rows),
           index});
     }
-    const auto selected =
-      aruco_detector::select_marker(marker_configurations_, candidates);
+    const auto selection = marker_selector_->update(candidates);
+    publishSelectionDiagnostics(selection);
+    drawSelectionDiagnostics(debug_image, selection);
+    const auto & selected = selection.selected_marker;
     const bool valid_camera_info = hasValidCameraInfo(*camera_info_msg);
 
     // visible 表示选中目标位姿当前可用，仅检测到 Marker 但内参无效时仍必须为 false。
@@ -446,6 +543,65 @@ private:
     pose_pub_->publish(pose_msg);
   }
 
+  /**
+   * @brief 每帧发布 Marker 选择器内部状态和本帧观测质量。
+   *
+   * @param selection 纯 C++ 选择器返回的本帧结果。
+   * @note active ID 仅表示内部状态；没有本帧 selected pose 时面积和边界距离发布 NaN。
+   */
+  void publishSelectionDiagnostics(
+    const aruco_detector::MarkerSelectionResult & selection)
+  {
+    std_msgs::msg::Int32 active_id_msg;
+    active_id_msg.data = selection.active_marker_id.value_or(-1);
+    active_marker_id_pub_->publish(active_id_msg);
+
+    std_msgs::msg::Float64 area_msg;
+    area_msg.data = selection.selected_corner_area_px2;
+    selected_corner_area_pub_->publish(area_msg);
+
+    std_msgs::msg::Float64 border_msg;
+    border_msg.data = selection.selected_border_margin_px;
+    selected_border_margin_pub_->publish(border_msg);
+
+    std_msgs::msg::String reason_msg;
+    reason_msg.data = selectionReasonToString(selection.selection_reason);
+    selection_reason_pub_->publish(reason_msg);
+  }
+
+  /**
+   * @brief 在调试图中标注 active、challenger、质量和选择原因。
+   *
+   * @param debug_image 可写 BGR 调试图像。
+   * @param selection 当前帧选择结果。
+   */
+  void drawSelectionDiagnostics(
+    cv::Mat & debug_image,
+    const aruco_detector::MarkerSelectionResult & selection) const
+  {
+    std::ostringstream state_line;
+    state_line << "active=" << selection.active_marker_id.value_or(-1)
+               << " challenger=" << selection.challenger_marker_id.value_or(-1)
+               << " stable=" << selection.challenger_stable_frames;
+
+    std::ostringstream quality_line;
+    quality_line << "area=" << selection.selected_corner_area_px2
+                 << " border=" << selection.selected_border_margin_px;
+
+    const int font_face = cv::FONT_HERSHEY_SIMPLEX;
+    constexpr double font_scale = 0.5;
+    constexpr int thickness = 1;
+    cv::putText(
+      debug_image, state_line.str(), cv::Point(10, 20), font_face, font_scale,
+      cv::Scalar(255, 255, 255), thickness, cv::LINE_AA);
+    cv::putText(
+      debug_image, quality_line.str(), cv::Point(10, 42), font_face, font_scale,
+      cv::Scalar(255, 255, 255), thickness, cv::LINE_AA);
+    cv::putText(
+      debug_image, selectionReasonToString(selection.selection_reason), cv::Point(10, 64),
+      font_face, font_scale, cv::Scalar(255, 255, 255), thickness, cv::LINE_AA);
+  }
+
   void publishId(int marker_id)
   {
     std_msgs::msg::Int32 id_msg;
@@ -478,6 +634,7 @@ private:
   int target_id_;
   int sync_queue_size_;
   std::vector<aruco_detector::MarkerConfiguration> marker_configurations_;
+  std::unique_ptr<aruco_detector::MarkerSelector> marker_selector_;
 
   cv::Ptr<cv::aruco::Dictionary> dictionary_;
   cv::Ptr<cv::aruco::DetectorParameters> detector_params_;
@@ -489,6 +646,10 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_pub_;
   rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr id_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr visible_pub_;
+  rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr active_marker_id_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr selected_corner_area_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr selected_border_margin_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr selection_reason_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr debug_image_pub_;
 };
 

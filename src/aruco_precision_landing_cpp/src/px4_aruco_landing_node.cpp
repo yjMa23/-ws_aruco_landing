@@ -208,13 +208,18 @@ Px4ArucoLandingNode::Px4ArucoLandingNode()
     touchdown_max_relative_vertical_speed_mps_;
   touchdown_parameters.max_uav_vertical_speed_mps =
     touchdown_max_uav_vertical_speed_mps_;
+  touchdown_parameters.max_relative_horizontal_speed_mps =
+    touchdown_max_relative_horizontal_speed_mps_;
   touchdown_parameters.candidate_required_duration_s =
     touchdown_candidate_required_duration_s_;
   touchdown_detector_ = std::make_unique<TouchdownDetector>(touchdown_parameters);
 
   FinalDescentParameters final_descent_parameters;
   final_descent_parameters.entry_height_m = final_descent_entry_height_m_;
-  final_descent_parameters.final_descent_rate_mps = final_descent_rate_mps_;
+  final_descent_parameters.approach_rate_mps = final_descent_approach_rate_mps_;
+  final_descent_parameters.contact_rate_mps = final_descent_contact_rate_mps_;
+  final_descent_parameters.contact_slowdown_height_m =
+    final_descent_contact_slowdown_height_m_;
   final_descent_parameters.minimum_command_height_m =
     final_descent_minimum_command_height_m_;
   final_descent_parameters.maximum_reference_tracking_error_m =
@@ -345,14 +350,20 @@ void Px4ArucoLandingNode::declare_and_load_parameters()
     "touchdown_detector.max_relative_vertical_speed_mps", 0.12);
   touchdown_max_uav_vertical_speed_mps_ = declare_parameter<double>(
     "touchdown_detector.max_uav_vertical_speed_mps", 0.15);
+  touchdown_max_relative_horizontal_speed_mps_ = declare_parameter<double>(
+    "touchdown_detector.max_relative_horizontal_speed_mps", 0.15);
   touchdown_candidate_required_duration_s_ = declare_parameter<double>(
     "touchdown_detector.candidate_required_duration_s", 0.50);
   final_descent_enabled_ = declare_parameter<bool>(
     "final_descent.enabled", false);
   final_descent_entry_height_m_ = declare_parameter<double>(
     "final_descent.entry_height_m", 0.50);
-  final_descent_rate_mps_ = declare_parameter<double>(
-    "final_descent.rate_mps", 0.03);
+  final_descent_approach_rate_mps_ = declare_parameter<double>(
+    "final_descent.approach_rate_mps", 0.12);
+  final_descent_contact_rate_mps_ = declare_parameter<double>(
+    "final_descent.contact_rate_mps", 0.03);
+  final_descent_contact_slowdown_height_m_ = declare_parameter<double>(
+    "final_descent.contact_slowdown_height_m", 0.25);
   final_descent_minimum_command_height_m_ = declare_parameter<double>(
     "final_descent.minimum_command_height_m", 0.15);
   final_descent_max_reference_tracking_error_m_ = declare_parameter<double>(
@@ -412,7 +423,7 @@ void Px4ArucoLandingNode::declare_and_load_parameters()
   landing_window_max_visual_age_s_ = declare_parameter<double>(
     "landing_window.max_visual_age_s", 0.20);
   landing_window_minimum_relative_height_m_ = declare_parameter<double>(
-    "landing_window.minimum_relative_height_m", 0.20);
+    "landing_window.minimum_relative_height_m", 0.08);
   landing_window_maximum_relative_height_m_ = declare_parameter<double>(
     "landing_window.maximum_relative_height_m", 6.00);
   landing_window_required_duration_s_ = declare_parameter<double>(
@@ -424,9 +435,9 @@ void Px4ArucoLandingNode::declare_and_load_parameters()
     "descent.fast_height_threshold_m", 2.00);
   descent_slow_height_threshold_m_ = declare_parameter<double>(
     "descent.slow_height_threshold_m", 0.80);
-  descent_fast_rate_mps_ = declare_parameter<double>("descent.fast_rate_mps", 0.30);
-  descent_medium_rate_mps_ = declare_parameter<double>("descent.medium_rate_mps", 0.15);
-  descent_slow_rate_mps_ = declare_parameter<double>("descent.slow_rate_mps", 0.05);
+  descent_fast_rate_mps_ = declare_parameter<double>("descent.fast_rate_mps", 0.50);
+  descent_medium_rate_mps_ = declare_parameter<double>("descent.medium_rate_mps", 0.30);
+  descent_slow_rate_mps_ = declare_parameter<double>("descent.slow_rate_mps", 0.12);
   descent_recovery_height_m_ = declare_parameter<double>(
     "descent.recovery_height_m", 2.00);
   descent_recovery_rate_mps_ = declare_parameter<double>(
@@ -719,13 +730,18 @@ void Px4ArucoLandingNode::validate_parameters() const
     touchdown_max_relative_vertical_speed_mps_;
   touchdown_parameters.max_uav_vertical_speed_mps =
     touchdown_max_uav_vertical_speed_mps_;
+  touchdown_parameters.max_relative_horizontal_speed_mps =
+    touchdown_max_relative_horizontal_speed_mps_;
   touchdown_parameters.candidate_required_duration_s =
     touchdown_candidate_required_duration_s_;
   static_cast<void>(TouchdownDetector(touchdown_parameters));
 
   FinalDescentParameters final_descent_parameters;
   final_descent_parameters.entry_height_m = final_descent_entry_height_m_;
-  final_descent_parameters.final_descent_rate_mps = final_descent_rate_mps_;
+  final_descent_parameters.approach_rate_mps = final_descent_approach_rate_mps_;
+  final_descent_parameters.contact_rate_mps = final_descent_contact_rate_mps_;
+  final_descent_parameters.contact_slowdown_height_m =
+    final_descent_contact_slowdown_height_m_;
   final_descent_parameters.minimum_command_height_m =
     final_descent_minimum_command_height_m_;
   final_descent_parameters.maximum_reference_tracking_error_m =
@@ -1711,7 +1727,7 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
           relative_descent_controller_->initialized();
         if (descent_state || may_start_descent || continue_relative_height_hold) {
           descent_output = update_relative_descent(
-            estimate, predicted_position_ned, visual_valid, dt);
+            estimate, predicted_position_ned, visual_valid, loss_state, dt);
           if (descent_output.has_value() && predicted_position_ned.has_value()) {
             vertical_target_z =
               predicted_position_ned->z() - descent_output->height_reference_m;
@@ -2518,6 +2534,7 @@ std::optional<RelativeDescentOutput> Px4ArucoLandingNode::update_relative_descen
   const std::optional<TargetStateEstimate> & estimate,
   const std::optional<Eigen::Vector3d> & predicted_position_ned,
   bool visual_valid,
+  VisualLossState visual_loss_state,
   double dt)
 {
   const bool estimate_valid =
@@ -2539,8 +2556,6 @@ std::optional<RelativeDescentOutput> Px4ArucoLandingNode::update_relative_descen
     landing_window_result_valid_ && landing_window_result_.window_open;
 
   const std::uint32_t hard_failure_mask =
-    landing_window_reason_mask(LandingWindowRejectReason::kVisualUnavailable) |
-    landing_window_reason_mask(LandingWindowRejectReason::kVisualTooOld) |
     landing_window_reason_mask(LandingWindowRejectReason::kEstimateInvalid) |
     landing_window_reason_mask(LandingWindowRejectReason::kPredictionInvalid) |
     landing_window_reason_mask(LandingWindowRejectReason::kRelativeHeight) |
@@ -2548,9 +2563,11 @@ std::optional<RelativeDescentOutput> Px4ArucoLandingNode::update_relative_descen
   const bool hard_window_failure =
     !landing_window_result_valid_ ||
     (landing_window_result_.reject_reasons & hard_failure_mask) != 0U;
+  const bool sustained_visual_loss =
+    !visual_valid && visual_loss_state == VisualLossState::kShortLoss;
   input.severe_failure =
     state_ == LandingState::RECOVER_CLIMB ||
-    !visual_valid || hard_window_failure;
+    sustained_visual_loss || hard_window_failure;
   input.dt_s = dt;
 
   const auto output = relative_descent_controller_->update(input);
@@ -2648,6 +2665,16 @@ void Px4ArucoLandingNode::update_touchdown_detection(const rclcpp::Time & now)
   input.visual_height_age_s = visual_age_s;
   input.relative_height_m = input.visual_height_valid ?
     deck_estimate->position_ned.z() - local_position_.z :
+    std::numeric_limits<double>::quiet_NaN();
+  input.relative_horizontal_speed_valid =
+    deck_estimate.has_value() &&
+    deck_estimate->velocity_ned.allFinite() &&
+    std::isfinite(local_position_.vx) &&
+    std::isfinite(local_position_.vy);
+  input.relative_horizontal_speed_mps = input.relative_horizontal_speed_valid ?
+    std::hypot(
+    deck_estimate->velocity_ned.x() - local_position_.vx,
+    deck_estimate->velocity_ned.y() - local_position_.vy) :
     std::numeric_limits<double>::quiet_NaN();
   input.uav_vertical_velocity_mps =
     std::isfinite(local_position_.vz) ?

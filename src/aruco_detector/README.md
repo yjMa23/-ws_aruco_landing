@@ -194,30 +194,52 @@ ROS_LOG_DIR=/tmp/ros_logs ros2 topic echo /aruco/pose
 | --- | --- | --- |
 | `image_topic` | `/world/aruco/model/x500_mono_cam_down_0/link/camera_link/sensor/camera/image` | 输入图像话题 |
 | `camera_info_topic` | `/world/aruco/model/x500_mono_cam_down_0/link/camera_link/sensor/camera/camera_info` | 相机内参话题 |
-| `marker_length` | `0.5` | ArUco marker 边长，单位为米 |
+| `marker_length` | `0.5` | 旧单 Marker 模式边长，单位为米 |
 | `dictionary` | `DICT_4X4_50` | ArUco 字典 |
-| `target_id` | `0` | 需要检测和发布位姿的 marker ID |
+| `target_id` | `0` | 旧单 Marker 模式目标 ID |
+| `marker_ids` | `[0, 1, 2, 3]` | 多尺度 Marker ID，顺序与其他数组参数一致 |
+| `marker_lengths_m` | `[0.50, 0.20, 0.04, 0.02]` | 各 Marker 物理边长，初次捕获和挑战者排序优先使用更大边长 |
+| `marker_priorities` | `[3, 2, 1, 0]` | 仅在物理边长相同时用于确定性排序 |
+| `marker_min_switch_areas_px2` | `[400, 400, 400, 400]` | 各 Marker 成为新 active 的最小角点面积 |
+| `active_hold_area_ratio` | `0.60` | active 保持面积相对进入门限的比例 |
+| `minimum_border_margin_px` | `12.0` | 挑战者进入门限及 active 靠近边界判定距离 |
+| `switch_required_consecutive_frames` | `5` | 同一挑战者完成切换前需要连续可靠的帧数 |
+| `active_missing_grace_frames` | `2` | 短时漏检时仅保留内部 active 状态的帧数 |
 | `sync_queue_size` | `10` | 图像和相机内参同步队列长度 |
+
+多尺度模式采用有状态选择：当前 active Marker 面积与边界质量可靠时始终保持；只有 active 接近边界、面积不足或丢失后，满足进入门限的挑战者才开始累计，并在连续稳定达到配置帧数后切换。初次捕获优先选择物理边长最大的可靠 Marker。单 Marker 模式仍接受任意有限正面积检测，不受多尺度切换门限影响。
+
+`active_missing_grace_frames` 只保留选择器内部状态。漏检帧不会复用上一帧位姿，`/aruco/visible` 仍为 `false`，`/aruco/id` 也不会发布陈旧 ID。
 
 ## 输出话题
 
 节点会发布以下话题：
 
 ```text
-/aruco/pose         geometry_msgs/msg/PoseStamped
-/aruco/visible      std_msgs/msg/Bool
-/aruco/debug_image  sensor_msgs/msg/Image
+/aruco/pose                       geometry_msgs/msg/PoseStamped
+/aruco/id                         std_msgs/msg/Int32
+/aruco/visible                    std_msgs/msg/Bool
+/aruco/active_marker_id           std_msgs/msg/Int32
+/aruco/selected_corner_area_px2   std_msgs/msg/Float64
+/aruco/selected_border_margin_px  std_msgs/msg/Float64
+/aruco/selection_reason           std_msgs/msg/String
+/aruco/debug_image                sensor_msgs/msg/Image
 ```
 
 说明：
 
 | 话题 | 类型 | 说明 |
 | --- | --- | --- |
-| `/aruco/pose` | `geometry_msgs/msg/PoseStamped` | 目标 marker 在相机坐标系下的位姿 |
-| `/aruco/visible` | `std_msgs/msg/Bool` | 目标 marker 是否可见且位姿估计成功 |
-| `/aruco/debug_image` | `sensor_msgs/msg/Image` | 绘制检测框和坐标轴后的调试图像 |
+| `/aruco/pose` | `geometry_msgs/msg/PoseStamped` | 本帧选中 Marker 经偏移补偿后的统一目标位姿 |
+| `/aruco/id` | `std_msgs/msg/Int32` | 与本帧有效 `/aruco/pose` 对应的 Marker ID |
+| `/aruco/visible` | `std_msgs/msg/Bool` | 本帧是否存在有效位姿 |
+| `/aruco/active_marker_id` | `std_msgs/msg/Int32` | 选择器内部 active ID；无 active 时为 `-1` |
+| `/aruco/selected_corner_area_px2` | `std_msgs/msg/Float64` | 本帧 selected Marker 角点面积；无 selected 时为 `NaN` |
+| `/aruco/selected_border_margin_px` | `std_msgs/msg/Float64` | 本帧 selected Marker 最小边界距离；无 selected 时为 `NaN` |
+| `/aruco/selection_reason` | `std_msgs/msg/String` | 每帧稳定选择原因，如 `HOLD_ACTIVE`、`CHALLENGER_STABILIZING`、`SWITCH_STABLE` |
+| `/aruco/debug_image` | `sensor_msgs/msg/Image` | 绘制检测框、坐标轴和选择器状态后的调试图像 |
 
-当目标 marker 不可见、目标 ID 不匹配、相机内参无效或位姿估计失败时，节点会发布 `/aruco/visible = false`，并且不会发布新的 `/aruco/pose`。
+当没有本帧有效 selected Marker、相机内参无效或位姿估计失败时，节点会发布 `/aruco/visible = false`，并且不会发布新的 `/aruco/pose` 或 `/aruco/id`。诊断话题仍会逐帧发布，便于区分 active 状态、挑战者累计和真实位姿可用性。
 
 ## 验证
 

@@ -14,6 +14,7 @@ def generate_launch_description():
     package_share = get_package_share_directory("moving_deck_sim")
     ros_gz_sim_share = get_package_share_directory("ros_gz_sim")
     world_path = os.path.join(package_share, "worlds", "aruco_moving_deck.sdf")
+    gui_config_path = os.path.join(package_share, "config", "gazebo_gui.config")
     default_config = os.path.join(
         package_share, "config", "constant_velocity.yaml"
     )
@@ -31,7 +32,9 @@ def generate_launch_description():
 
     gazebo_gui = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(gz_launch),
-        launch_arguments={"gz_args": f"-r {world_path}"}.items(),
+        launch_arguments={
+            "gz_args": f"-r --gui-config {gui_config_path} {world_path}"
+        }.items(),
         condition=UnlessCondition(headless),
     )
     gazebo_headless = IncludeLaunchDescription(
@@ -88,6 +91,8 @@ def generate_launch_description():
                 description="Run the Gazebo server without its GUI.",
             ),
             SetEnvironmentVariable("GZ_SIM_RESOURCE_PATH", resource_path),
+            # 当前桌面会话为 X11，显式使用 xcb，避免 Qt 自动平台探测导致视口输入失效。
+            SetEnvironmentVariable("QT_QPA_PLATFORM", "xcb"),
             # ponytail: P1 仅支持同主机 PX4；需要远程 SITL 时再开放地址参数。
             SetEnvironmentVariable("GZ_IP", "127.0.0.1"),
             gazebo_gui,

@@ -132,6 +132,14 @@ def generate_launch_description():
                 description="Maximum UAV vertical speed accepted as low motion.",
             ),
             DeclareLaunchArgument(
+                "touchdown_max_relative_horizontal_speed_mps",
+                default_value="0.15",
+                description=(
+                    "Maximum UAV-to-deck horizontal relative speed accepted when "
+                    "PX4 reports horizontal movement."
+                ),
+            ),
+            DeclareLaunchArgument(
                 "touchdown_candidate_required_duration_s",
                 default_value="0.50",
                 description="Continuous candidate duration required for confirmation.",
@@ -147,9 +155,19 @@ def generate_launch_description():
                 description="Relative height at which P6B final descent is allowed to start.",
             ),
             DeclareLaunchArgument(
-                "final_descent_rate_mps",
+                "final_descent_approach_rate_mps",
+                default_value="0.12",
+                description="P6B approach rate above the near-contact slowdown height.",
+            ),
+            DeclareLaunchArgument(
+                "final_descent_contact_rate_mps",
                 default_value="0.03",
-                description="P6B final relative-height descent rate.",
+                description="P6B low-speed descent rate in the near-contact segment.",
+            ),
+            DeclareLaunchArgument(
+                "final_descent_contact_slowdown_height_m",
+                default_value="0.25",
+                description="Relative height at which P6B switches to the contact rate.",
             ),
             DeclareLaunchArgument(
                 "final_descent_minimum_command_height_m",
@@ -169,7 +187,22 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "descent_minimum_test_height_m",
                 default_value="0.50",
-                description="Minimum relative-height reference allowed in the current SITL test.",
+                description="Minimum relative-height reference allowed before P6B.",
+            ),
+            DeclareLaunchArgument(
+                "descent_fast_rate_mps",
+                default_value="0.50",
+                description="P5B descent rate above the fast-height threshold.",
+            ),
+            DeclareLaunchArgument(
+                "descent_medium_rate_mps",
+                default_value="0.30",
+                description="P5B descent rate in the middle-height segment.",
+            ),
+            DeclareLaunchArgument(
+                "descent_slow_rate_mps",
+                default_value="0.12",
+                description="P5B descent rate immediately above the P6B entry height.",
             ),
             DeclareLaunchArgument(
                 "landing_window_minimum_relative_height_m",
@@ -297,6 +330,12 @@ def generate_launch_description():
                             LaunchConfiguration("touchdown_max_uav_vertical_speed_mps"),
                             value_type=float,
                         ),
+                        "touchdown_detector.max_relative_horizontal_speed_mps": ParameterValue(
+                            LaunchConfiguration(
+                                "touchdown_max_relative_horizontal_speed_mps"
+                            ),
+                            value_type=float,
+                        ),
                         "touchdown_detector.candidate_required_duration_s": ParameterValue(
                             LaunchConfiguration(
                                 "touchdown_candidate_required_duration_s"
@@ -311,8 +350,18 @@ def generate_launch_description():
                             LaunchConfiguration("final_descent_entry_height_m"),
                             value_type=float,
                         ),
-                        "final_descent.rate_mps": ParameterValue(
-                            LaunchConfiguration("final_descent_rate_mps"),
+                        "final_descent.approach_rate_mps": ParameterValue(
+                            LaunchConfiguration("final_descent_approach_rate_mps"),
+                            value_type=float,
+                        ),
+                        "final_descent.contact_rate_mps": ParameterValue(
+                            LaunchConfiguration("final_descent_contact_rate_mps"),
+                            value_type=float,
+                        ),
+                        "final_descent.contact_slowdown_height_m": ParameterValue(
+                            LaunchConfiguration(
+                                "final_descent_contact_slowdown_height_m"
+                            ),
                             value_type=float,
                         ),
                         "final_descent.minimum_command_height_m": ParameterValue(
@@ -333,6 +382,18 @@ def generate_launch_description():
                         ),
                         "descent.minimum_test_height_m": ParameterValue(
                             LaunchConfiguration("descent_minimum_test_height_m"),
+                            value_type=float,
+                        ),
+                        "descent.fast_rate_mps": ParameterValue(
+                            LaunchConfiguration("descent_fast_rate_mps"),
+                            value_type=float,
+                        ),
+                        "descent.medium_rate_mps": ParameterValue(
+                            LaunchConfiguration("descent_medium_rate_mps"),
+                            value_type=float,
+                        ),
+                        "descent.slow_rate_mps": ParameterValue(
+                            LaunchConfiguration("descent_slow_rate_mps"),
                             value_type=float,
                         ),
                         "landing_window.minimum_relative_height_m": ParameterValue(

@@ -11,7 +11,9 @@ Options:
                                          Deck scenario (default: static)
                                          constant02 = 0.2 m/s, constant = 0.4 m/s
   --headless                             Run Gazebo without GUI
-  --record                               Record the P4 rosbag topics
+  --record                               Record evaluation and ArUco diagnostics topics
+  --record-camera-debug                  Record a bag and additionally include raw camera topics
+  --camera-model px4-default|close-range Select camera near clip profile (default: close-range)
   --tracking-mode MODE                   Override tracking.mode
   --prediction-horizon SEC               Override additional prediction horizon
   --velocity-ff-gain GAIN                Override deck velocity feedforward gain
@@ -30,9 +32,15 @@ Options:
   --vertical-ff-max VALUE                Absolute vertical feedforward limit (default: 0.60)
   --enable-relative-descent              Enable P5B relative-height descent
   --descent-test-height HEIGHT           Override P5B minimum test height (default: 0.50)
-  --landing-window-min-height HEIGHT     Override minimum valid estimated height (default: 0.20)
-  --enable-final-descent                 Enable P6B final descent (static scenario only)
-  --final-descent-rate RATE              Final relative-height descent rate (max: 0.03)
+  --descent-fast-rate RATE               P5B high-altitude rate (default: 0.50)
+  --descent-medium-rate RATE             P5B middle-altitude rate (default: 0.30)
+  --descent-slow-rate RATE               P5B pre-final rate (default: 0.12)
+  --landing-window-min-height HEIGHT     Minimum valid estimated height (default: 0.08)
+  --enable-final-descent                 Enable P6B on static or horizontal-motion decks
+  --final-descent-approach-rate RATE     0.50 m to slowdown-height rate (default: 0.12)
+  --final-descent-contact-rate RATE      Near-contact rate (default: 0.03)
+  --final-descent-rate RATE              Alias for --final-descent-contact-rate
+  --final-descent-slowdown-height HEIGHT Switch to contact rate here (default: 0.25)
   --final-descent-min-height HEIGHT      Final command-height clamp (default: 0.15)
   -h, --help                             Show this help
 
@@ -51,6 +59,8 @@ die() {
 scenario="static"
 headless="false"
 record="false"
+record_camera_debug="false"
+camera_model_profile="close-range"
 tracking_mode="PREDICTED_POSITION_VELOCITY_FF"
 prediction_horizon_s="0.10"
 velocity_feedforward_gain="1.0"
@@ -67,9 +77,14 @@ vertical_velocity_feedforward_gain="1.0"
 vertical_velocity_feedforward_max_mps="0.60"
 relative_descent_enabled="false"
 descent_minimum_test_height_m="0.50"
-landing_window_minimum_relative_height_m="0.20"
+descent_fast_rate_mps="0.50"
+descent_medium_rate_mps="0.30"
+descent_slow_rate_mps="0.12"
+landing_window_minimum_relative_height_m="0.08"
 final_descent_enabled="false"
-final_descent_rate_mps="0.03"
+final_descent_approach_rate_mps="0.12"
+final_descent_contact_rate_mps="0.03"
+final_descent_contact_slowdown_height_m="0.25"
 final_descent_minimum_command_height_m="0.15"
 final_descent_max_reference_tracking_error_m="0.20"
 tuning_override="false"
@@ -88,6 +103,16 @@ while (($#)); do
     --record)
       record="true"
       shift
+      ;;
+    --record-camera-debug)
+      record="true"
+      record_camera_debug="true"
+      shift
+      ;;
+    --camera-model)
+      (($# >= 2)) || die "--camera-model requires a value"
+      camera_model_profile="$2"
+      shift 2
       ;;
     --tracking-mode)
       (($# >= 2)) || die "--tracking-mode requires a value"
@@ -191,6 +216,24 @@ while (($#)); do
       tuning_override="true"
       shift 2
       ;;
+    --descent-fast-rate)
+      (($# >= 2)) || die "--descent-fast-rate requires a value"
+      descent_fast_rate_mps="$2"
+      tuning_override="true"
+      shift 2
+      ;;
+    --descent-medium-rate)
+      (($# >= 2)) || die "--descent-medium-rate requires a value"
+      descent_medium_rate_mps="$2"
+      tuning_override="true"
+      shift 2
+      ;;
+    --descent-slow-rate)
+      (($# >= 2)) || die "--descent-slow-rate requires a value"
+      descent_slow_rate_mps="$2"
+      tuning_override="true"
+      shift 2
+      ;;
     --landing-window-min-height)
       (($# >= 2)) || die "--landing-window-min-height requires a value"
       landing_window_minimum_relative_height_m="$2"
@@ -201,9 +244,21 @@ while (($#)); do
       final_descent_enabled="true"
       shift
       ;;
-    --final-descent-rate)
-      (($# >= 2)) || die "--final-descent-rate requires a value"
-      final_descent_rate_mps="$2"
+    --final-descent-approach-rate)
+      (($# >= 2)) || die "--final-descent-approach-rate requires a value"
+      final_descent_approach_rate_mps="$2"
+      tuning_override="true"
+      shift 2
+      ;;
+    --final-descent-contact-rate | --final-descent-rate)
+      (($# >= 2)) || die "$1 requires a value"
+      final_descent_contact_rate_mps="$2"
+      tuning_override="true"
+      shift 2
+      ;;
+    --final-descent-slowdown-height)
+      (($# >= 2)) || die "--final-descent-slowdown-height requires a value"
+      final_descent_contact_slowdown_height_m="$2"
       tuning_override="true"
       shift 2
       ;;
@@ -234,6 +289,11 @@ case "$scenario" in
   *) die "invalid scenario '$scenario' (expected static, constant02, constant, sinusoidal, heave, rollpitch, or combined)" ;;
 esac
 
+case "$camera_model_profile" in
+  px4-default | close-range) ;;
+  *) die "invalid camera model '$camera_model_profile' (expected px4-default or close-range)" ;;
+esac
+
 case "$tracking_mode" in
   RAW_VISUAL_POSITION) tracking_mode_slug="raw" ;;
   ESTIMATED_POSITION) tracking_mode_slug="estimated" ;;
@@ -259,8 +319,13 @@ for value_name in \
   vertical_velocity_feedforward_gain \
   vertical_velocity_feedforward_max_mps \
   descent_minimum_test_height_m \
+  descent_fast_rate_mps \
+  descent_medium_rate_mps \
+  descent_slow_rate_mps \
   landing_window_minimum_relative_height_m \
-  final_descent_rate_mps \
+  final_descent_approach_rate_mps \
+  final_descent_contact_rate_mps \
+  final_descent_contact_slowdown_height_m \
   final_descent_minimum_command_height_m \
   final_descent_max_reference_tracking_error_m; do
   value="${!value_name}"
@@ -293,27 +358,40 @@ awk -v value="$vertical_velocity_feedforward_max_mps" \
 awk -v value="$descent_minimum_test_height_m" \
   'BEGIN {exit !(value >= 0.50 && value < 0.80)}' ||
   die "descent_minimum_test_height_m must be within [0.50, 0.80)"
+awk -v fast="$descent_fast_rate_mps" \
+  -v medium="$descent_medium_rate_mps" \
+  -v slow="$descent_slow_rate_mps" \
+  'BEGIN {exit !(slow > 0.0 && slow <= medium && medium <= fast && fast <= 0.60)}' ||
+  die "descent rates must satisfy 0 < slow <= medium <= fast <= 0.60"
 awk -v value="$landing_window_minimum_relative_height_m" \
   'BEGIN {exit !(value > 0.0 && value < 6.0)}' ||
   die "landing_window_minimum_relative_height_m must be within (0, 6)"
-awk -v value="$final_descent_rate_mps" \
-  'BEGIN {exit !(value > 0.0 && value <= 0.03)}' ||
-  die "final_descent_rate_mps must be within (0, 0.03]"
+awk -v approach="$final_descent_approach_rate_mps" \
+  -v contact="$final_descent_contact_rate_mps" \
+  'BEGIN {exit !(contact > 0.0 && contact <= approach && approach <= 0.20 && contact <= 0.05)}' ||
+  die "final descent rates must satisfy 0 < contact <= approach <= 0.20 and contact <= 0.05"
 awk -v value="$final_descent_minimum_command_height_m" \
+  -v slowdown="$final_descent_contact_slowdown_height_m" \
   -v entry="$descent_minimum_test_height_m" \
-  'BEGIN {exit !(value >= 0.10 && value < entry)}' ||
-  die "final_descent_minimum_command_height_m must be within [0.10, descent test height)"
+  'BEGIN {exit !(value >= 0.10 && value < slowdown && slowdown < entry)}' ||
+  die "final heights must satisfy 0.10 <= minimum < slowdown < descent test height"
 awk -v value="$final_descent_max_reference_tracking_error_m" \
   'BEGIN {exit !(value > 0.0 && value <= 0.30)}' ||
   die "final_descent_max_reference_tracking_error_m must be within (0, 0.30]"
 if [[ "$final_descent_enabled" == "true" ]]; then
   [[ "$relative_descent_enabled" == "true" ]] ||
     die "--enable-final-descent requires --enable-relative-descent"
-  [[ "$scenario" == "static" ]] ||
-    die "--enable-final-descent is restricted to --scenario static in P6B"
+  case "$scenario" in
+    static | constant02 | constant | sinusoidal) ;;
+    *) die "--enable-final-descent currently supports static and horizontal-motion scenarios only" ;;
+  esac
   awk -v value="$descent_minimum_test_height_m" \
     'BEGIN {exit !(value == 0.50)}' ||
     die "P6B final descent requires --descent-test-height 0.50"
+  awk -v window_min="$landing_window_minimum_relative_height_m" \
+    -v final_min="$final_descent_minimum_command_height_m" \
+    'BEGIN {exit !(window_min < final_min)}' ||
+    die "final descent requires landing-window minimum height below final command height"
 fi
 
 sanitize_number() {
@@ -357,6 +435,36 @@ scenario_path="$deck_share/config/$scenario_config"
 gnss_config_path="$deck_share/config/gnss_ideal.yaml"
 [[ -f "$scenario_path" ]] || die "scenario config not found: $scenario_path"
 [[ -f "$gnss_config_path" ]] || die "GNSS config not found: $gnss_config_path"
+
+px4_camera_model_path="$px4_dir/Tools/simulation/gz/models/mono_cam/model.sdf"
+project_camera_models_dir="$deck_share/models"
+project_camera_model_path="$project_camera_models_dir/mono_cam/model.sdf"
+case "$camera_model_profile" in
+  px4-default)
+    camera_model_path="$px4_camera_model_path"
+    export GZ_SIM_RESOURCE_PATH="$PX4_GZ_MODELS:$PX4_GZ_WORLDS${GZ_SIM_RESOURCE_PATH:+:$GZ_SIM_RESOURCE_PATH}"
+    ;;
+  close-range)
+    camera_model_path="$project_camera_model_path"
+    export GZ_SIM_RESOURCE_PATH="$project_camera_models_dir:$PX4_GZ_MODELS:$PX4_GZ_WORLDS${GZ_SIM_RESOURCE_PATH:+:$GZ_SIM_RESOURCE_PATH}"
+    ;;
+esac
+[[ -f "$camera_model_path" ]] || die "camera model not found: $camera_model_path"
+camera_near_clip="$(awk -F'[<>]' '/<near>/{gsub(/[[:space:]]/, "", $3); print $3; exit}' "$camera_model_path")"
+[[ -n "$camera_near_clip" ]] || die "camera near clip not found in: $camera_model_path"
+
+if [[ "$headless" != "true" ]]; then
+  export QT_QPA_PLATFORM="${GAZEBO_QT_QPA_PLATFORM:-${QT_QPA_PLATFORM:-xcb}}"
+  if [[ "$QT_QPA_PLATFORM" == "xcb" ]]; then
+    export QT_X11_NO_MITSHM="${QT_X11_NO_MITSHM:-1}"
+  fi
+fi
+
+echo "Camera model profile: $camera_model_profile"
+echo "Camera model path: $camera_model_path"
+echo "Camera near clip: $camera_near_clip m"
+echo "Gazebo model priority: ${GZ_SIM_RESOURCE_PATH%%:*}"
+[[ "$headless" == "true" ]] || echo "Gazebo Qt platform: $QT_QPA_PLATFORM"
 
 stale_pattern='MicroXRCEAgent|(^|/)px4( |$)|gz sim|moving_deck_controller|deck_gnss_simulator|parameter_bridge.*world/aruco|aruco_detector_node|px4_aruco_landing_node'
 if pgrep -f "$stale_pattern" >/dev/null; then
@@ -493,52 +601,78 @@ if [[ "$record" == "true" ]]; then
     if [[ "$descent_minimum_test_height_m" != "0.50" ]]; then
       bag_prefix+="_hmin$(sanitize_number "$descent_minimum_test_height_m")"
     fi
-    if [[ "$landing_window_minimum_relative_height_m" != "0.20" ]]; then
+    if [[ "$landing_window_minimum_relative_height_m" != "0.08" ]]; then
       bag_prefix+="_winmin$(sanitize_number "$landing_window_minimum_relative_height_m")"
     fi
-    if [[ "$final_descent_enabled" == "true" ]]; then
-      bag_prefix+="_finalrate$(sanitize_number "$final_descent_rate_mps")"
-      bag_prefix+="_finalmin$(sanitize_number "$final_descent_minimum_command_height_m")"
+    if [[ "$descent_fast_rate_mps" != "0.50" ||
+      "$descent_medium_rate_mps" != "0.30" ||
+      "$descent_slow_rate_mps" != "0.12" ]]
+    then
+      bag_prefix+="_dr$(sanitize_number "$descent_fast_rate_mps")"
+      bag_prefix+="-$(sanitize_number "$descent_medium_rate_mps")"
+      bag_prefix+="-$(sanitize_number "$descent_slow_rate_mps")"
     fi
+    if [[ "$final_descent_enabled" == "true" ]]; then
+      bag_prefix+="_fa$(sanitize_number "$final_descent_approach_rate_mps")"
+      bag_prefix+="_fc$(sanitize_number "$final_descent_contact_rate_mps")"
+      bag_prefix+="_fh$(sanitize_number "$final_descent_contact_slowdown_height_m")"
+      bag_prefix+="_fmin$(sanitize_number "$final_descent_minimum_command_height_m")"
+    fi
+  fi
+  if [[ "$record_camera_debug" == "true" ]]; then
+    bag_prefix+="_camdebug_near$(sanitize_number "$camera_near_clip")"
   fi
   bag_path="$workspace_dir/bags/${bag_prefix}_$(date +%Y%m%d_%H%M%S)"
   mkdir -p "$workspace_dir/bags"
-  start_process "rosbag ($bag_path)" ros2 bag record -o "$bag_path" \
-    /landing/state \
-    /landing/guidance_source \
-    /landing/target_pose \
-    /landing/deck_gnss_pose_ned \
-    /landing/marker_pose_ned \
-    /landing/active_marker_id \
-    /landing/estimated_deck_odometry \
-    /landing/vertical_state \
-    /landing/raw_relative_height \
-    /landing/relative_vertical_velocity \
-    /landing/touchdown_status \
-    /landing/touchdown_evidence \
-    /landing/touchdown_candidate_duration \
-    /landing/touchdown_confirmed \
-    /landing/final_descent_phase \
-    /landing/predicted_deck_pose \
-    /landing/tracking_velocity_setpoint \
-    /landing/effective_relative_velocity_gain \
-    /landing/estimated_deck_acceleration \
-    /landing/estimated_deck_attitude \
-    /landing/window_open \
-    /landing/window_reject_reasons \
-    /landing/window_satisfied_duration \
-    /landing/relative_height \
-    /landing/relative_height_reference \
-    /landing/descent_phase \
-    /simulation/deck/ground_truth \
-    /aruco/visible \
-    /aruco/id \
-    /aruco/pose \
-    /fmu/out/vehicle_local_position_v1 \
-    /fmu/out/vehicle_land_detected \
-    /fmu/out/vehicle_odometry \
-    /fmu/in/trajectory_setpoint \
+  declare -a bag_topics=(
+    /landing/state
+    /landing/guidance_source
+    /landing/target_pose
+    /landing/deck_gnss_pose_ned
+    /landing/marker_pose_ned
+    /landing/active_marker_id
+    /landing/estimated_deck_odometry
+    /landing/vertical_state
+    /landing/raw_relative_height
+    /landing/relative_vertical_velocity
+    /landing/touchdown_status
+    /landing/touchdown_evidence
+    /landing/touchdown_candidate_duration
+    /landing/touchdown_confirmed
+    /landing/final_descent_phase
+    /landing/predicted_deck_pose
+    /landing/tracking_velocity_setpoint
+    /landing/effective_relative_velocity_gain
+    /landing/estimated_deck_acceleration
+    /landing/estimated_deck_attitude
+    /landing/window_open
+    /landing/window_reject_reasons
+    /landing/window_satisfied_duration
+    /landing/relative_height
+    /landing/relative_height_reference
+    /landing/descent_phase
+    /simulation/deck/ground_truth
+    /aruco/visible
+    /aruco/id
+    /aruco/pose
+    /aruco/active_marker_id
+    /aruco/selected_corner_area_px2
+    /aruco/selected_border_margin_px
+    /aruco/selection_reason
+    /fmu/out/vehicle_local_position_v1
+    /fmu/out/vehicle_land_detected
+    /fmu/out/vehicle_odometry
+    /fmu/in/trajectory_setpoint
     /fmu/in/vehicle_command
+  )
+  if [[ "$record_camera_debug" == "true" ]]; then
+    bag_topics+=(
+      /world/aruco/model/x500_mono_cam_down_0/link/camera_link/sensor/camera/image
+      /world/aruco/model/x500_mono_cam_down_0/link/camera_link/sensor/camera/camera_info
+      /aruco/debug_image
+    )
+  fi
+  start_process "rosbag ($bag_path)" ros2 bag record -o "$bag_path" "${bag_topics[@]}"
 fi
 
 start_process "landing controller" ros2 launch \
@@ -560,11 +694,16 @@ start_process "landing controller" ros2 launch \
   "vertical_velocity_feedforward_max_mps:=$vertical_velocity_feedforward_max_mps" \
   "final_descent_enabled:=$final_descent_enabled" \
   "final_descent_entry_height_m:=$descent_minimum_test_height_m" \
-  "final_descent_rate_mps:=$final_descent_rate_mps" \
+  "final_descent_approach_rate_mps:=$final_descent_approach_rate_mps" \
+  "final_descent_contact_rate_mps:=$final_descent_contact_rate_mps" \
+  "final_descent_contact_slowdown_height_m:=$final_descent_contact_slowdown_height_m" \
   "final_descent_minimum_command_height_m:=$final_descent_minimum_command_height_m" \
   "final_descent_max_reference_tracking_error_m:=$final_descent_max_reference_tracking_error_m" \
   "relative_descent_enabled:=$relative_descent_enabled" \
   "descent_minimum_test_height_m:=$descent_minimum_test_height_m" \
+  "descent_fast_rate_mps:=$descent_fast_rate_mps" \
+  "descent_medium_rate_mps:=$descent_medium_rate_mps" \
+  "descent_slow_rate_mps:=$descent_slow_rate_mps" \
   "landing_window_minimum_relative_height_m:=$landing_window_minimum_relative_height_m"
 
 echo "SITL is running. Press Ctrl-C to stop all processes."

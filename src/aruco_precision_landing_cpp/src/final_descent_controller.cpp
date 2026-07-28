@@ -26,16 +26,24 @@ FinalDescentController::FinalDescentController(
 : parameters_(parameters)
 {
   if (!positive_finite(parameters_.entry_height_m) ||
-    !positive_finite(parameters_.final_descent_rate_mps) ||
+    !positive_finite(parameters_.approach_rate_mps) ||
+    !positive_finite(parameters_.contact_rate_mps) ||
+    !positive_finite(parameters_.contact_slowdown_height_m) ||
     !positive_finite(parameters_.minimum_command_height_m) ||
     !positive_finite(parameters_.maximum_reference_tracking_error_m))
   {
     throw std::invalid_argument(
-            "final-descent heights, rate, and tracking error must be finite and positive");
+            "final-descent heights, rates, and tracking error must be finite and positive");
   }
-  if (parameters_.minimum_command_height_m >= parameters_.entry_height_m) {
+  if (parameters_.minimum_command_height_m >= parameters_.contact_slowdown_height_m ||
+    parameters_.contact_slowdown_height_m >= parameters_.entry_height_m)
+  {
     throw std::invalid_argument(
-            "minimum_command_height_m must be smaller than entry_height_m");
+            "final-descent heights must satisfy minimum < slowdown < entry");
+  }
+  if (parameters_.approach_rate_mps < parameters_.contact_rate_mps) {
+    throw std::invalid_argument(
+            "approach_rate_mps must not be smaller than contact_rate_mps");
   }
 }
 
@@ -116,14 +124,19 @@ std::optional<FinalDescentOutput> FinalDescentController::update(
     return make_output(previous_reference_m, 0.0, FinalDescentPhase::kPaused);
   }
 
+  // 接近阶段不能单步跨过减速高度，确保近接触段始终按低速执行。
+  const bool contact_phase =
+    relative_height_reference_m_ <= parameters_.contact_slowdown_height_m;
+  const double descent_rate_mps = contact_phase ?
+    parameters_.contact_rate_mps : parameters_.approach_rate_mps;
+  const double phase_floor_m = contact_phase ?
+    parameters_.minimum_command_height_m : parameters_.contact_slowdown_height_m;
   relative_height_reference_m_ = std::max(
-    parameters_.minimum_command_height_m,
-    relative_height_reference_m_ -
-    parameters_.final_descent_rate_mps * input.dt_s);
+    phase_floor_m,
+    relative_height_reference_m_ - descent_rate_mps * input.dt_s);
 
   const double velocity_ned_mps =
-    relative_height_reference_m_ < previous_reference_m ?
-    parameters_.final_descent_rate_mps : 0.0;
+    (previous_reference_m - relative_height_reference_m_) / input.dt_s;
   return make_output(
     previous_reference_m,
     velocity_ned_mps,
