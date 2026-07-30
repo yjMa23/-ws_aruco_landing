@@ -210,6 +210,14 @@ Px4ArucoLandingNode::Px4ArucoLandingNode()
     touchdown_max_uav_vertical_speed_mps_;
   touchdown_parameters.max_relative_horizontal_speed_mps =
     touchdown_max_relative_horizontal_speed_mps_;
+  touchdown_parameters.terminal_contact_max_height_m =
+    touchdown_terminal_contact_max_height_m_;
+  touchdown_parameters.terminal_contact_min_reference_error_m =
+    touchdown_terminal_contact_min_reference_error_m_;
+  touchdown_parameters.terminal_contact_max_vertical_speed_mps =
+    touchdown_terminal_contact_max_vertical_speed_mps_;
+  touchdown_parameters.terminal_contact_px4_status_timeout_s =
+    touchdown_terminal_contact_px4_status_timeout_s_;
   touchdown_parameters.candidate_required_duration_s =
     touchdown_candidate_required_duration_s_;
   touchdown_detector_ = std::make_unique<TouchdownDetector>(touchdown_parameters);
@@ -220,6 +228,8 @@ Px4ArucoLandingNode::Px4ArucoLandingNode()
   final_descent_parameters.contact_rate_mps = final_descent_contact_rate_mps_;
   final_descent_parameters.contact_slowdown_height_m =
     final_descent_contact_slowdown_height_m_;
+  final_descent_parameters.terminal_descent_entry_height_m =
+    final_descent_terminal_entry_height_m_;
   final_descent_parameters.minimum_command_height_m =
     final_descent_minimum_command_height_m_;
   final_descent_parameters.maximum_reference_tracking_error_m =
@@ -352,6 +362,14 @@ void Px4ArucoLandingNode::declare_and_load_parameters()
     "touchdown_detector.max_uav_vertical_speed_mps", 0.15);
   touchdown_max_relative_horizontal_speed_mps_ = declare_parameter<double>(
     "touchdown_detector.max_relative_horizontal_speed_mps", 0.15);
+  touchdown_terminal_contact_max_height_m_ = declare_parameter<double>(
+    "touchdown_detector.terminal_contact_max_height_m", 0.24);
+  touchdown_terminal_contact_min_reference_error_m_ = declare_parameter<double>(
+    "touchdown_detector.terminal_contact_min_reference_error_m", 0.10);
+  touchdown_terminal_contact_max_vertical_speed_mps_ = declare_parameter<double>(
+    "touchdown_detector.terminal_contact_max_vertical_speed_mps", 0.05);
+  touchdown_terminal_contact_px4_status_timeout_s_ = declare_parameter<double>(
+    "touchdown_detector.terminal_contact_px4_status_timeout_s", 2.0);
   touchdown_candidate_required_duration_s_ = declare_parameter<double>(
     "touchdown_detector.candidate_required_duration_s", 0.50);
   final_descent_enabled_ = declare_parameter<bool>(
@@ -364,8 +382,10 @@ void Px4ArucoLandingNode::declare_and_load_parameters()
     "final_descent.contact_rate_mps", 0.03);
   final_descent_contact_slowdown_height_m_ = declare_parameter<double>(
     "final_descent.contact_slowdown_height_m", 0.25);
+  final_descent_terminal_entry_height_m_ = declare_parameter<double>(
+    "final_descent.terminal_descent_entry_height_m", 0.20);
   final_descent_minimum_command_height_m_ = declare_parameter<double>(
-    "final_descent.minimum_command_height_m", 0.15);
+    "final_descent.minimum_command_height_m", 0.05);
   final_descent_max_reference_tracking_error_m_ = declare_parameter<double>(
     "final_descent.max_reference_tracking_error_m", 0.20);
   additional_prediction_horizon_s_ = declare_parameter<double>(
@@ -732,6 +752,14 @@ void Px4ArucoLandingNode::validate_parameters() const
     touchdown_max_uav_vertical_speed_mps_;
   touchdown_parameters.max_relative_horizontal_speed_mps =
     touchdown_max_relative_horizontal_speed_mps_;
+  touchdown_parameters.terminal_contact_max_height_m =
+    touchdown_terminal_contact_max_height_m_;
+  touchdown_parameters.terminal_contact_min_reference_error_m =
+    touchdown_terminal_contact_min_reference_error_m_;
+  touchdown_parameters.terminal_contact_max_vertical_speed_mps =
+    touchdown_terminal_contact_max_vertical_speed_mps_;
+  touchdown_parameters.terminal_contact_px4_status_timeout_s =
+    touchdown_terminal_contact_px4_status_timeout_s_;
   touchdown_parameters.candidate_required_duration_s =
     touchdown_candidate_required_duration_s_;
   static_cast<void>(TouchdownDetector(touchdown_parameters));
@@ -742,6 +770,8 @@ void Px4ArucoLandingNode::validate_parameters() const
   final_descent_parameters.contact_rate_mps = final_descent_contact_rate_mps_;
   final_descent_parameters.contact_slowdown_height_m =
     final_descent_contact_slowdown_height_m_;
+  final_descent_parameters.terminal_descent_entry_height_m =
+    final_descent_terminal_entry_height_m_;
   final_descent_parameters.minimum_command_height_m =
     final_descent_minimum_command_height_m_;
   final_descent_parameters.maximum_reference_tracking_error_m =
@@ -2605,6 +2635,15 @@ std::optional<FinalDescentOutput> Px4ArucoLandingNode::update_final_descent(
   input.vertical_reference_valid = estimate_valid && visual_valid;
   input.landing_window_open =
     landing_window_result_valid_ && landing_window_result_.window_open;
+  const std::uint32_t relative_height_reject_mask =
+    landing_window_reason_mask(LandingWindowRejectReason::kRelativeHeight);
+  const bool terminal_window_conditions_safe =
+    landing_window_result_valid_ &&
+    (landing_window_result_.reject_reasons & ~relative_height_reject_mask) == 0U;
+  input.terminal_descent_allowed =
+    terminal_window_conditions_safe &&
+    input.current_reference_height_m <= final_descent_terminal_entry_height_m_ &&
+    input.current_relative_height_m <= final_descent_contact_slowdown_height_m_;
   input.touchdown_status = touchdown_result_valid_ ?
     touchdown_result_.status : TouchdownStatus::kInsufficientEvidence;
   input.dt_s = dt;
@@ -2665,6 +2704,20 @@ void Px4ArucoLandingNode::update_touchdown_detection(const rclcpp::Time & now)
   input.visual_height_age_s = visual_age_s;
   input.relative_height_m = input.visual_height_valid ?
     deck_estimate->position_ned.z() - local_position_.z :
+    std::numeric_limits<double>::quiet_NaN();
+  input.terminal_descent_active =
+    final_descent_controller_->initialized() &&
+    (state_ == LandingState::FINAL_DESCENT ||
+    state_ == LandingState::TOUCHDOWN_CANDIDATE_HOLD ||
+    state_ == LandingState::TOUCHDOWN_HOLD) &&
+    final_descent_output_.relative_height_reference_m <=
+    final_descent_terminal_entry_height_m_;
+  input.terminal_command_complete =
+    input.terminal_descent_active &&
+    final_descent_output_.relative_height_reference_m <=
+    final_descent_minimum_command_height_m_ + 1.0e-6;
+  input.relative_height_reference_m = final_descent_controller_->initialized() ?
+    final_descent_output_.relative_height_reference_m :
     std::numeric_limits<double>::quiet_NaN();
   input.relative_horizontal_speed_valid =
     deck_estimate.has_value() &&

@@ -35,6 +35,10 @@ TouchdownDetector::TouchdownDetector(const TouchdownDetectorParameters & paramet
     !positive_finite(parameters_.max_relative_vertical_speed_mps) ||
     !positive_finite(parameters_.max_uav_vertical_speed_mps) ||
     !positive_finite(parameters_.max_relative_horizontal_speed_mps) ||
+    !positive_finite(parameters_.terminal_contact_max_height_m) ||
+    !positive_finite(parameters_.terminal_contact_min_reference_error_m) ||
+    !positive_finite(parameters_.terminal_contact_max_vertical_speed_mps) ||
+    !positive_finite(parameters_.terminal_contact_px4_status_timeout_s) ||
     !positive_finite(parameters_.candidate_required_duration_s))
   {
     throw std::invalid_argument("touchdown detector parameters must be finite and positive");
@@ -76,12 +80,18 @@ TouchdownDetectorOutput TouchdownDetector::update(const TouchdownDetectorInput &
     return make_output(TouchdownStatus::kAirborne, 0U);
   }
 
-  const bool px4_status_fresh =
+  const bool px4_status_age_valid =
     input.px4_land_status_valid &&
     std::isfinite(input.px4_land_status_age_s) &&
-    input.px4_land_status_age_s >= 0.0 &&
+    input.px4_land_status_age_s >= 0.0;
+  const bool px4_status_fresh =
+    px4_status_age_valid &&
     input.px4_land_status_age_s <= parameters_.px4_status_timeout_s;
-  if (!px4_status_fresh) {
+  const bool terminal_px4_status_fresh =
+    px4_status_age_valid && input.terminal_descent_active &&
+    input.px4_land_status_age_s <=
+    parameters_.terminal_contact_px4_status_timeout_s;
+  if (!px4_status_fresh && !terminal_px4_status_fresh) {
     clear_candidate();
     return make_output(TouchdownStatus::kInsufficientEvidence, 0U);
   }
@@ -149,6 +159,21 @@ TouchdownDetectorOutput TouchdownDetector::update(const TouchdownDetectorInput &
     !input.vertical_movement &&
     !input.horizontal_movement &&
     !input.rotational_movement;
+  const bool terminal_reference_valid =
+    input.terminal_descent_active &&
+    input.terminal_command_complete &&
+    std::isfinite(input.relative_height_reference_m) &&
+    input.relative_height_reference_m >= 0.0 &&
+    visual_fresh &&
+    input.relative_height_m <= parameters_.terminal_contact_max_height_m &&
+    input.relative_height_m - input.relative_height_reference_m >=
+    parameters_.terminal_contact_min_reference_error_m;
+  const bool terminal_vertical_stall =
+    relative_speed_valid && uav_speed_valid &&
+    std::abs(input.relative_vertical_velocity_mps) <=
+    parameters_.terminal_contact_max_vertical_speed_mps &&
+    std::abs(input.uav_vertical_velocity_mps) <=
+    parameters_.terminal_contact_max_vertical_speed_mps;
   const bool horizontal_motion_compatible =
     !input.horizontal_movement || low_relative_horizontal_speed;
   const bool movement_compatible =
@@ -173,12 +198,22 @@ TouchdownDetectorOutput TouchdownDetector::update(const TouchdownDetectorInput &
     low_relative_horizontal_speed,
     TouchdownEvidence::kLowRelativeHorizontalSpeed);
 
+  const bool terminal_contact_stall =
+    terminal_px4_status_fresh && terminal_reference_valid && terminal_vertical_stall &&
+    input.close_to_ground && movement_compatible;
+  add_evidence(
+    evidence_mask,
+    terminal_contact_stall,
+    TouchdownEvidence::kTerminalContactStall);
+
   const bool strong_touchdown_evidence =
-    input.landed && input.at_rest && movement_compatible;
+    px4_status_fresh && input.landed && input.at_rest && movement_compatible;
   const bool contact_evidence =
-    input.ground_contact || input.maybe_landed || input.landed;
+    px4_status_fresh &&
+    (input.ground_contact || input.maybe_landed || input.landed);
   const bool normal_touchdown_evidence =
-    contact_evidence && visual_fresh && visual_low_height_latched_ &&
+    (contact_evidence || terminal_contact_stall) && visual_fresh &&
+    (visual_low_height_latched_ || terminal_contact_stall) &&
     low_relative_speed && low_uav_speed && movement_compatible;
 
   if (!strong_touchdown_evidence && !normal_touchdown_evidence) {

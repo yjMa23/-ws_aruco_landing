@@ -38,6 +38,7 @@ enum class TouchdownEvidence : std::uint32_t
   kLowUavVerticalSpeed = 1U << 8,
   kNoReportedMovement = 1U << 9,
   kLowRelativeHorizontalSpeed = 1U << 10,
+  kTerminalContactStall = 1U << 11,
 };
 
 /**
@@ -52,6 +53,10 @@ struct TouchdownDetectorParameters
   double max_relative_vertical_speed_mps{0.12};
   double max_uav_vertical_speed_mps{0.15};
   double max_relative_horizontal_speed_mps{0.15};
+  double terminal_contact_max_height_m{0.24};
+  double terminal_contact_min_reference_error_m{0.10};
+  double terminal_contact_max_vertical_speed_mps{0.05};
+  double terminal_contact_px4_status_timeout_s{2.0};
   double candidate_required_duration_s{0.50};
 };
 
@@ -83,6 +88,9 @@ struct TouchdownDetectorInput
   double uav_vertical_velocity_mps{0.0};
   bool relative_horizontal_speed_valid{false};
   double relative_horizontal_speed_mps{0.0};
+  bool terminal_descent_active{false};
+  bool terminal_command_complete{false};
+  double relative_height_reference_m{0.0};
 };
 
 /**
@@ -101,8 +109,11 @@ struct TouchdownDetectorOutput
  *
  * 视觉高度只能作为普通触地路径的辅助证据，不能单独确认触地。PX4 报告世界系
  * 水平运动时，只有无人机相对估计甲板的水平速度足够小才允许形成候选，从而支持
- * 水平移动平台而不放宽垂直或旋转运动约束。强触地路径要求 PX4 同时报告
- * `landed` 与 `at_rest`。确认结果会锁存，只有显式 reset 才清除。
+ * 水平移动平台而不放宽垂直或旋转运动约束。终端落板段只有在最低落板命令已经
+ * 到达后，才允许使用“低高度、参考已压入甲板、实际垂直运动持续停滞、PX4
+ * close-to-ground”为组合接触证据，
+ * 用于 Offboard 位置环已经压住起落架但 PX4 land detector 尚未置位的情况。强触地
+ * 路径要求 PX4 同时报告 `landed` 与 `at_rest`。确认结果会锁存，只有显式 reset 才清除。
  */
 class TouchdownDetector
 {

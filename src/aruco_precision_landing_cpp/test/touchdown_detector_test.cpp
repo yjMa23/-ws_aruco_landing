@@ -23,6 +23,9 @@ TouchdownDetectorParameters test_parameters()
   parameters.max_relative_vertical_speed_mps = 0.12;
   parameters.max_uav_vertical_speed_mps = 0.15;
   parameters.max_relative_horizontal_speed_mps = 0.15;
+  parameters.terminal_contact_max_height_m = 0.24;
+  parameters.terminal_contact_min_reference_error_m = 0.10;
+  parameters.terminal_contact_max_vertical_speed_mps = 0.05;
   parameters.candidate_required_duration_s = 0.30;
   return parameters;
 }
@@ -101,6 +104,96 @@ TEST(TouchdownDetectorTest, ContactLowHeightAndLowVelocityConfirmAfterDuration)
   EXPECT_EQ(output.status, TouchdownStatus::kConfirmed);
   EXPECT_TRUE(output.confirmed_latched);
   EXPECT_GE(output.candidate_duration_s, 0.30 - 1.0e-12);
+}
+
+TEST(TouchdownDetectorTest, TerminalContactStallConfirmsWithoutPx4ContactFlag)
+{
+  TouchdownDetector detector(test_parameters());
+
+  TouchdownDetectorOutput output;
+  for (int index = 0; index <= 3; ++index) {
+    auto input = base_input(index * 0.1);
+    input.relative_height_m = 0.22;
+    input.relative_height_reference_m = 0.05;
+    input.terminal_descent_active = true;
+    input.terminal_command_complete = true;
+    input.relative_vertical_velocity_mps = 0.01;
+    input.uav_vertical_velocity_mps = 0.01;
+    output = detector.update(input);
+  }
+
+  EXPECT_EQ(output.status, TouchdownStatus::kConfirmed);
+  EXPECT_TRUE(output.confirmed_latched);
+  EXPECT_NE(
+    output.evidence_mask &
+    touchdown_evidence_mask(TouchdownEvidence::kTerminalContactStall),
+    0U);
+}
+
+TEST(TouchdownDetectorTest, TerminalContactWaitsForMinimumCommand)
+{
+  TouchdownDetector detector(test_parameters());
+
+  TouchdownDetectorOutput output;
+  for (int index = 0; index <= 5; ++index) {
+    auto input = base_input(index * 0.1);
+    input.relative_height_m = 0.22;
+    input.relative_height_reference_m = 0.12;
+    input.terminal_descent_active = true;
+    input.terminal_command_complete = false;
+    input.relative_vertical_velocity_mps = 0.01;
+    input.uav_vertical_velocity_mps = 0.01;
+    output = detector.update(input);
+  }
+
+  EXPECT_EQ(output.status, TouchdownStatus::kAirborne);
+  EXPECT_FALSE(output.confirmed_latched);
+  EXPECT_DOUBLE_EQ(output.candidate_duration_s, 0.0);
+  EXPECT_EQ(
+    output.evidence_mask &
+    touchdown_evidence_mask(TouchdownEvidence::kTerminalContactStall),
+    0U);
+}
+
+TEST(TouchdownDetectorTest, TerminalContactNeedsReferencePenetrationAndVerticalStall)
+{
+  TouchdownDetector detector(test_parameters());
+  auto input = base_input(0.0);
+  input.relative_height_m = 0.22;
+  input.relative_height_reference_m = 0.17;
+  input.terminal_descent_active = true;
+  input.terminal_command_complete = true;
+  EXPECT_EQ(detector.update(input).status, TouchdownStatus::kAirborne);
+
+  input.sample_time_s = 0.1;
+  input.relative_height_reference_m = 0.05;
+  input.uav_vertical_velocity_mps = 0.08;
+  const auto moving = detector.update(input);
+  EXPECT_EQ(moving.status, TouchdownStatus::kAirborne);
+  EXPECT_EQ(
+    moving.evidence_mask &
+    touchdown_evidence_mask(TouchdownEvidence::kTerminalContactStall),
+    0U);
+}
+
+TEST(TouchdownDetectorTest, TerminalContactDoesNotBypassVisualOrMotionSafety)
+{
+  TouchdownDetector detector(test_parameters());
+  auto input = base_input(0.0);
+  input.relative_height_m = 0.22;
+  input.relative_height_reference_m = 0.05;
+  input.terminal_descent_active = true;
+  input.terminal_command_complete = true;
+  input.visual_height_valid = false;
+  EXPECT_EQ(detector.update(input).status, TouchdownStatus::kInsufficientEvidence);
+
+  input = base_input(0.1);
+  input.relative_height_m = 0.22;
+  input.relative_height_reference_m = 0.05;
+  input.terminal_descent_active = true;
+  input.terminal_command_complete = true;
+  input.rotational_movement = true;
+  EXPECT_EQ(detector.update(input).status, TouchdownStatus::kAirborne);
 }
 
 TEST(TouchdownDetectorTest, SingleContactFrameDoesNotConfirm)
@@ -348,6 +441,18 @@ TEST(TouchdownDetectorTest, RejectsInvalidInputAndParameters)
 
   parameters = test_parameters();
   parameters.max_relative_horizontal_speed_mps = 0.0;
+  EXPECT_THROW(
+    {TouchdownDetector invalid_detector(parameters);},
+    std::invalid_argument);
+
+  parameters = test_parameters();
+  parameters.terminal_contact_min_reference_error_m = 0.0;
+  EXPECT_THROW(
+    {TouchdownDetector invalid_detector(parameters);},
+    std::invalid_argument);
+
+  parameters = test_parameters();
+  parameters.terminal_contact_max_vertical_speed_mps = 0.0;
   EXPECT_THROW(
     {TouchdownDetector invalid_detector(parameters);},
     std::invalid_argument);

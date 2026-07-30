@@ -18,7 +18,7 @@
 → 视觉或状态失效时安全暂停/恢复
 ```
 
-当前阶段为 **P6B：近距多尺度视觉与动态平台真实接触正向验收**。P5C 和 P6A 已完成；P6B 已实现 `FINAL_DESCENT / TOUCHDOWN_CANDIDATE_HOLD / TOUCHDOWN_HOLD`、触地后保持以及“快速接近—近接触减速”的分段参考。四尺度 ID0~ID3 Marker 已接入有状态选择器，代码、`5 m` 静止回归和 `0.50 m` 相对下降验收均已通过。项目已加入 `near=0.02 m` 覆盖模型，并开放静止及纯水平运动甲板的最终下降入口；动态平台真实接触 rosbag 尚未执行，因此 P6B 仍处于进行中。
+当前阶段为 **P7：20+20 批量基线回归准备**。2026-07-30 已完成终端落板逻辑复验：最终下降参考不再停在 `0.15 m`，而是在安全终端段继续降到 `0.05 m`；最低命令到达后，只有近地、低垂直速度、参考与实际高度持续存在接触压差且其余着陆窗口条件安全时，才允许形成终端接触候选。`static` 和 `constant02` 单轮均进入 `TOUCHDOWN_CANDIDATE_HOLD → TOUCHDOWN_HOLD` 并保持 10 秒，随后 P7 真实 3+3 冒烟以 6/6 PASS、0 failure 完成。下一步执行 20+20 基线回归，不再修改末端下降参数。
 
 > 相对下降和最终下降均默认关闭。P6B 必须同时显式传入 `--enable-relative-descent --enable-final-descent`；当前只开放静止和纯水平运动的 `static / constant02 / constant / sinusoidal` 场景，升沉、倾斜和组合场景仍被脚本阻断。系统不会发送 `NAV_LAND`，也不会自动 Disarm。
 
@@ -43,14 +43,15 @@
 | P5B 相对高度下降 | 已完成 | 分阶段下降到 `0.50 m`、窗口暂停、恢复到 `2.0 m` 和恢复后重新授权锁止 | — |
 | P5C 垂直状态估计与标定 | 已完成 | 相机 z 外参修正、独立垂直估计、低高度标定和 z 速度前馈 | — |
 | P6A 多源触地确认 | 已完成 | PX4 land detector、视觉高度和垂直速度联合判据及负向 SITL 验收 | — |
-| P6B 最终下降与真实接触 | 进行中 | 已完成分段最终下降、水平动态场景入口、四尺度有状态 Marker 选择器、`near=0.02 m` 相机模型和 222 项测试；`constant02` 动态真实接触 rosbag 待执行 | — |
-| P7/P8 评测与消融 | 未开始 | 批量实验、指标统计和传统方法消融 | — |
+| P6B 最终下降与真实接触 | 已完成 | 终端参考继续降到 `0.05 m`，static/constant02 均形成接触候选、确认并保持 10 秒；见 `docs/P6B_FINAL_DESCENT_AND_TOUCHDOWN_VALIDATION.md` | — |
+| P7 批量评测 | 3+3 冒烟完成 | 顺序批量、resume、失败分类、轻量 Bag 和聚合已实现；2026-07-30 static 3 次 + constant02 3 次全部 PASS，20+20 回归待执行 | — |
+| P8 传统方法消融 | 未开始 | P7 完成后再进入 | — |
 
 当前完整工作区测试结果：
 
 ```text
 3 packages finished
-222 tests
+230 tests
 0 errors
 0 failures
 0 skipped
@@ -73,7 +74,7 @@
 - **工程化近距模型**：项目内 `moving_deck_sim/models/mono_cam` 与 PX4 默认 SDF 的唯一传感器差异为 `near=0.02 m`；`start_sitl.sh` 支持 `px4-default/close-range` A/B，并仅在 `--record-camera-debug` 时增加图像录包。
 - **动态下降丢帧去抖**：`constant02` 首次试验暴露单帧 `aruco_visible=false` 会立即触发 `RECOVER_CLIMB` 并锁止再次下降；现已改为 `<0.5 s` 仅暂停、`0.5~2.0 s` 恢复爬升、`>=2.0 s` 回退 GNSS，控制器包 180 项测试通过。
 
-当前下一步：在 QGroundControl 确认后运行 `constant02 + close-range + final descent`，验证移动甲板上的分段下降、ID2→ID3、低相对水平速度触地候选、触地确认和保持；完成主验收后再按需补做 `near=0.10/0.02 m` A/B。
+当前下一步：冻结当前终端落板参数，执行 P7 `20+20` 基线回归并聚合成功率、落地时间、水平误差、触地速度、Marker 切换和恢复次数。除非批量结果出现可重复失败，否则不要继续调整最终下降或触地阈值。
 
 ---
 
@@ -139,7 +140,7 @@ colcon test-result --verbose
 预期结果：
 
 ```text
-222 tests, 0 errors, 0 failures, 0 skipped
+230 tests, 0 errors, 0 failures, 0 skipped
 ```
 
 如果 `px4_msgs` 位于其他工作空间，请替换：
@@ -149,6 +150,80 @@ source ~/ws_sensor_combined/install/setup.bash
 ```
 
 ---
+
+## 4.1 P7 批量实验
+
+P7 第一版只支持 `static` 和 `constant02`，默认使用 `close-range` 相机、轻量 Bag、顺序执行和 10 秒 `TOUCHDOWN_HOLD` 成功判据。不会通过固定 sleep 判定成功，也不会默认录制原始图像。
+
+单轮：
+
+```bash
+python3 scripts/run_single_experiment.py \
+  --scenario static \
+  --seed 101 \
+  --episode-timeout 600 \
+  --startup-timeout 120 \
+  --touchdown-hold 10 \
+  --output-directory results/manual
+```
+
+3+3 冒烟：
+
+```bash
+python3 scripts/run_batch_experiments.py \
+  config/experiments/p7_smoke.yaml
+```
+
+20+20 回归：
+
+```bash
+python3 scripts/run_batch_experiments.py \
+  config/experiments/p7_baseline.yaml
+```
+
+dry-run：
+
+```bash
+python3 scripts/run_batch_experiments.py \
+  config/experiments/p7_smoke.yaml \
+  --dry-run
+```
+
+恢复已有批次：
+
+```bash
+python3 scripts/run_batch_experiments.py \
+  config/experiments/p7_smoke.yaml \
+  --resume \
+  --batch-id <EXISTING_BATCH_ID>
+```
+
+聚合：
+
+```bash
+python3 scripts/aggregate_results.py results/<BATCH_ID>
+```
+
+输出目录：
+
+```text
+results/<batch_id>/
+  batch_manifest.json
+  episodes.csv
+  summary.json
+  summary.csv
+  failures.csv
+  <episode_id>/
+    manifest.json
+    controller_config.yaml
+    scenario_config.yaml
+    evaluation.json
+    evaluation.txt
+    run.log
+    bag/
+```
+
+P7 自动化只用于 SITL。2026-07-30 真实 3+3 冒烟已连续运行通过；下一步执行 20+20 基线回归。`constant/sinusoidal/heave/rollpitch/combined` 暂不进入第一版批量触地。
 
 # 5. 完整启动流程
 
@@ -850,7 +925,7 @@ final_descent.enabled: false
 
 相对下降默认关闭；显式启用 P5B 时下降到配置的安全测试高度并继续保持水平跟踪。P6B 最终下降还需要额外显式授权，启动脚本当前只允许静止或纯水平运动甲板，继续阻断升沉、倾斜和组合场景。触地确认后只保持当前位置，不发送 `NAV_LAND` 或 Disarm。
 
-首次 P6B 真实接触试验已证明原单一大 Marker 在近距会超出相机视场，后续固定优先级多尺度方案又暴露高处小 Marker 提前抢占问题。当前有状态选择器代码、`5 m` 和 `0.50 m` SITL 验收已通过；最新最终下降复验已完成 ID0→ID1→ID2 切换，但在无人机相对甲板约 `0.24 m` 时视觉长时丢失。该高度与 PX4 默认相机 `near=0.10 m` 及约 `0.14 m` 安装偏置吻合。项目已提供仅修改 near clip 为 `0.02 m` 的覆盖模型，但真实 A/B Bag 尚未完成，因此 P6B 仍未通过，不得将当前版本视为可用于实机自动触地的稳定版本。
+首次 P6B 真实接触试验证明原单一大 Marker 在近距会超出相机视场，固定优先级多尺度方案又暴露高处小 Marker 提前抢占问题。当前有状态选择器、close-range `near=0.02 m` 相机模型和终端落板逻辑已经联合通过 static/constant02 单轮以及 P7 3+3 冒烟。该结论仅适用于当前 PX4 SITL 和静止/纯水平移动甲板，仍不得直接外推为实机自动触地安全证明。
 
 实机测试前必须重新确认：
 

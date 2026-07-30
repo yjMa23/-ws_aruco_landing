@@ -108,6 +108,16 @@ docs/COORDINATE_FRAMES.md
   * 已并行接入四个触地调试话题，但不改变状态机、TrajectorySetpoint 或 Land/Disarm。
   * 静止 `0.50 m`、升沉 `0.70 m` 和恢复爬升三类负向 SITL 验收均无候选和确认，见 `docs/P6_TOUCHDOWN_CONFIRMATION_VALIDATION.md`。
 
+* `P6B` 最终下降与真实接触功能。
+  * 已实现 `FINAL_DESCENT`、`TOUCHDOWN_CANDIDATE_HOLD`、`TOUCHDOWN_HOLD`、分段最终下降、动态平台相对水平速度证据和视觉短时丢帧去抖。
+  * 四尺度有状态 Marker 选择器和项目内 `near=0.02 m` 相机模型已接入。
+  * 2026-07-30 已完成终端落板修补与复验：参考在安全终端段继续降到 `0.05 m`，static/constant02 均进入 `TOUCHDOWN_CANDIDATE_HOLD → TOUCHDOWN_HOLD` 并保持 10 秒，P6B 正向验收 PASS，见 `docs/P6B_FINAL_DESCENT_AND_TOUCHDOWN_VALIDATION.md`。
+
+* `P7` 批量评测管线第一版。
+  * 已实现单轮运行、顺序批量、seed 展开、resume、统一失败分类、轻量 Bag、参数快照和基础聚合。
+  * 第一版只支持 static 和 constant02；2026-07-30 已完成真实 3+3 冒烟，6/6 PASS、0 failure，录包、清理、评测和聚合结果完整。下一步执行 20+20 基线回归。
+  * 执行计划见 `docs/P7_BATCH_EVALUATION_PLAN.md`。
+
 现有运行包：
 
 * `aruco_detector`
@@ -129,9 +139,10 @@ docs/COORDINATE_FRAMES.md
 
 当前缺少：
 
-* `0.50 m` 以下最终下降和真实接触正向验收。
-* 触地确认后的保持、Land/Disarm 授权和最终恢复策略。
-* P7 批量评测和 P8 传统方法消融。
+* P7 static 20 次 + constant02 20 次基线回归及统一聚合。
+* 根据 20+20 结果决定是否进入 P8；没有可重复失败时不得继续调整末端下降或触地阈值。
+* 触地后的 Land/Disarm 授权和最终恢复策略；当前仍保持 `NAV_LAND / Disarm = 0 / 0`。
+* P8 传统方法消融。
 
 ---
 
@@ -155,8 +166,8 @@ Codex 必须按以下顺序推进，除非用户明确改变优先级：
 14. `P5B`：相对甲板高度分阶段下降，已完成 `0.50 m` 安全测试高度验收。
 15. `P5C`：低高度垂直状态估计、偏差标定和相对高度跟踪优化，已完成。
 16. `P6A`：多源触地候选、确认和负向验收，已完成。
-17. `P6B`：最终下降和真实接触正向验收，当前阶段。
-18. `P7`：批量评测。
+17. `P6B`：最终下降与终端接触确认已通过 static/constant02 单轮和 P7 3+3 冒烟。
+18. `P7`：批量评测管线和真实 3+3 冒烟已完成，当前执行 20+20 基线回归。
 19. `P8`：传统方法消融实验。
 
 未完成 `P0~P7` 前，不实现强化学习或 MPC。
@@ -394,11 +405,12 @@ colcon test-result --verbose
 
 ## 默认下一任务
 
-`P0`～`P6A` 已完成。没有额外指令时，进入 P6B，但必须先保存独立执行计划，并保持以下边界：
+`P0`～`P6B` 已完成，P7 真实 3+3 冒烟已于 2026-07-30 以 6/6 PASS 完成。没有额外指令时：
 
 ```text
-先实现最终下降参考控制与显式授权开关，只在静止甲板 SITL 中从 0.50 m 继续低速下降；
-保持 P4.7 水平跟踪、P5C 垂直速度前馈和 P6A 多源触地检测，
-触地确认后先保持控制输出，不自动 Disarm，不允许视觉高度单独触发状态跳转，
-任何视觉、PX4 land 状态或时间异常必须暂停或恢复，Ground Truth 只能用于离线评测。
+冻结当前终端落板、触地确认、Marker 和 close-range 相机参数；
+执行 P7 static 20 次 + constant02 20 次顺序基线回归并聚合结果；
+只有出现可重复失败时才进入根因分析，不因单次随机波动立即调参；
+20+20 通过后再进入 P8，不得提前加入 MPC、强化学习、升沉、倾斜或组合触地；
+全程保持 NAV_LAND / Disarm = 0 / 0，Ground Truth 只能用于离线评测。
 ```

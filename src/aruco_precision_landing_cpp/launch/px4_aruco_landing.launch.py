@@ -170,9 +170,14 @@ def generate_launch_description():
                 description="Relative height at which P6B switches to the contact rate.",
             ),
             DeclareLaunchArgument(
+                "final_descent_terminal_entry_height_m",
+                default_value="0.20",
+                description="Reference height where the safe terminal touchdown segment begins.",
+            ),
+            DeclareLaunchArgument(
                 "final_descent_minimum_command_height_m",
-                default_value="0.15",
-                description="Minimum relative-height command clamp before touchdown confirmation.",
+                default_value="0.05",
+                description="Minimum relative-height command used to achieve physical deck contact.",
             ),
             DeclareLaunchArgument(
                 "final_descent_max_reference_tracking_error_m",
@@ -361,6 +366,12 @@ def generate_launch_description():
                         "final_descent.contact_slowdown_height_m": ParameterValue(
                             LaunchConfiguration(
                                 "final_descent_contact_slowdown_height_m"
+                            ),
+                            value_type=float,
+                        ),
+                        "final_descent.terminal_descent_entry_height_m": ParameterValue(
+                            LaunchConfiguration(
+                                "final_descent_terminal_entry_height_m"
                             ),
                             value_type=float,
                         ),

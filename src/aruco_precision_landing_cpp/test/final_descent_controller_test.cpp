@@ -110,7 +110,7 @@ TEST(FinalDescentControllerTest, ClampsAtMinimumCommandHeight)
   output = controller.update(input);
 
   ASSERT_TRUE(output.has_value());
-  EXPECT_DOUBLE_EQ(output->relative_height_reference_m, 0.15);
+  EXPECT_DOUBLE_EQ(output->relative_height_reference_m, 0.05);
   EXPECT_EQ(output->phase, FinalDescentPhase::kPaused);
   EXPECT_DOUBLE_EQ(output->vertical_reference_velocity_ned_mps, 0.0);
 }
@@ -189,6 +189,61 @@ TEST(FinalDescentControllerTest, InsufficientEvidencePauses)
   EXPECT_FALSE(output->reference_changed);
 }
 
+TEST(FinalDescentControllerTest, TerminalSegmentContinuesToDeckWithInsufficientEvidence)
+{
+  FinalDescentController controller(FinalDescentParameters{});
+  auto input = make_input();
+  input.current_relative_height_m = 0.20;
+  input.current_reference_height_m = 0.20;
+  ASSERT_TRUE(controller.update(input).has_value());
+
+  input.landing_window_open = false;
+  input.terminal_descent_allowed = true;
+  input.touchdown_status = TouchdownStatus::kInsufficientEvidence;
+  const auto output = controller.update(input);
+
+  ASSERT_TRUE(output.has_value());
+  EXPECT_EQ(output->phase, FinalDescentPhase::kDescending);
+  EXPECT_NEAR(output->relative_height_reference_m, 0.17, 1.0e-12);
+  EXPECT_NEAR(output->vertical_reference_velocity_ned_mps, 0.03, 1.0e-12);
+}
+
+TEST(FinalDescentControllerTest, TerminalSegmentCannotBypassOtherSafetyFailure)
+{
+  FinalDescentController controller(FinalDescentParameters{});
+  auto input = make_input();
+  input.current_relative_height_m = 0.20;
+  input.current_reference_height_m = 0.20;
+  ASSERT_TRUE(controller.update(input).has_value());
+
+  input.landing_window_open = false;
+  input.terminal_descent_allowed = false;
+  input.touchdown_status = TouchdownStatus::kInsufficientEvidence;
+  const auto output = controller.update(input);
+
+  ASSERT_TRUE(output.has_value());
+  EXPECT_EQ(output->phase, FinalDescentPhase::kPaused);
+  EXPECT_DOUBLE_EQ(output->relative_height_reference_m, 0.20);
+}
+
+TEST(FinalDescentControllerTest, TerminalPermissionOnlyAppliesBelowEntryHeight)
+{
+  FinalDescentController controller(FinalDescentParameters{});
+  auto input = make_input();
+  input.current_relative_height_m = 0.21;
+  input.current_reference_height_m = 0.21;
+  ASSERT_TRUE(controller.update(input).has_value());
+
+  input.landing_window_open = false;
+  input.terminal_descent_allowed = true;
+  input.touchdown_status = TouchdownStatus::kInsufficientEvidence;
+  const auto output = controller.update(input);
+
+  ASSERT_TRUE(output.has_value());
+  EXPECT_EQ(output->phase, FinalDescentPhase::kPaused);
+  EXPECT_DOUBLE_EQ(output->relative_height_reference_m, 0.21);
+}
+
 TEST(FinalDescentControllerTest, UnsafeEvidenceRequestsRecovery)
 {
   FinalDescentController controller(FinalDescentParameters{});
@@ -264,6 +319,20 @@ TEST(FinalDescentControllerTest, RejectsInvalidParameterSets)
 {
   auto parameters = FinalDescentParameters{};
   parameters.approach_rate_mps = 0.0;
+  EXPECT_THROW(
+    {FinalDescentController invalid_controller(parameters);},
+    std::invalid_argument);
+
+  parameters = FinalDescentParameters{};
+  parameters.terminal_descent_entry_height_m =
+    parameters.minimum_command_height_m;
+  EXPECT_THROW(
+    {FinalDescentController invalid_controller(parameters);},
+    std::invalid_argument);
+
+  parameters = FinalDescentParameters{};
+  parameters.terminal_descent_entry_height_m =
+    parameters.contact_slowdown_height_m;
   EXPECT_THROW(
     {FinalDescentController invalid_controller(parameters);},
     std::invalid_argument);

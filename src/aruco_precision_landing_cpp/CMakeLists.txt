@@ -91,6 +91,7 @@ install(
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
   ament_add_gtest(
     coordinate_transform_test
@@ -181,6 +182,15 @@ if(BUILD_TESTING)
     test/final_descent_controller_test.cpp
   )
   target_link_libraries(final_descent_controller_test aruco_landing_math)
+
+  add_test(
+    NAME p7_experiment_tests
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_p7_experiments.py
+  )
+  set_tests_properties(
+    p7_experiment_tests
+    PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../..
+  )
 endif()
 
 ament_export_dependencies(Eigen3)

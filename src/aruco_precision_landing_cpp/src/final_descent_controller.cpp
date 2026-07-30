@@ -29,17 +29,21 @@ FinalDescentController::FinalDescentController(
     !positive_finite(parameters_.approach_rate_mps) ||
     !positive_finite(parameters_.contact_rate_mps) ||
     !positive_finite(parameters_.contact_slowdown_height_m) ||
+    !positive_finite(parameters_.terminal_descent_entry_height_m) ||
     !positive_finite(parameters_.minimum_command_height_m) ||
     !positive_finite(parameters_.maximum_reference_tracking_error_m))
   {
     throw std::invalid_argument(
             "final-descent heights, rates, and tracking error must be finite and positive");
   }
-  if (parameters_.minimum_command_height_m >= parameters_.contact_slowdown_height_m ||
+  if (parameters_.minimum_command_height_m >=
+    parameters_.terminal_descent_entry_height_m ||
+    parameters_.terminal_descent_entry_height_m >=
+    parameters_.contact_slowdown_height_m ||
     parameters_.contact_slowdown_height_m >= parameters_.entry_height_m)
   {
     throw std::invalid_argument(
-            "final-descent heights must satisfy minimum < slowdown < entry");
+            "final-descent heights must satisfy minimum < terminal < slowdown < entry");
   }
   if (parameters_.approach_rate_mps < parameters_.contact_rate_mps) {
     throw std::invalid_argument(
@@ -107,8 +111,12 @@ std::optional<FinalDescentOutput> FinalDescentController::update(
       FinalDescentPhase::kWaitingAuthorization);
   }
 
-  if (!input.landing_window_open ||
-    input.touchdown_status == TouchdownStatus::kInsufficientEvidence)
+  const bool terminal_descent_active =
+    input.terminal_descent_allowed &&
+    relative_height_reference_m_ <= parameters_.terminal_descent_entry_height_m;
+  if ((!input.landing_window_open ||
+    input.touchdown_status == TouchdownStatus::kInsufficientEvidence) &&
+    !terminal_descent_active)
   {
     return make_output(previous_reference_m, 0.0, FinalDescentPhase::kPaused);
   }

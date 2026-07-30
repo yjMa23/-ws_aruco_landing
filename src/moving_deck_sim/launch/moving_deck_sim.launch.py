@@ -8,6 +8,7 @@ from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
@@ -25,6 +26,7 @@ def generate_launch_description():
     gnss_config_file = LaunchConfiguration("gnss_config_file")
     enable_gnss = LaunchConfiguration("enable_gnss")
     headless = LaunchConfiguration("headless")
+    random_seed = LaunchConfiguration("random_seed")
     existing_resource_path = os.environ.get("GZ_SIM_RESOURCE_PATH", "")
     resource_path = os.pathsep.join(
         [os.path.join(package_share, "models"), existing_resource_path]
@@ -56,14 +58,26 @@ def generate_launch_description():
         package="moving_deck_sim",
         executable="moving_deck_controller",
         name="moving_deck_controller",
-        parameters=[config_file, {"use_sim_time": True}],
+        parameters=[
+            config_file,
+            {
+                "use_sim_time": True,
+                "random_seed": ParameterValue(random_seed, value_type=int),
+            },
+        ],
         output="screen",
     )
     gnss_simulator = Node(
         package="moving_deck_sim",
         executable="deck_gnss_simulator",
         name="deck_gnss_simulator",
-        parameters=[gnss_config_file, {"use_sim_time": True}],
+        parameters=[
+            gnss_config_file,
+            {
+                "use_sim_time": True,
+                "random_seed": ParameterValue(random_seed, value_type=int),
+            },
+        ],
         condition=IfCondition(enable_gnss),
         output="screen",
     )
@@ -89,6 +103,11 @@ def generate_launch_description():
                 "headless",
                 default_value="false",
                 description="Run the Gazebo server without its GUI.",
+            ),
+            DeclareLaunchArgument(
+                "random_seed",
+                default_value="1",
+                description="Deterministic seed shared by deck motion and GNSS simulation.",
             ),
             SetEnvironmentVariable("GZ_SIM_RESOURCE_PATH", resource_path),
             # 当前桌面会话为 X11，显式使用 xcb，避免 Qt 自动平台探测导致视口输入失效。

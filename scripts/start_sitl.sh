@@ -13,6 +13,9 @@ Options:
   --headless                             Run Gazebo without GUI
   --record                               Record evaluation and ArUco diagnostics topics
   --record-camera-debug                  Record a bag and additionally include raw camera topics
+  --bag-output PATH                      Write rosbag to this exact directory (implies --record)
+  --seed SEED                            Deterministic deck/GNSS seed (default: 1)
+  --auto-confirm-controller              Skip the interactive SITL controller confirmation
   --camera-model px4-default|close-range Select camera near clip profile (default: close-range)
   --tracking-mode MODE                   Override tracking.mode
   --prediction-horizon SEC               Override additional prediction horizon
@@ -41,7 +44,8 @@ Options:
   --final-descent-contact-rate RATE      Near-contact rate (default: 0.03)
   --final-descent-rate RATE              Alias for --final-descent-contact-rate
   --final-descent-slowdown-height HEIGHT Switch to contact rate here (default: 0.25)
-  --final-descent-min-height HEIGHT      Final command-height clamp (default: 0.15)
+  --final-descent-terminal-height HEIGHT Begin safe terminal touchdown here (default: 0.20)
+  --final-descent-min-height HEIGHT      Physical-contact command clamp (default: 0.05)
   -h, --help                             Show this help
 
 Environment:
@@ -60,6 +64,9 @@ scenario="static"
 headless="false"
 record="false"
 record_camera_debug="false"
+bag_output=""
+random_seed="1"
+auto_confirm_controller="false"
 camera_model_profile="close-range"
 tracking_mode="PREDICTED_POSITION_VELOCITY_FF"
 prediction_horizon_s="0.10"
@@ -85,7 +92,8 @@ final_descent_enabled="false"
 final_descent_approach_rate_mps="0.12"
 final_descent_contact_rate_mps="0.03"
 final_descent_contact_slowdown_height_m="0.25"
-final_descent_minimum_command_height_m="0.15"
+final_descent_terminal_entry_height_m="0.20"
+final_descent_minimum_command_height_m="0.05"
 final_descent_max_reference_tracking_error_m="0.20"
 tuning_override="false"
 
@@ -107,6 +115,21 @@ while (($#)); do
     --record-camera-debug)
       record="true"
       record_camera_debug="true"
+      shift
+      ;;
+    --bag-output)
+      (($# >= 2)) || die "--bag-output requires a value"
+      record="true"
+      bag_output="$2"
+      shift 2
+      ;;
+    --seed)
+      (($# >= 2)) || die "--seed requires a value"
+      random_seed="$2"
+      shift 2
+      ;;
+    --auto-confirm-controller)
+      auto_confirm_controller="true"
       shift
       ;;
     --camera-model)
@@ -262,6 +285,12 @@ while (($#)); do
       tuning_override="true"
       shift 2
       ;;
+    --final-descent-terminal-height)
+      (($# >= 2)) || die "--final-descent-terminal-height requires a value"
+      final_descent_terminal_entry_height_m="$2"
+      tuning_override="true"
+      shift 2
+      ;;
     --final-descent-min-height)
       (($# >= 2)) || die "--final-descent-min-height requires a value"
       final_descent_minimum_command_height_m="$2"
@@ -306,6 +335,10 @@ is_nonnegative_number() {
   [[ "$1" =~ ^([0-9]+([.][0-9]*)?|[.][0-9]+)$ ]]
 }
 
+[[ "$random_seed" =~ ^[0-9]+$ ]] || die "random_seed must be an unsigned integer"
+awk -v value="$random_seed" 'BEGIN {exit !(value >= 0 && value <= 4294967295)}' ||
+  die "random_seed must fit in uint32"
+
 for value_name in \
   prediction_horizon_s \
   velocity_feedforward_gain \
@@ -326,6 +359,7 @@ for value_name in \
   final_descent_approach_rate_mps \
   final_descent_contact_rate_mps \
   final_descent_contact_slowdown_height_m \
+  final_descent_terminal_entry_height_m \
   final_descent_minimum_command_height_m \
   final_descent_max_reference_tracking_error_m; do
   value="${!value_name}"
@@ -370,11 +404,12 @@ awk -v approach="$final_descent_approach_rate_mps" \
   -v contact="$final_descent_contact_rate_mps" \
   'BEGIN {exit !(contact > 0.0 && contact <= approach && approach <= 0.20 && contact <= 0.05)}' ||
   die "final descent rates must satisfy 0 < contact <= approach <= 0.20 and contact <= 0.05"
-awk -v value="$final_descent_minimum_command_height_m" \
+awk -v minimum="$final_descent_minimum_command_height_m" \
+  -v terminal="$final_descent_terminal_entry_height_m" \
   -v slowdown="$final_descent_contact_slowdown_height_m" \
   -v entry="$descent_minimum_test_height_m" \
-  'BEGIN {exit !(value >= 0.10 && value < slowdown && slowdown < entry)}' ||
-  die "final heights must satisfy 0.10 <= minimum < slowdown < descent test height"
+  'BEGIN {exit !(minimum >= 0.02 && minimum < terminal && terminal < slowdown && slowdown < entry)}' ||
+  die "final heights must satisfy 0.02 <= minimum < terminal < slowdown < descent test height"
 awk -v value="$final_descent_max_reference_tracking_error_m" \
   'BEGIN {exit !(value > 0.0 && value <= 0.30)}' ||
   die "final_descent_max_reference_tracking_error_m must be within (0, 0.30]"
@@ -389,9 +424,9 @@ if [[ "$final_descent_enabled" == "true" ]]; then
     'BEGIN {exit !(value == 0.50)}' ||
     die "P6B final descent requires --descent-test-height 0.50"
   awk -v window_min="$landing_window_minimum_relative_height_m" \
-    -v final_min="$final_descent_minimum_command_height_m" \
-    'BEGIN {exit !(window_min < final_min)}' ||
-    die "final descent requires landing-window minimum height below final command height"
+    -v terminal="$final_descent_terminal_entry_height_m" \
+    'BEGIN {exit !(window_min < terminal)}' ||
+    die "final descent requires landing-window minimum height below terminal-entry height"
 fi
 
 sanitize_number() {
@@ -425,7 +460,7 @@ source "$workspace_setup"
 source "$px4_gz_env"
 set -u
 
-for command in ros2 MicroXRCEAgent make setsid pgrep tail grep awk; do
+for command in ros2 python3 MicroXRCEAgent make setsid pgrep tail grep awk realpath; do
   command -v "$command" >/dev/null || die "required command not found: $command"
 done
 
@@ -546,16 +581,19 @@ start_process "moving deck ($scenario)" ros2 launch \
   moving_deck_sim moving_deck_sim.launch.py \
   "config_file:=$scenario_path" \
   "gnss_config_file:=$gnss_config_path" \
-  "headless:=$headless"
+  "headless:=$headless" \
+  "random_seed:=$random_seed"
 start_process "camera bridge" ros2 run ros_gz_bridge parameter_bridge \
   '/world/aruco/model/x500_mono_cam_down_0/link/camera_link/sensor/camera/image@sensor_msgs/msg/Image[gz.msgs.Image' \
   '/world/aruco/model/x500_mono_cam_down_0/link/camera_link/sensor/camera/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo'
 start_process "ArUco detector" ros2 launch aruco_detector aruco_detector.launch.py \
   use_sim_time:=true
 
-[[ -t 0 ]] || die "an interactive terminal is required for the controller safety confirmation"
+if [[ "$auto_confirm_controller" != "true" ]]; then
+  [[ -t 0 ]] || die "an interactive terminal is required for the controller safety confirmation; P7 automation must pass --auto-confirm-controller explicitly"
+fi
 echo "Waiting for PX4 ROS topics..."
-until ros2 topic list 2>/dev/null | grep -qx '/fmu/out/vehicle_status_v4'; do
+until python3 "$script_dir/check_ros_topic.py" /fmu/out/vehicle_status_v4; do
   for pid in "${child_pids[@]}"; do
     kill -0 "$pid" 2>/dev/null || die "a startup process exited while waiting for PX4"
   done
@@ -563,16 +601,20 @@ until ros2 topic list 2>/dev/null | grep -qx '/fmu/out/vehicle_status_v4'; do
 done
 echo
 echo "The controller will switch to Offboard and arm automatically."
-printf 'Confirm PX4/QGroundControl is healthy, then press Enter to start the controller... '
-while true; do
-  read_status=0
-  read -r -t 1 || read_status=$?
-  ((read_status == 0)) && break
-  ((read_status > 128)) || die "controller confirmation cancelled"
-  for pid in "${child_pids[@]}"; do
-    kill -0 "$pid" 2>/dev/null || die "a startup process exited before controller confirmation"
+if [[ "$auto_confirm_controller" == "true" ]]; then
+  echo "Controller safety confirmation: explicitly auto-confirmed for automated SITL."
+else
+  printf 'Confirm PX4/QGroundControl is healthy, then press Enter to start the controller... '
+  while true; do
+    read_status=0
+    read -r -t 1 || read_status=$?
+    ((read_status == 0)) && break
+    ((read_status > 128)) || die "controller confirmation cancelled"
+    for pid in "${child_pids[@]}"; do
+      kill -0 "$pid" 2>/dev/null || die "a startup process exited before controller confirmation"
+    done
   done
-done
+fi
 
 if [[ "$record" == "true" ]]; then
   bag_prefix="p4_${scenario}"
@@ -616,14 +658,22 @@ if [[ "$record" == "true" ]]; then
       bag_prefix+="_fa$(sanitize_number "$final_descent_approach_rate_mps")"
       bag_prefix+="_fc$(sanitize_number "$final_descent_contact_rate_mps")"
       bag_prefix+="_fh$(sanitize_number "$final_descent_contact_slowdown_height_m")"
+      bag_prefix+="_ft$(sanitize_number "$final_descent_terminal_entry_height_m")"
       bag_prefix+="_fmin$(sanitize_number "$final_descent_minimum_command_height_m")"
     fi
   fi
   if [[ "$record_camera_debug" == "true" ]]; then
     bag_prefix+="_camdebug_near$(sanitize_number "$camera_near_clip")"
   fi
-  bag_path="$workspace_dir/bags/${bag_prefix}_$(date +%Y%m%d_%H%M%S)"
-  mkdir -p "$workspace_dir/bags"
+  if [[ -n "$bag_output" ]]; then
+    bag_path="$(realpath -m "$bag_output")"
+    [[ ! -e "$bag_path" ]] || die "bag output already exists: $bag_path"
+    mkdir -p "$(dirname "$bag_path")"
+  else
+    bag_path="$workspace_dir/bags/${bag_prefix}_$(date +%Y%m%d_%H%M%S)"
+    mkdir -p "$workspace_dir/bags"
+  fi
+  echo "BAG_PATH=$bag_path"
   declare -a bag_topics=(
     /landing/state
     /landing/guidance_source
@@ -697,6 +747,7 @@ start_process "landing controller" ros2 launch \
   "final_descent_approach_rate_mps:=$final_descent_approach_rate_mps" \
   "final_descent_contact_rate_mps:=$final_descent_contact_rate_mps" \
   "final_descent_contact_slowdown_height_m:=$final_descent_contact_slowdown_height_m" \
+  "final_descent_terminal_entry_height_m:=$final_descent_terminal_entry_height_m" \
   "final_descent_minimum_command_height_m:=$final_descent_minimum_command_height_m" \
   "final_descent_max_reference_tracking_error_m:=$final_descent_max_reference_tracking_error_m" \
   "relative_descent_enabled:=$relative_descent_enabled" \

@@ -20,7 +20,7 @@
 → 丢失恢复、安全中止和批量评测
 ```
 
-本文档是传统基线的阶段执行计划。当前已完成 `P2.0`～`P6A` 的代码与真实 PX4 SITL 验收。P6A 已实现多源触地候选与确认、PX4 land detector 并行接入和静止/升沉/恢复三类负向验收。当前进入 P6B：最终下降与真实接触正向验证。
+本文档是传统基线的阶段执行计划。当前已完成 `P2.0`～`P6B` 的代码与真实 PX4 SITL 验收。2026-07-30 终端落板逻辑完成复验：最终参考在安全终端段继续降到 `0.05 m`，static 和 constant02 均形成候选、确认并进入 `TOUCHDOWN_HOLD`。随后 P7 真实 3+3 冒烟以 6/6 PASS、0 failure 完成，平均落地时间约 `24.90 s`、水平 RMSE 约 `0.0251 m`、触地垂直速度约 `0.0060 m/s`。当前下一阶段为 P7 20+20 基线回归。
 
 ---
 
@@ -82,16 +82,32 @@ src/moving_deck_sim
 - 发布 `/landing/vertical_state`、`/landing/raw_relative_height` 和 `/landing/relative_vertical_velocity`。
 - 订阅 PX4 `VehicleLandDetected`，联合视觉低高度和垂直速度运行多源触地候选与确认。
 - 发布 `/landing/touchdown_status`、`/landing/touchdown_evidence`、`/landing/touchdown_candidate_duration` 和 `/landing/touchdown_confirmed`。
-- P6A 检测结果当前只用于并行诊断，不改变状态机和控制输出。
+- P6A 负向阶段只并行评估触地证据；显式启用 P6B 后，候选会冻结最终下降参考，确认后进入 `TOUCHDOWN_HOLD`，仍不发送 `NAV_LAND` 或 Disarm。
 
 旧静态对中、下降和 `NAV_LAND` 代码仍保留用于历史基线参考，但从当前主路径不可达。相对下降默认关闭，`enable_auto_land=false`。
 
 ### 2.4 当前核心缺口
 
-- 没有 `0.50 m` 以下最终下降的独立安全门限与状态机。
-- 没有真实接触正向验收和触地确认后的保持状态。
-- 没有触地后保持、Land/Disarm 授权和失败分类。
-- 没有 P7 批量评测和 P8 消融实验。
+- P7 20+20 基线回归尚未执行，需要验证不同种子下的成功率、落地时间、水平误差、触地速度、Marker 切换和恢复次数。
+- 20+20 完成前冻结当前终端落板、触地判据、Marker 和 close-range 相机参数；只有出现可重复失败时才重新进入根因分析。
+- 没有触地后的 Land/Disarm 授权和最终恢复策略；当前继续保持 `NAV_LAND / Disarm = 0 / 0`。
+- P8 消融实验尚未开始。
+
+### 2.5 2026-07-29 P7 第一版状态
+
+已新增：
+
+```text
+scripts/run_single_experiment.py
+scripts/run_batch_experiments.py
+scripts/aggregate_results.py
+scripts/p7_experiment_utils.py
+config/experiments/p7_smoke.yaml
+config/experiments/p7_baseline.yaml
+docs/P7_BATCH_EVALUATION_PLAN.md
+```
+
+第一版只支持 `static` 和 `constant02`，顺序执行，单轮失败后继续。成功判据来自 `/landing/state` 的 `TOUCHDOWN_HOLD` 连续保持至少 10 秒，并由 `evaluate_p6b_touchdown.py` 复核；不使用固定 sleep 判定成功。真实执行还修复了 ROS CLI daemon 失效、PX4 就绪探测、状态监控、episode 计时和失败分类问题。2026-07-30 真实 3+3 冒烟已完成，6/6 PASS、0 failure，结果目录为 `results/p7_smoke_terminal_20260730/`；下一步执行 20+20。
 
 ---
 

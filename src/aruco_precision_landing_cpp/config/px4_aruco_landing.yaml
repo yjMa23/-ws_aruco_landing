@@ -67,6 +67,10 @@ px4_aruco_landing_node:
     touchdown_detector.max_uav_vertical_speed_mps: 0.15
     # PX4 在移动甲板上可能报告世界系水平运动；相对甲板速度低于该值仍可形成候选。
     touchdown_detector.max_relative_horizontal_speed_mps: 0.15
+    # Offboard 位置环将参考压到甲板内部后，若机体在近地持续停滞，则视为物理接触候选。
+    touchdown_detector.terminal_contact_max_height_m: 0.24
+    touchdown_detector.terminal_contact_min_reference_error_m: 0.10
+    touchdown_detector.terminal_contact_max_vertical_speed_mps: 0.05
     touchdown_detector.candidate_required_duration_s: 0.50
 
     # P6B 默认关闭。0.50→0.25 m 快速接近，0.25 m 以下低速接触。
@@ -75,7 +79,11 @@ px4_aruco_landing_node:
     final_descent.approach_rate_mps: 0.12
     final_descent.contact_rate_mps: 0.03
     final_descent.contact_slowdown_height_m: 0.25
-    final_descent.minimum_command_height_m: 0.15
+    # 进入终端落板段后，只允许“相对高度过低”使 landing window 关闭；
+    # 视觉、水平误差、相对速度或甲板姿态异常仍会暂停。
+    final_descent.terminal_descent_entry_height_m: 0.20
+    # 目标略低于机体真实接触高度，使起落架能够压到甲板并触发 PX4 land detector。
+    final_descent.minimum_command_height_m: 0.05
     final_descent.max_reference_tracking_error_m: 0.20
 
     motion_predictor.additional_prediction_horizon_s: 0.10

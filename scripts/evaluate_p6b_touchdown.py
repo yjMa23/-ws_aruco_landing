@@ -35,6 +35,9 @@ LOCAL_POSITION_TOPIC = "/fmu/out/vehicle_local_position_v1"
 LAND_DETECTED_TOPIC = "/fmu/out/vehicle_land_detected"
 VEHICLE_COMMAND_TOPIC = "/fmu/in/vehicle_command"
 GROUND_TRUTH_TOPIC = "/simulation/deck/ground_truth"
+MARKER_ID_TOPIC = "/landing/active_marker_id"
+ARUCO_VISIBLE_TOPIC = "/aruco/visible"
+RELATIVE_VERTICAL_VELOCITY_TOPIC = "/landing/relative_vertical_velocity"
 
 REQUIRED_TOPICS = {
     STATE_TOPIC,
@@ -51,6 +54,11 @@ REQUIRED_TOPICS = {
     LAND_DETECTED_TOPIC,
     VEHICLE_COMMAND_TOPIC,
     GROUND_TRUTH_TOPIC,
+}
+OPTIONAL_TOPICS = {
+    MARKER_ID_TOPIC,
+    ARUCO_VISIBLE_TOPIC,
+    RELATIVE_VERTICAL_VELOCITY_TOPIC,
 }
 
 FINAL_STATES = {
@@ -93,6 +101,28 @@ def state_sequence(samples: Sequence[tuple[float, str]]) -> list[str]:
 
 def first_time(samples: Sequence[tuple[float, str]], value: str) -> Optional[float]:
     return next((time_s for time_s, sample in samples if sample == value), None)
+
+
+def transition_sequence(samples: Sequence[tuple[float, Any]]) -> list[Any]:
+    result: list[Any] = []
+    for _, value in samples:
+        if not result or result[-1] != value:
+            result.append(value)
+    return result
+
+
+def visibility_transition_counts(
+    samples: Sequence[tuple[float, bool]], start_s: float
+) -> tuple[int, int]:
+    filtered = [(time_s, visible) for time_s, visible in samples if time_s >= start_s]
+    losses = 0
+    recoveries = 0
+    for (_, previous), (_, current) in zip(filtered, filtered[1:]):
+        if previous and not current:
+            losses += 1
+        elif not previous and current:
+            recoveries += 1
+    return losses, recoveries
 
 
 def values_after(samples: Sequence[TimedVector], start_s: Optional[float]) -> list[TimedVector]:
@@ -151,7 +181,8 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
     missing = REQUIRED_TOPICS - topic_types.keys()
     if missing:
         raise RuntimeError("bag is missing required topics: " + ", ".join(sorted(missing)))
-    message_types = {topic: get_message(topic_types[topic]) for topic in REQUIRED_TOPICS}
+    selected_topics = REQUIRED_TOPICS | (OPTIONAL_TOPICS & topic_types.keys())
+    message_types = {topic: get_message(topic_types[topic]) for topic in selected_topics}
 
     states: list[tuple[float, str]] = []
     phases: list[tuple[float, str]] = []
@@ -167,6 +198,9 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
     land_flags: list[tuple[float, dict[str, bool]]] = []
     commands: list[tuple[int, float]] = []
     ground_truth_world: list[TimedVector] = []
+    marker_ids: list[tuple[float, int]] = []
+    aruco_visible: list[tuple[float, bool]] = []
+    relative_vertical_velocity: list[TimedVector] = []
 
     while reader.has_next():
         topic, serialized_data, timestamp_ns = reader.read_next()
@@ -232,6 +266,14 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
             values = (float(position.x), float(position.y), float(position.z))
             if finite_values(values):
                 ground_truth_world.append(TimedVector(time_s, values))
+        elif topic == MARKER_ID_TOPIC:
+            marker_ids.append((time_s, int(message.data)))
+        elif topic == ARUCO_VISIBLE_TOPIC:
+            aruco_visible.append((time_s, bool(message.data)))
+        elif topic == RELATIVE_VERTICAL_VELOCITY_TOPIC:
+            value = float(message.data)
+            if math.isfinite(value):
+                relative_vertical_velocity.append(TimedVector(time_s, (value,)))
 
     final_start_s = first_time(states, "FINAL_DESCENT")
     candidate_start_s = first_time(touchdown_status, "CANDIDATE")
@@ -341,20 +383,30 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
                 reference_decreases_after_candidate += 1
 
     target_span_after_hold = math.nan
-    max_abs_z_velocity_after_hold = math.nan
+    max_abs_z_velocity_after_hold = 0.0
     hold_duration_s = 0.0
     if hold_start_s is not None:
-        hold_targets = values_after(target_z, hold_start_s)
-        hold_velocities = values_after(trajectory_z_velocity, hold_start_s)
+        hold_targets_all = values_after(target_z, hold_start_s)
+        hold_measurement_start_s = hold_start_s + args.hold_settling_time_s
+        hold_targets = values_after(target_z, hold_measurement_start_s)
+        hold_velocities = values_after(trajectory_z_velocity, hold_measurement_start_s)
+        if hold_targets_all:
+            hold_duration_s = hold_targets_all[-1].time_s - hold_start_s
         if hold_targets:
             target_values = [sample.values[0] for sample in hold_targets]
             target_span_after_hold = max(target_values) - min(target_values)
-            hold_duration_s = hold_targets[-1].time_s - hold_start_s
         if hold_velocities:
             max_abs_z_velocity_after_hold = max(abs(sample.values[0]) for sample in hold_velocities)
 
     first_land_flag_times = {
-        field: next((time_s for time_s, flags in land_flags if flags[field]), None)
+        field: next(
+            (
+                time_s
+                for time_s, flags in land_flags
+                if time_s >= final_start_s and flags[field]
+            ),
+            None,
+        )
         for field in (
             "ground_contact",
             "maybe_landed",
@@ -362,6 +414,36 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
             "at_rest",
         )
     }
+
+    marker_sequence = transition_sequence(
+        [(time_s, marker_id) for time_s, marker_id in marker_ids if time_s >= final_start_s]
+    )
+    vision_loss_count, vision_recovery_count = visibility_transition_counts(
+        aruco_visible, final_start_s
+    )
+    compressed_states = state_sequence(states)
+    recovery_count = sum(
+        state in {"RECOVER_TO_GNSS", "RECOVER_CLIMB"} for state in compressed_states
+    )
+    touchdown_relative_vertical_velocity_mps = math.nan
+    if confirmed_start_s is not None:
+        interpolated_velocity = interpolate(relative_vertical_velocity, confirmed_start_s)
+        if interpolated_velocity is not None:
+            touchdown_relative_vertical_velocity_mps = interpolated_velocity[0]
+
+    ground_truth_height_min_m = min(
+        (sample.values[0] for sample in actual_final), default=math.nan
+    )
+    ground_truth_contact_clearance_min_m = (
+        ground_truth_height_min_m - args.vehicle_reference_to_contact_m
+        if math.isfinite(ground_truth_height_min_m)
+        else math.nan
+    )
+    physical_contact_passed = (
+        math.isfinite(ground_truth_contact_clearance_min_m)
+        and ground_truth_contact_clearance_min_m <= args.maximum_contact_clearance_m
+        and ground_truth_contact_clearance_min_m >= -args.maximum_contact_penetration_m
+    )
 
     status_counts = collections.Counter(value for _, value in touchdown_status)
     phase_counts = collections.Counter(value for _, value in phases)
@@ -372,7 +454,7 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
 
     result = {
         "bag": str(bag_uri),
-        "state_sequence": state_sequence(states),
+        "state_sequence": compressed_states,
         "final_phase_counts": dict(phase_counts),
         "touchdown_status_counts": dict(status_counts),
         "final_descent_start_s": final_start_s,
@@ -384,14 +466,28 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
             if candidate_start_s is not None and confirmed_start_s is not None
             else None
         ),
+        "landing_time_s": (
+            confirmed_start_s - final_start_s if confirmed_start_s is not None else None
+        ),
+        "touchdown_vertical_speed_mps": (
+            abs(touchdown_relative_vertical_velocity_mps)
+            if math.isfinite(touchdown_relative_vertical_velocity_mps)
+            else None
+        ),
+        "touchdown_relative_vertical_velocity_mps": (
+            touchdown_relative_vertical_velocity_mps
+            if math.isfinite(touchdown_relative_vertical_velocity_mps)
+            else None
+        ),
         "reference_min_m": min((sample.values[0] for sample in references_final), default=math.nan),
         "estimated_height_min_m": min(
             (sample.values[0] for sample in values_after(estimated_heights, final_start_s)),
             default=math.nan,
         ),
-        "ground_truth_height_min_m": min(
-            (sample.values[0] for sample in actual_final), default=math.nan
-        ),
+        "ground_truth_height_min_m": ground_truth_height_min_m,
+        "vehicle_reference_to_contact_m": args.vehicle_reference_to_contact_m,
+        "ground_truth_contact_clearance_min_m": ground_truth_contact_clearance_min_m,
+        "physical_contact_passed": physical_contact_passed,
         "maximum_target_z_step_m": maximum_step(target_final),
         "approach_reference_rate_mps": approach_rate_mps,
         "contact_reference_rate_mps": contact_rate_mps,
@@ -412,6 +508,11 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         "first_px4_land_flag_times_s": first_land_flag_times,
         "nav_land_commands": nav_land_commands,
         "disarm_commands": disarm_commands,
+        "marker_switch_sequence": marker_sequence,
+        "marker_switch_count": max(0, len(marker_sequence) - 1),
+        "vision_loss_count": vision_loss_count,
+        "vision_recovery_count": vision_recovery_count,
+        "recovery_count": recovery_count,
         "positive_touchdown_passed": (
             candidate_start_s is not None
             and confirmed_start_s is not None
@@ -420,6 +521,7 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
             and rate_profile_passed
             and horizontal_tracking_passed
             and moving_deck_passed
+            and physical_contact_passed
             and hold_duration_s >= args.minimum_hold_duration_s
             and math.isfinite(target_span_after_hold)
             and target_span_after_hold <= args.maximum_hold_target_span_m
@@ -444,9 +546,18 @@ def print_human_readable(result: dict[str, Any]) -> None:
     )
     print(f"Candidate-to-confirm delay: {result['candidate_to_confirm_delay_s']}")
     print(
+        "Landing time / touchdown vertical speed: "
+        f"{result['landing_time_s']} s / {result['touchdown_vertical_speed_mps']} m/s"
+    )
+    print(
         "Reference / estimated / Ground Truth minimum height: "
         f"{result['reference_min_m']:.4f} / {result['estimated_height_min_m']:.4f} / "
         f"{result['ground_truth_height_min_m']:.4f} m"
+    )
+    print(
+        "Ground Truth landing-gear clearance: "
+        f"{result['ground_truth_contact_clearance_min_m']:.4f} m; "
+        f"contact={'PASS' if result['physical_contact_passed'] else 'FAIL'}"
     )
     print(f"Maximum target-z step: {result['maximum_target_z_step_m']:.5f} m")
     print(
@@ -475,6 +586,15 @@ def print_human_readable(result: dict[str, Any]) -> None:
     )
     print(f"First PX4 land flags: {result['first_px4_land_flag_times_s']}")
     print(
+        "Marker sequence / switches: "
+        f"{result['marker_switch_sequence']} / {result['marker_switch_count']}"
+    )
+    print(
+        "Vision losses / recoveries / recovery states: "
+        f"{result['vision_loss_count']} / {result['vision_recovery_count']} / "
+        f"{result['recovery_count']}"
+    )
+    print(
         "NAV_LAND / Disarm commands: "
         f"{result['nav_land_commands']} / {result['disarm_commands']}"
     )
@@ -494,6 +614,10 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--minimum-hold-duration-s", type=float, default=10.0)
     parser.add_argument("--maximum-hold-target-span-m", type=float, default=0.05)
     parser.add_argument("--maximum-hold-z-velocity-mps", type=float, default=1.0e-3)
+    parser.add_argument("--hold-settling-time-s", type=float, default=0.20)
+    parser.add_argument("--vehicle-reference-to-contact-m", type=float, default=0.227)
+    parser.add_argument("--maximum-contact-clearance-m", type=float, default=0.03)
+    parser.add_argument("--maximum-contact-penetration-m", type=float, default=0.05)
     parser.add_argument("--slowdown-height-m", type=float, default=0.25)
     parser.add_argument("--maximum-approach-rate-mps", type=float, default=0.20)
     parser.add_argument("--maximum-contact-rate-mps", type=float, default=0.05)
