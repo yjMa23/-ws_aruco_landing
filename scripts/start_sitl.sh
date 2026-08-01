@@ -332,8 +332,18 @@ case "$tracking_mode" in
   ESTIMATED_POSITION) tracking_mode_slug="estimated" ;;
   ESTIMATED_POSITION_VELOCITY_FF) tracking_mode_slug="estff" ;;
   PREDICTED_POSITION_VELOCITY_FF) tracking_mode_slug="predff" ;;
+  RELATIVE_MPC) tracking_mode_slug="mpc" ;;
   *) die "invalid tracking mode '$tracking_mode'" ;;
 esac
+
+if [[ "$tracking_mode" == "RELATIVE_MPC" ]]; then
+  p8b_mpc_prefix="${P8B_MPC_PREFIX:-$HOME/.local/p8b-mpc/osqp-1.0.0-osqpeigen-0.11.2}"
+  [[ -f "$p8b_mpc_prefix/lib/cmake/osqp/osqp-config.cmake" ]] ||
+    die "OSQP CMake package not found under $p8b_mpc_prefix"
+  [[ -f "$p8b_mpc_prefix/lib/cmake/OsqpEigen/OsqpEigenConfig.cmake" ]] ||
+    die "OsqpEigen CMake package not found under $p8b_mpc_prefix"
+  export LD_LIBRARY_PATH="$p8b_mpc_prefix/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
 
 is_nonnegative_number() {
   [[ "$1" =~ ^([0-9]+([.][0-9]*)?|[.][0-9]+)$ ]]
@@ -701,6 +711,15 @@ if [[ "$record" == "true" ]]; then
     /landing/final_descent_phase
     /landing/predicted_deck_pose
     /landing/tracking_velocity_setpoint
+    /landing/relative_mpc/status
+    /landing/relative_mpc/solve_time_ms
+    /landing/relative_mpc/iteration_count
+    /landing/relative_mpc/objective
+    /landing/relative_mpc/fallback_count
+    /landing/relative_mpc/first_control
+    /landing/relative_mpc/active_constraints
+    /landing/relative_mpc/current_state
+    /landing/relative_mpc/predicted_path
     /landing/effective_relative_velocity_gain
     /landing/estimated_deck_acceleration
     /landing/estimated_deck_attitude

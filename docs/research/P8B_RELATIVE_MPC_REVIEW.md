@@ -4,11 +4,12 @@
 
 ```text
 RESEARCH PASS
-DEPENDENCY BLOCKED
-日期：2026-07-31
+IMPLEMENTATION PASS
+VALIDATION PASS
+依赖核验、实现与验收日期：2026-08-01
 ```
 
-调研、项目模型、候选方案、PX4 接口和回退策略已经明确；但当前机器未发现 OSQP、OsqpEigen、qpOASES、acados 或 CasADi 的系统头文件、库、pkg-config 项或 Python 模块。因此允许保存执行计划，不允许开始生产实现，也不进入 P8C。
+调研、项目模型、候选方案、PX4 接口和回退策略已经明确。初始环境确实没有可供 C++/CMake 使用的 QP 求解器；现已从官方仓库按固定 tag 构建 OSQP `v1.0.0` 与 OsqpEigen `v0.11.2`，安装到独立用户前缀，并完成最小求解示例、生产实现、全工作区测试和严格顺序的真实 PX4 SITL。P8B 已达到 `VALIDATION PASS`，详细结果见 `docs/P8B_RELATIVE_MPC_VALIDATION.md`。
 
 ## 1. 研究问题
 
@@ -67,13 +68,24 @@ PX4 官方说明：位置 setpoint 非 NaN 时，非 NaN 的速度和加速度�
 
 | 方案 | 问题类型 | 优点 | 缺点 | 许可证 | 当前机器 |
 |---|---|---|---|---|---|
-| OSQP + OsqpEigen | 稀疏凸 QP | warm start、不可行检测、固定结构重复求解、C++ 接口清晰 | 一阶法收敛精度与迭代数需测量 | Apache-2.0 / wrapper 许可按仓库核验 | 未安装 |
+| OSQP + OsqpEigen | 稀疏凸 QP | warm start、不可行检测、固定结构重复求解、C++ 接口清晰 | 一阶法收敛精度与迭代数需测量 | Apache-2.0 / BSD-3-Clause | 已固定安装并通过最小求解 |
 | qpOASES | 稠密/参数 QP | 在线 active-set、热启动、严格迭代预算思路成熟 | 老旧集成和稀疏扩展较弱 | LGPL-2.1 | 未安装 |
 | acados | OCP/NMPC | 实时迭代、结构化求解、高性能 | 对 4 状态线性 QP 过重 | 以官方仓库 LICENSE 为准 | 未安装 |
 | CasADi | 符号优化框架 | 建模灵活、可接多种 NLP/QP solver | 不是单独求解器，C++ 集成更重 | LGPL | 未安装 |
 | 手写无约束 LQR | 无约束线性反馈 | 无外部依赖 | 不能表达 MPC 约束和有限时域，不得冒充 MPC | — | 不采用 |
 
-本机检查：`dpkg`、`pkg-config`、`/usr`、`/usr/local`、`/opt` 以及 Python module 均未发现上述依赖。
+初始检查覆盖 `dpkg`、apt、`pkg-config`、CMake package、`/usr`、`/usr/local`、`/opt`、当前 Python、Conda 和 ROS 2 underlay。系统与当前 Python 均未发现可供本项目使用的 OSQP/OsqpEigen；两个 Conda 环境仅带 Python `osqp` codegen 头文件，不构成系统 C++ 依赖。
+
+最终固定依赖如下：
+
+| 项目 | 固定版本 | 官方 tag commit | 许可证 | 安装前缀 |
+|---|---|---|---|---|
+| OSQP | `v1.0.0` | `236713ce9a56c182ac3230d52108f952afce1523` | Apache-2.0 | `~/.local/p8b-mpc/osqp-1.0.0-osqpeigen-0.11.2` |
+| OsqpEigen | `v0.11.2` | `7587e6994dc194cf22511d909bf4cc5d5e0e4eb2` | BSD-3-Clause | 同上 |
+
+安装方式为官方源码固定 tag 的 Release 构建，不使用 sudo、不修改 `/usr/local`、不复制第三方源码进本仓库。项目通过 `find_package(osqp REQUIRED)` 和 `find_package(OsqpEigen 0.11.2 EXACT REQUIRED)` 查找，生产目标链接 `OsqpEigen::OsqpEigen`；后者再链接 `osqp::osqp`。OSQP `v1.0.0` 官方生成的 CMake version 文件错误地报告 `0.0.0`，因此控制器初始化时额外校验 `osqp_version()=="1.0.0"`，避免误链接其他版本。
+
+最小验证使用官方 OsqpEigen MPC 示例：CMake 配置和链接成功，OSQP 返回 `solved`，25 次迭代，单次求解约 `0.25 ms`，目标值约 `-105.0`。
 
 ## 6. 数学模型
 
@@ -152,9 +164,9 @@ min Σ(k=0..N-1) [x_k^T Q x_k + u_k^T R u_k + Δu_k^T S Δu_k]
 
 ## 9. 推荐方案
 
-选择“4 状态二维相对双积分线性 MPC + OSQP，OsqpEigen C++ 包装”。原因：问题凸、矩阵固定、规模小、支持 warm start 和不可行检测，且能直接输出当前 PX4 接口所需的水平加速度前馈。
+选择并已实现“4 状态二维相对双积分线性 MPC + OSQP/OsqpEigen”。QP 稀疏结构固定，运行时只更新初始状态、可测甲板加速度扰动、线性项和边界；OSQP 原生状态信息用于发布 iteration/solve time/objective 等诊断，OsqpEigen 提供固定的 CMake/Eigen 集成。该实现直接输出 PX4 接口所需的水平加速度前馈。
 
-P4.7 保持默认；MPC 显式启用。任一 NaN、状态过期、solver 非 solved、超时或输出越界时，本周期回退 P4.7，并对切换输出做现有限幅/斜率限制。连续失败达到阈值后维持 P4.7，不触发 Land/Disarm。
+P4.7 保持默认；MPC 显式启用。节点并行维护完整 P4.7 控制器，任一 NaN、状态过期、solver 非 solved、超时或输出越界时，本周期回退 P4.7。真实接触验收还表明 MPC 水平加速度在终端阶段会通过姿态耦合影响垂直接触，因此最终实现从 `FINAL_DESCENT` 起使用 `TERMINAL_PHASE_P47` 安全 handoff；该计划内切换不计为 solver failure，不触发 Land/Disarm。
 
 暂不选择 NMPC、acados、CasADi、鲁棒 MPC、学习增强 MPC，因为它们超出第一版问题规模，也会使论文模型与当前代码接口不一致。
 
@@ -186,4 +198,6 @@ P4.7 保持默认；MPC 显式启用。任一 NaN、状态过期、solver 非 so
 
 ## 12. 门槛结论
 
-研究问题、模型、约束、候选方案、求解器、PX4 接口、回退和论文映射均已明确，标记 `RESEARCH PASS`。由于推荐依赖当前未安装，同时标记 `DEPENDENCY BLOCKED`。依赖解决前不得实现 MPC 或进入 P8C。
+研究问题、模型、约束、候选方案、求解器、PX4 接口、回退和论文映射均已明确，标记 `RESEARCH PASS`。固定依赖、纯 C++ 控制器、显式模式、完整 P4.7 fallback、终端安全 handoff、ROS 2 诊断、启动脚本和评测扩展均已实现，全工作区 `271` 项测试通过，标记 `IMPLEMENTATION PASS`。
+
+已按 static → constant02 → constant → sinusoidal → H1 → 安全下降 → 真实触地的顺序完成真实 PX4 SITL、Bag 和 P4.7 对比。安全高度 15/15、安全下降 6/6、最终代码真实触地 6/6 PASS，所有有效 MPC 轮次均为 0 deadline miss、0 solver failure、0 unexpected fallback。因此标记 `VALIDATION PASS`，验收文档为 `docs/P8B_RELATIVE_MPC_VALIDATION.md`。

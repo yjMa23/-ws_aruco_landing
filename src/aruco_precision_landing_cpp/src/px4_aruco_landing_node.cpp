@@ -150,6 +150,47 @@ Px4ArucoLandingNode::Px4ArucoLandingNode()
   tracking_controller_ =
     std::make_unique<MovingTargetTrackingController>(tracking_parameters);
 
+  if (*tracking_mode == TrackingControlMode::kRelativeMpc) {
+    auto p47_fallback_parameters = tracking_parameters;
+    p47_fallback_parameters.mode =
+      TrackingControlMode::kPredictedPositionVelocityFeedforward;
+    p47_fallback_controller_ =
+      std::make_unique<MovingTargetTrackingController>(p47_fallback_parameters);
+
+    RelativeMpcParameters mpc_parameters;
+    mpc_parameters.sample_period_s = relative_mpc_sample_period_s_;
+    mpc_parameters.horizon_steps = relative_mpc_horizon_steps_;
+    mpc_parameters.state_weights = Eigen::Map<const Eigen::Vector4d>(
+      relative_mpc_state_weights_.data());
+    mpc_parameters.terminal_state_weights = Eigen::Map<const Eigen::Vector4d>(
+      relative_mpc_terminal_state_weights_.data());
+    mpc_parameters.control_weights = Eigen::Map<const Eigen::Vector2d>(
+      relative_mpc_control_weights_.data());
+    mpc_parameters.control_increment_weights = Eigen::Map<const Eigen::Vector2d>(
+      relative_mpc_control_increment_weights_.data());
+    mpc_parameters.speed_slack_weight = relative_mpc_speed_slack_weight_;
+    mpc_parameters.maximum_uav_speed_mps = relative_mpc_maximum_uav_speed_mps_;
+    mpc_parameters.maximum_acceleration_mps2 =
+      relative_mpc_maximum_acceleration_mps2_;
+    mpc_parameters.maximum_acceleration_increment_mps2 =
+      relative_mpc_maximum_acceleration_increment_mps2_;
+    mpc_parameters.maximum_speed_slack_mps = relative_mpc_maximum_speed_slack_mps_;
+    mpc_parameters.maximum_iterations = relative_mpc_maximum_iterations_;
+    mpc_parameters.absolute_tolerance = relative_mpc_absolute_tolerance_;
+    mpc_parameters.relative_tolerance = relative_mpc_relative_tolerance_;
+    mpc_parameters.time_limit_s = relative_mpc_time_limit_s_;
+    mpc_parameters.warm_start_enabled = relative_mpc_warm_start_enabled_;
+    mpc_parameters.active_constraint_tolerance =
+      relative_mpc_active_constraint_tolerance_;
+    relative_mpc_controller_ = std::make_unique<RelativeMpcController>(mpc_parameters);
+    if (!relative_mpc_controller_->initialize()) {
+      RCLCPP_ERROR(
+        get_logger(),
+        "RELATIVE_MPC was explicitly selected but OSQP initialization failed; "
+        "P4.7 fallback will remain active");
+    }
+  }
+
   VehiclePoseHistoryParameters pose_history_parameters;
   pose_history_parameters.history_duration_s = vehicle_pose_history_duration_s_;
   pose_history_parameters.max_endpoint_hold_s =
@@ -439,6 +480,48 @@ void Px4ArucoLandingNode::declare_and_load_parameters()
     "tracking.max_velocity_feedforward_acceleration_mps2", 1.0);
   tracking_max_prediction_age_s_ = declare_parameter<double>(
     "tracking.max_prediction_age_s", 0.75);
+  relative_mpc_sample_period_s_ = declare_parameter<double>(
+    "relative_mpc.sample_period_s", 0.05);
+  relative_mpc_horizon_steps_ = declare_parameter<int>(
+    "relative_mpc.horizon_steps", 20);
+  relative_mpc_state_weights_ = to_array<4>(
+    declare_parameter<std::vector<double>>(
+      "relative_mpc.state_weights", {8.0, 8.0, 2.0, 2.0}),
+    "relative_mpc.state_weights");
+  relative_mpc_terminal_state_weights_ = to_array<4>(
+    declare_parameter<std::vector<double>>(
+      "relative_mpc.terminal_state_weights", {16.0, 16.0, 4.0, 4.0}),
+    "relative_mpc.terminal_state_weights");
+  relative_mpc_control_weights_ = to_array<2>(
+    declare_parameter<std::vector<double>>(
+      "relative_mpc.control_weights", {0.20, 0.20}),
+    "relative_mpc.control_weights");
+  relative_mpc_control_increment_weights_ = to_array<2>(
+    declare_parameter<std::vector<double>>(
+      "relative_mpc.control_increment_weights", {1.0, 1.0}),
+    "relative_mpc.control_increment_weights");
+  relative_mpc_speed_slack_weight_ = declare_parameter<double>(
+    "relative_mpc.speed_slack_weight", 1000.0);
+  relative_mpc_maximum_uav_speed_mps_ = declare_parameter<double>(
+    "relative_mpc.maximum_uav_speed_mps", 2.0);
+  relative_mpc_maximum_acceleration_mps2_ = declare_parameter<double>(
+    "relative_mpc.maximum_acceleration_mps2", 1.5);
+  relative_mpc_maximum_acceleration_increment_mps2_ = declare_parameter<double>(
+    "relative_mpc.maximum_acceleration_increment_mps2", 0.25);
+  relative_mpc_maximum_speed_slack_mps_ = declare_parameter<double>(
+    "relative_mpc.maximum_speed_slack_mps", 2.0);
+  relative_mpc_maximum_iterations_ = declare_parameter<int>(
+    "relative_mpc.maximum_iterations", 1000);
+  relative_mpc_absolute_tolerance_ = declare_parameter<double>(
+    "relative_mpc.absolute_tolerance", 1.0e-4);
+  relative_mpc_relative_tolerance_ = declare_parameter<double>(
+    "relative_mpc.relative_tolerance", 1.0e-4);
+  relative_mpc_time_limit_s_ = declare_parameter<double>(
+    "relative_mpc.time_limit_s", 0.02);
+  relative_mpc_warm_start_enabled_ = declare_parameter<bool>(
+    "relative_mpc.warm_start_enabled", true);
+  relative_mpc_active_constraint_tolerance_ = declare_parameter<double>(
+    "relative_mpc.active_constraint_tolerance", 1.0e-3);
   deck_attitude_filter_gain_ = declare_parameter<double>(
     "deck_attitude.filter_gain", 0.20);
   deck_attitude_minimum_upward_normal_component_ = declare_parameter<double>(
@@ -831,8 +914,40 @@ void Px4ArucoLandingNode::validate_parameters() const
     throw std::invalid_argument(
             "vehicle_pose_history.clock_offset_filter_gain must be within (0, 1]");
   }
-  if (!tracking_control_mode_from_string(tracking_mode_string_).has_value()) {
+  const auto tracking_mode = tracking_control_mode_from_string(tracking_mode_string_);
+  if (!tracking_mode.has_value()) {
     throw std::invalid_argument("Parameter 'tracking.mode' is unsupported");
+  }
+  RelativeMpcParameters mpc_parameters;
+  mpc_parameters.sample_period_s = relative_mpc_sample_period_s_;
+  mpc_parameters.horizon_steps = relative_mpc_horizon_steps_;
+  mpc_parameters.state_weights = Eigen::Map<const Eigen::Vector4d>(
+    relative_mpc_state_weights_.data());
+  mpc_parameters.terminal_state_weights = Eigen::Map<const Eigen::Vector4d>(
+    relative_mpc_terminal_state_weights_.data());
+  mpc_parameters.control_weights = Eigen::Map<const Eigen::Vector2d>(
+    relative_mpc_control_weights_.data());
+  mpc_parameters.control_increment_weights = Eigen::Map<const Eigen::Vector2d>(
+    relative_mpc_control_increment_weights_.data());
+  mpc_parameters.speed_slack_weight = relative_mpc_speed_slack_weight_;
+  mpc_parameters.maximum_uav_speed_mps = relative_mpc_maximum_uav_speed_mps_;
+  mpc_parameters.maximum_acceleration_mps2 = relative_mpc_maximum_acceleration_mps2_;
+  mpc_parameters.maximum_acceleration_increment_mps2 =
+    relative_mpc_maximum_acceleration_increment_mps2_;
+  mpc_parameters.maximum_speed_slack_mps = relative_mpc_maximum_speed_slack_mps_;
+  mpc_parameters.maximum_iterations = relative_mpc_maximum_iterations_;
+  mpc_parameters.absolute_tolerance = relative_mpc_absolute_tolerance_;
+  mpc_parameters.relative_tolerance = relative_mpc_relative_tolerance_;
+  mpc_parameters.time_limit_s = relative_mpc_time_limit_s_;
+  mpc_parameters.warm_start_enabled = relative_mpc_warm_start_enabled_;
+  mpc_parameters.active_constraint_tolerance =
+    relative_mpc_active_constraint_tolerance_;
+  static_cast<void>(RelativeMpcController(mpc_parameters));
+  if (*tracking_mode == TrackingControlMode::kRelativeMpc &&
+    std::abs(relative_mpc_sample_period_s_ - 1.0 / control_rate_hz_) > 1.0e-6)
+  {
+    throw std::invalid_argument(
+            "relative_mpc.sample_period_s must equal the configured control period");
   }
   if (tracking_max_prediction_age_s_ > visual_loss_long_timeout_s_) {
     throw std::invalid_argument(
@@ -976,6 +1091,34 @@ void Px4ArucoLandingNode::create_ros_interfaces()
   tracking_velocity_setpoint_pub_ =
     create_publisher<geometry_msgs::msg::TwistStamped>(
     "/landing/tracking_velocity_setpoint",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  relative_mpc_status_pub_ = create_publisher<std_msgs::msg::String>(
+    "/landing/relative_mpc/status",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  relative_mpc_solve_time_pub_ = create_publisher<std_msgs::msg::Float64>(
+    "/landing/relative_mpc/solve_time_ms",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  relative_mpc_iteration_count_pub_ = create_publisher<std_msgs::msg::Int32>(
+    "/landing/relative_mpc/iteration_count",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  relative_mpc_objective_pub_ = create_publisher<std_msgs::msg::Float64>(
+    "/landing/relative_mpc/objective",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  relative_mpc_fallback_count_pub_ = create_publisher<std_msgs::msg::UInt32>(
+    "/landing/relative_mpc/fallback_count",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  relative_mpc_first_control_pub_ =
+    create_publisher<geometry_msgs::msg::Vector3Stamped>(
+    "/landing/relative_mpc/first_control",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  relative_mpc_active_constraints_pub_ = create_publisher<std_msgs::msg::UInt32>(
+    "/landing/relative_mpc/active_constraints",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  relative_mpc_state_pub_ = create_publisher<nav_msgs::msg::Odometry>(
+    "/landing/relative_mpc/current_state",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  relative_mpc_predicted_path_pub_ = create_publisher<nav_msgs::msg::Path>(
+    "/landing/relative_mpc/predicted_path",
     rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
   effective_relative_velocity_gain_pub_ = create_publisher<std_msgs::msg::Float64>(
     "/landing/effective_relative_velocity_gain",
@@ -1386,6 +1529,7 @@ void Px4ArucoLandingNode::control_timer_callback()
   dt = std::min(dt, 0.5);
 
   clear_velocity_feedforward();
+  relative_mpc_debug_valid_ = false;
   landing_window_result_valid_ = false;
   relative_descent_debug_valid_ = false;
   final_descent_debug_valid_ = false;
@@ -1402,6 +1546,7 @@ void Px4ArucoLandingNode::control_timer_callback()
   publish_estimated_deck_odometry(now);
   publish_predicted_deck_pose(now);
   publish_tracking_velocity_setpoint(now);
+  publish_relative_mpc_debug(now);
   publish_effective_relative_velocity_gain();
   publish_estimated_deck_acceleration(now);
   publish_estimated_deck_attitude();
@@ -1756,6 +1901,9 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
         const auto command = tracking_controller_->compute(tracking_input);
         if (!command.has_value()) {
           tracking_controller_->reset();
+          if (p47_fallback_controller_) {
+            p47_fallback_controller_->reset();
+          }
           RCLCPP_WARN_THROTTLE(
             get_logger(), *get_clock(), 5000,
             "Moving target tracking input unavailable; holding the latest safe position target");
@@ -1775,6 +1923,12 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
             current_yaw_);
           break;
         }
+
+        std::optional<MovingTargetTrackingCommand> p47_command;
+        if (p47_fallback_controller_) {
+          p47_command = p47_fallback_controller_->compute(tracking_input);
+        }
+        const MovingTargetTrackingCommand * horizontal_command = &*command;
 
         double vertical_target_z = -rendezvous_altitude_m_;
         std::optional<RelativeDescentOutput> descent_output;
@@ -1861,19 +2015,91 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
           }
         }
 
+        if (tracking_controller_->mode() == TrackingControlMode::kRelativeMpc) {
+          const bool terminal_phase =
+            state_ == LandingState::FINAL_DESCENT ||
+            state_ == LandingState::TOUCHDOWN_CANDIDATE_HOLD ||
+            state_ == LandingState::TOUCHDOWN_HOLD;
+          RelativeMpcInput mpc_input;
+          mpc_input.previous_control_xy = last_relative_mpc_control_xy_;
+          mpc_input.dt_s = dt;
+          if (estimate.has_value() && uav_velocity_xy.has_value()) {
+            mpc_input.relative_state.head<2>() =
+              estimate->position_ned.head<2>() -
+              Eigen::Vector2d{local_position_.x, local_position_.y};
+            mpc_input.relative_state.tail<2>() =
+              estimate->velocity_ned.head<2>() - *uav_velocity_xy;
+            mpc_input.deck_velocity_xy = estimate->velocity_ned.head<2>();
+            mpc_input.deck_acceleration_xy = command->estimated_deck_acceleration_xy;
+          } else {
+            mpc_input.relative_state.x() = std::numeric_limits<double>::quiet_NaN();
+          }
+
+          if (terminal_phase) {
+            relative_mpc_result_ = RelativeMpcResult{};
+            relative_mpc_result_.status = RelativeMpcStatus::kTerminalPhaseDisengaged;
+            relative_mpc_result_.solver_status = relative_mpc_status_name(
+              relative_mpc_result_.status);
+            relative_mpc_result_.fallback_reason = "terminal_phase_p47";
+            relative_mpc_result_.fallback_required = false;
+            relative_mpc_result_.current_relative_state =
+              mpc_input.relative_state.allFinite() ?
+              mpc_input.relative_state : Eigen::Vector4d::Zero();
+            relative_mpc_debug_valid_ = true;
+            last_relative_mpc_control_xy_.setZero();
+            if (relative_mpc_controller_) {
+              relative_mpc_controller_->reset();
+            }
+            if (p47_command.has_value()) {
+              horizontal_command = &*p47_command;
+            }
+          } else {
+            relative_mpc_result_ = relative_mpc_controller_ ?
+              relative_mpc_controller_->solve(mpc_input) : RelativeMpcResult{};
+            relative_mpc_debug_valid_ = true;
+            const bool acceleration_allowed =
+              RelativeMpcController::acceleration_feedforward_allowed(
+              relative_mpc_result_.success &&
+              relative_mpc_result_.first_control_xy.allFinite(),
+              terminal_phase);
+            if (acceleration_allowed) {
+              set_horizontal_acceleration_feedforward(
+                relative_mpc_result_.first_control_xy.x(),
+                relative_mpc_result_.first_control_xy.y());
+              last_relative_mpc_control_xy_ = relative_mpc_result_.first_control_xy;
+            } else {
+              ++relative_mpc_fallback_count_;
+              last_relative_mpc_control_xy_.setZero();
+              if (relative_mpc_controller_) {
+                relative_mpc_controller_->reset();
+              }
+              if (p47_command.has_value()) {
+                horizontal_command = &*p47_command;
+              }
+              RCLCPP_WARN_THROTTLE(
+                get_logger(), *get_clock(), 5000,
+                "RELATIVE_MPC fallback to P4.7: %s",
+                relative_mpc_result_.fallback_reason.c_str());
+            }
+          }
+        }
+
         set_target(
-          command->position_target_xy.x(),
-          command->position_target_xy.y(),
+          horizontal_command->position_target_xy.x(),
+          horizontal_command->position_target_xy.y(),
           vertical_target_z,
           current_yaw_);
-        if (command->velocity_feedforward_xy.has_value()) {
+        // Nominal RELATIVE_MPC uses pure deck-velocity feedforward plus bounded acceleration.
+        // Solver failures and contact-sensitive phases select the continuously updated P4.7
+        // command, while the vertical reference and landing state machine remain unchanged.
+        if (horizontal_command->velocity_feedforward_xy.has_value()) {
           set_velocity_feedforward(
-            command->velocity_feedforward_xy->x(),
-            command->velocity_feedforward_xy->y());
+            horizontal_command->velocity_feedforward_xy->x(),
+            horizontal_command->velocity_feedforward_xy->y());
         }
         set_adaptive_tracking_debug(
-          command->effective_relative_velocity_gain,
-          command->estimated_deck_acceleration_xy);
+          horizontal_command->effective_relative_velocity_gain,
+          horizontal_command->estimated_deck_acceleration_xy);
 
         if (state_ == LandingState::TRACK_TARGET) {
           transition_to(
@@ -2156,6 +2382,14 @@ void Px4ArucoLandingNode::transition_to(
   if (!preserve_visual_tracking_history) {
     clear_velocity_feedforward();
     tracking_controller_->reset();
+    if (p47_fallback_controller_) {
+      p47_fallback_controller_->reset();
+    }
+    if (relative_mpc_controller_) {
+      relative_mpc_controller_->reset();
+    }
+    last_relative_mpc_control_xy_.setZero();
+    relative_mpc_debug_valid_ = false;
     relative_descent_controller_->reset();
     relative_descent_debug_valid_ = false;
   }
@@ -2907,6 +3141,17 @@ void Px4ArucoLandingNode::set_velocity_feedforward(
     std::isfinite(velocity_feedforward_east_mps_);
 }
 
+void Px4ArucoLandingNode::set_horizontal_acceleration_feedforward(
+  double north_mps2,
+  double east_mps2)
+{
+  horizontal_acceleration_feedforward_north_mps2_ = north_mps2;
+  horizontal_acceleration_feedforward_east_mps2_ = east_mps2;
+  horizontal_acceleration_feedforward_valid_ =
+    std::isfinite(horizontal_acceleration_feedforward_north_mps2_) &&
+    std::isfinite(horizontal_acceleration_feedforward_east_mps2_);
+}
+
 void Px4ArucoLandingNode::set_vertical_velocity_feedforward(double down_mps)
 {
   vertical_velocity_feedforward_down_mps_ = down_mps;
@@ -2937,6 +3182,9 @@ void Px4ArucoLandingNode::clear_velocity_feedforward()
   velocity_feedforward_north_mps_ = 0.0;
   velocity_feedforward_east_mps_ = 0.0;
   velocity_feedforward_valid_ = false;
+  horizontal_acceleration_feedforward_north_mps2_ = 0.0;
+  horizontal_acceleration_feedforward_east_mps2_ = 0.0;
+  horizontal_acceleration_feedforward_valid_ = false;
   vertical_velocity_feedforward_down_mps_ = 0.0;
   vertical_velocity_feedforward_valid_ = false;
   effective_relative_velocity_gain_ = 0.0;
@@ -2979,7 +3227,14 @@ void Px4ArucoLandingNode::publish_trajectory_setpoint()
     vertical_velocity_feedforward_valid_ ?
     static_cast<float>(vertical_velocity_feedforward_down_mps_) : nan} :
   std::array<float, 3>{nan, nan, nan};
-  msg.acceleration = {nan, nan, nan};
+  msg.acceleration = target_valid_ ?
+    std::array<float, 3>{
+    horizontal_acceleration_feedforward_valid_ ?
+    static_cast<float>(horizontal_acceleration_feedforward_north_mps2_) : nan,
+    horizontal_acceleration_feedforward_valid_ ?
+    static_cast<float>(horizontal_acceleration_feedforward_east_mps2_) : nan,
+    nan} :
+  std::array<float, 3>{nan, nan, nan};
   msg.jerk = {nan, nan, nan};
   msg.yaw = target_valid_ ? static_cast<float>(target_yaw_) : nan;
   msg.yawspeed = nan;
@@ -3191,6 +3446,86 @@ void Px4ArucoLandingNode::publish_tracking_velocity_setpoint(
   msg.twist.linear.z = vertical_velocity_feedforward_valid_ ?
     vertical_velocity_feedforward_down_mps_ : 0.0;
   tracking_velocity_setpoint_pub_->publish(msg);
+}
+
+void Px4ArucoLandingNode::publish_relative_mpc_debug(const rclcpp::Time & now)
+{
+  if (!relative_mpc_debug_valid_) {
+    return;
+  }
+
+  std_msgs::msg::String status_msg;
+  status_msg.data = relative_mpc_result_.solver_status;
+  if (relative_mpc_result_.fallback_required &&
+    !relative_mpc_result_.fallback_reason.empty())
+  {
+    status_msg.data += ":" + relative_mpc_result_.fallback_reason;
+  }
+  relative_mpc_status_pub_->publish(status_msg);
+
+  if (relative_mpc_result_.status == RelativeMpcStatus::kTerminalPhaseDisengaged) {
+    std_msgs::msg::UInt32 fallback_count_msg;
+    fallback_count_msg.data = relative_mpc_fallback_count_;
+    relative_mpc_fallback_count_pub_->publish(fallback_count_msg);
+    return;
+  }
+
+  std_msgs::msg::Float64 solve_time_msg;
+  solve_time_msg.data = relative_mpc_result_.solve_time_ms;
+  relative_mpc_solve_time_pub_->publish(solve_time_msg);
+
+  std_msgs::msg::Int32 iteration_msg;
+  iteration_msg.data = relative_mpc_result_.iteration_count;
+  relative_mpc_iteration_count_pub_->publish(iteration_msg);
+
+  std_msgs::msg::Float64 objective_msg;
+  objective_msg.data = relative_mpc_result_.objective;
+  relative_mpc_objective_pub_->publish(objective_msg);
+
+  std_msgs::msg::UInt32 fallback_count_msg;
+  fallback_count_msg.data = relative_mpc_fallback_count_;
+  relative_mpc_fallback_count_pub_->publish(fallback_count_msg);
+
+  geometry_msgs::msg::Vector3Stamped control_msg;
+  control_msg.header.stamp = now;
+  control_msg.header.frame_id = target_pose_frame_id_;
+  control_msg.vector.x = relative_mpc_result_.first_control_xy.x();
+  control_msg.vector.y = relative_mpc_result_.first_control_xy.y();
+  control_msg.vector.z = 0.0;
+  relative_mpc_first_control_pub_->publish(control_msg);
+
+  std_msgs::msg::UInt32 active_constraints_msg;
+  active_constraints_msg.data = static_cast<std::uint32_t>(std::min<std::size_t>(
+      relative_mpc_result_.active_constraints,
+      std::numeric_limits<std::uint32_t>::max()));
+  relative_mpc_active_constraints_pub_->publish(active_constraints_msg);
+
+  nav_msgs::msg::Odometry state_msg;
+  state_msg.header.stamp = now;
+  state_msg.header.frame_id = target_pose_frame_id_ + "_relative";
+  state_msg.child_frame_id = "relative_mpc_state";
+  state_msg.pose.pose.position.x = relative_mpc_result_.current_relative_state.x();
+  state_msg.pose.pose.position.y = relative_mpc_result_.current_relative_state.y();
+  state_msg.pose.pose.orientation.w = 1.0;
+  state_msg.twist.twist.linear.x = relative_mpc_result_.current_relative_state.z();
+  state_msg.twist.twist.linear.y = relative_mpc_result_.current_relative_state.w();
+  relative_mpc_state_pub_->publish(state_msg);
+
+  nav_msgs::msg::Path path_msg;
+  path_msg.header.stamp = now;
+  path_msg.header.frame_id = state_msg.header.frame_id;
+  path_msg.poses.reserve(relative_mpc_result_.predicted_states.size());
+  for (std::size_t step = 0; step < relative_mpc_result_.predicted_states.size(); ++step) {
+    geometry_msgs::msg::PoseStamped pose;
+    pose.header.frame_id = path_msg.header.frame_id;
+    pose.header.stamp = now + rclcpp::Duration::from_seconds(
+      relative_mpc_sample_period_s_ * static_cast<double>(step));
+    pose.pose.position.x = relative_mpc_result_.predicted_states[step].x();
+    pose.pose.position.y = relative_mpc_result_.predicted_states[step].y();
+    pose.pose.orientation.w = 1.0;
+    path_msg.poses.push_back(pose);
+  }
+  relative_mpc_predicted_path_pub_->publish(path_msg);
 }
 
 void Px4ArucoLandingNode::publish_effective_relative_velocity_gain()
@@ -3466,6 +3801,10 @@ void Px4ArucoLandingNode::publish_guidance_source()
           break;
         case TrackingControlMode::kPredictedPositionVelocityFeedforward:
           msg.data = "VISION_PREDICTED_FF";
+          break;
+        case TrackingControlMode::kRelativeMpc:
+          msg.data = relative_mpc_result_.success ?
+            "VISION_RELATIVE_MPC" : "VISION_RELATIVE_MPC_P47_FALLBACK";
           break;
       }
       break;

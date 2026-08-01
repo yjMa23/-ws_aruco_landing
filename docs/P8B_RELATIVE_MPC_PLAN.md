@@ -5,24 +5,29 @@
 ```text
 RESEARCH PASS
 PLAN PASS
-DEPENDENCY BLOCKED
+IMPLEMENTATION PASS
+VALIDATION PASS
 ```
 
-本计划严格引用 `docs/research/P8B_RELATIVE_MPC_REVIEW.md` 的最终方案：4 状态二维相对双积分线性 MPC，OSQP 求解，OsqpEigen 作为 C++ 接口，P4.7 为默认与失败回退。
-
-依赖未安装前不得执行生产实现。
+本计划严格引用 `docs/research/P8B_RELATIVE_MPC_REVIEW.md` 的最终方案：4 状态二维相对双积分线性 MPC，OSQP 求解，OsqpEigen 作为 C++ 接口，P4.7 为默认与失败回退。固定依赖、生产实现、全量构建、单元测试和严格顺序的真实 SITL 均已完成，验收记录见 `docs/P8B_RELATIVE_MPC_VALIDATION.md`。
 
 ## 2. 依赖门槛
 
-推荐安装方式必须使用可审计源码或系统包，不下载不透明预编译文件。安装后确认：
+依赖门槛已解除。Ubuntu 22.04 当前 apt 源没有满足本项目固定接口的包，因此采用官方源码固定 tag：
 
-```bash
-pkg-config --modversion osqp
-find /usr /usr/local -name osqp.h -o -name OsqpEigen.h
-ldconfig -p | grep -Ei 'osqp|OsqpEigen'
+```text
+OSQP      v1.0.0  236713ce9a56c182ac3230d52108f952afce1523  Apache-2.0
+OsqpEigen v0.11.2 7587e6994dc194cf22511d909bf4cc5d5e0e4eb2  BSD-3-Clause
+prefix    ~/.local/p8b-mpc/osqp-1.0.0-osqpeigen-0.11.2
 ```
 
-若 Ubuntu 22.04 apt 源没有合适版本，则从 OSQP 与 OsqpEigen 官方仓库按固定 tag 构建安装，并记录 tag、commit、许可证和安装前缀。不得把第三方完整源码复制进本仓库。
+构建不使用 sudo，不修改 `/usr/local`。CMake target 为 `OsqpEigen::OsqpEigen` 和 `osqp::osqp`；项目固定 `OsqpEigen 0.11.2 EXACT`，并在运行时核对 OSQP `1.0.0`。官方 MPC 示例已返回 `solved`、25 iterations、约 `0.25 ms`。构建前需导出：
+
+```bash
+export P8B_MPC_PREFIX="$HOME/.local/p8b-mpc/osqp-1.0.0-osqpeigen-0.11.2"
+export CMAKE_PREFIX_PATH="$P8B_MPC_PREFIX${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
+export LD_LIBRARY_PATH="$P8B_MPC_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+```
 
 ## 3. 文件修改范围
 
@@ -169,6 +174,33 @@ git diff --check
 - 连续 fallback 达阈值后锁定 P4.7 并发布原因；
 - 不通过放宽 landing window、touchdown 或安全阈值解决 MPC 问题。
 
-## 11. 当前阻塞
+## 11. 实现与验收结果
 
-当前机器没有 OSQP/OsqpEigen 或其他已核验 QP 求解器。故本计划标记 `PLAN PASS / DEPENDENCY BLOCKED`，停止 P8B 实现，不进入 P8C。
+已完成：
+
+- 独立纯 C++ `RelativeMpcController`；
+- 固定稀疏 QP、warm start、不可行与非成功状态处理；
+- `tracking.mode=RELATIVE_MPC` 显式启用，默认 P4.7 不变；
+- 自由飞行阶段只写入 `TrajectorySetpoint.acceleration[x,y]`，垂直输出与状态机不变；
+- 独立并行的完整 P4.7 fallback；
+- 从 `FINAL_DESCENT` 开始使用 `TERMINAL_PHASE_P47` 安全 handoff，避免横向加速度破坏终端接触；
+- 标准 ROS 2 solver/state/prediction 诊断话题；
+- `start_sitl.sh`、`run_single_experiment.py` 模式、依赖检查和 rosbag 话题；
+- P4 evaluator 的 solve time mean/P95、iteration、fallback、terminal handoff、active constraints 和控制平滑度指标；
+- 全工作区 `271` 项测试通过。
+
+QGroundControl 连接后，已严格按 static → constant02 → constant → sinusoidal → H1 → 安全下降 → 真实触地顺序完成真实 PX4 SITL：
+
+```text
+安全高度：15/15 PASS
+安全下降： 6/6 PASS
+真实触地： 6/6 PASS
+```
+
+所有有效 MPC 轮次的 deadline miss、solver failure 和 unexpected fallback 均为 0；constant02 与 H1 最终代码真实触地均为 3/3 PASS，`NAV_LAND=0`、Disarm=0。详细 Bag、指标、根因修复和 PASS 判定见：
+
+```text
+docs/P8B_RELATIVE_MPC_VALIDATION.md
+```
+
+因此 P8B 标记 `VALIDATION PASS`。下一步允许开始 P8C 调研，但必须先完成 `docs/research/P8C_TILTED_DECK_LANDING_REVIEW.md`，不得直接编写倾斜甲板终端控制生产代码。

@@ -64,8 +64,8 @@
    - `P7-lite` 自动化和真实 3+3 冒烟已完成，6/6 PASS；20+20 配置保留并延后到 P9。
 
 5. 当前高级阶段缺口如下：
-   - `P8A` 已完成升沉甲板最终下降、真实接触和接触后相对保持，H1 3/3、H2 3/3 PASS。P8B 已完成综述和执行计划，当前因 OSQP/OsqpEigen 未安装而 DEPENDENCY BLOCKED。
-   - `P8B` 水平相对运动线性 MPC 尚未完成综述、论文级模型、求解器选型、独立计划、实现和验收。
+   - `P8A` 已完成升沉甲板最终下降、真实接触和接触后相对保持，H1 3/3、H2 3/3 PASS。
+   - `P8B` 已完成综述、计划、固定 OSQP/OsqpEigen 依赖、水平相对 MPC 生产实现、完整 P4.7 fallback、终端安全 handoff、`271` 项全工作区测试和严格顺序真实 SITL；安全高度 15/15、下降 6/6、最终代码真实触地 6/6 PASS，状态为 `VALIDATION PASS`。
    - `P8C` 固定倾斜与低频 roll/pitch 甲板尚未完成几何建模、计划、实现和验收。
    - `P9` 统一批量评测、消融和论文实验尚未开始。
    - 当前保持 `NAV_LAND / Disarm = 0 / 0`，Ground Truth 只能用于离线评测。
@@ -944,9 +944,9 @@ P8A 重点验证相对垂直速度语义和 `TOUCHDOWN_HOLD` 对升沉甲板的�
 
 ### P8B：水平相对运动线性 MPC
 
-P8A 真实验收通过后，必须先完成 `docs/research/P8B_RELATIVE_MPC_REVIEW.md`，包含可验证文献、项目统一符号数学模型、至少三个候选方案、求解器比较、PX4 接口和失败回退。达到 `RESEARCH PASS` 后才能编写 `docs/P8B_RELATIVE_MPC_PLAN.md`，计划通过后才能实现生产代码。
+P8B 综述、统一数学模型、固定求解器、执行计划、生产实现和真实验收均已完成。第一版只负责自由飞行和安全下降阶段的水平相对运动，P4.7 保持默认并作为 solver 失败回退；从 `FINAL_DESCENT` 起使用 `TERMINAL_PHASE_P47` 安全 handoff，不接管最终垂直下降、touchdown detector、landing window 或姿态对齐。
 
-第一版只负责水平相对运动，P4.7 保持默认并作为 solver 失败回退；不接管最终垂直下降、touchdown detector、landing window 或姿态对齐。
+严格顺序结果为安全高度 15/15、下降 6/6、真实触地 6/6 PASS，所有有效 MPC 轮次均为 0 deadline miss、0 solver failure、0 unexpected fallback，验收见 `docs/P8B_RELATIVE_MPC_VALIDATION.md`。下一步只允许开始 P8C 综述和几何建模。
 
 ### P8C：固定倾斜及低频 roll/pitch 甲板降落
 
@@ -1087,15 +1087,16 @@ colcon test-result --verbose
 
 ## 16. Codex 下一步默认任务
 
-`P0`～`P6B` 已完成，P7-lite 真实 3+3 冒烟已于 2026-07-30 以 6/6 PASS 冻结。当前进入 `P8A：升沉甲板最终下降与真实接触`。
+`P0`～`P8A` 已完成真实验收，P7-lite 真实 3+3 冒烟已于 2026-07-30 以 6/6 PASS 冻结。P8B 已完成研究、计划、固定依赖、生产实现和全量测试。
 
 下一项任务：
 
 ```text
-先保存 docs/P8A_HEAVE_TOUCHDOWN_PLAN.md；
-核对 ENU/NED 垂直符号、UAV 世界系垂直速度、甲板垂直速度和相对垂直速度；
-检查并最小修正 TOUCHDOWN_HOLD 的升沉甲板相对保持；
-先写测试，再做 static/constant02 回归和 H1/H2/H3 分级真实 SITL；
-P8A 未通过真实验收时停止，不进入 P8B；
+从 P8B static 5 m 单轮开始，按计划严格顺序完成真实 PX4 SITL；
+每个场景先单轮，通过后再三个不同 seed；
+保存 Bag 并输出水平 RMSE、相对速度、控制平滑度、solve time mean/P95、iteration 和 fallback；
+使用同 seed P4.7 对照，确认 static/constant02/sinusoidal 无明显退化；
+安全高度场景全部通过后，才允许下降和真实触地；
+P8B 未达到 VALIDATION PASS 时停止，不进入 P8C；
 全程保持 NAV_LAND / Disarm = 0 / 0，Ground Truth 只用于离线评测。
 ```

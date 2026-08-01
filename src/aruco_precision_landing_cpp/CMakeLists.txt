@@ -10,6 +10,8 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(eigen3_cmake_module REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(osqp REQUIRED)
+find_package(OsqpEigen 0.11.2 EXACT REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(px4_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -35,6 +37,7 @@ add_library(
   src/touchdown_detector.cpp
   src/final_descent_controller.cpp
   src/touchdown_hold_controller.cpp
+  src/relative_mpc_controller.cpp
 )
 target_compile_features(aruco_landing_math PUBLIC cxx_std_17)
 target_include_directories(
@@ -43,7 +46,12 @@ target_include_directories(
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
 )
-target_link_libraries(aruco_landing_math PUBLIC Eigen3::Eigen)
+target_link_libraries(
+  aruco_landing_math
+  PUBLIC
+    Eigen3::Eigen
+    OsqpEigen::OsqpEigen
+)
 
 add_executable(
   px4_aruco_landing_node
@@ -190,6 +198,12 @@ if(BUILD_TESTING)
   )
   target_link_libraries(touchdown_hold_controller_test aruco_landing_math)
 
+  ament_add_gtest(
+    relative_mpc_controller_test
+    test/relative_mpc_controller_test.cpp
+  )
+  target_link_libraries(relative_mpc_controller_test aruco_landing_math)
+
   add_test(
     NAME p7_experiment_tests
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_p7_experiments.py
@@ -209,6 +223,6 @@ if(BUILD_TESTING)
   )
 endif()
 
-ament_export_dependencies(Eigen3)
+ament_export_dependencies(Eigen3 OsqpEigen osqp)
 ament_export_targets(export_aruco_landing_math HAS_LIBRARY_TARGET)
 ament_package()

@@ -28,6 +28,13 @@ LOCAL_POSITION_TOPIC = "/fmu/out/vehicle_local_position_v1"
 VEHICLE_ODOMETRY_TOPIC = "/fmu/out/vehicle_odometry"
 EFFECTIVE_GAIN_TOPIC = "/landing/effective_relative_velocity_gain"
 ESTIMATED_DECK_ACCELERATION_TOPIC = "/landing/estimated_deck_acceleration"
+MPC_STATUS_TOPIC = "/landing/relative_mpc/status"
+MPC_SOLVE_TIME_TOPIC = "/landing/relative_mpc/solve_time_ms"
+MPC_ITERATION_TOPIC = "/landing/relative_mpc/iteration_count"
+MPC_OBJECTIVE_TOPIC = "/landing/relative_mpc/objective"
+MPC_FALLBACK_COUNT_TOPIC = "/landing/relative_mpc/fallback_count"
+MPC_FIRST_CONTROL_TOPIC = "/landing/relative_mpc/first_control"
+MPC_ACTIVE_CONSTRAINTS_TOPIC = "/landing/relative_mpc/active_constraints"
 
 REQUIRED_TOPICS = {
     STATE_TOPIC,
@@ -40,6 +47,13 @@ REQUIRED_TOPICS = {
 OPTIONAL_TOPICS = {
     EFFECTIVE_GAIN_TOPIC,
     ESTIMATED_DECK_ACCELERATION_TOPIC,
+    MPC_STATUS_TOPIC,
+    MPC_SOLVE_TIME_TOPIC,
+    MPC_ITERATION_TOPIC,
+    MPC_OBJECTIVE_TOPIC,
+    MPC_FALLBACK_COUNT_TOPIC,
+    MPC_FIRST_CONTROL_TOPIC,
+    MPC_ACTIVE_CONSTRAINTS_TOPIC,
 }
 
 WGS84_SEMI_MAJOR_AXIS_M = 6378137.0
@@ -69,6 +83,14 @@ class GeodeticPosition:
 
 def finite_values(values: Iterable[float]) -> bool:
     return all(math.isfinite(value) for value in values)
+
+
+def mpc_status_is_intentional_disengagement(status: str) -> bool:
+    return status.upper() == "TERMINAL_PHASE_P47"
+
+
+def mpc_status_is_solver_success(status: str) -> bool:
+    return status.lower().startswith("solved")
 
 
 def wgs84_to_ecef(position: GeodeticPosition) -> tuple[float, float, float]:
@@ -224,6 +246,23 @@ def rmse(values: Sequence[float]) -> float:
     return math.sqrt(sum(value * value for value in values) / len(values))
 
 
+def percentile(values: Sequence[float], probability: float) -> float:
+    if not values:
+        raise ValueError("cannot compute percentile from an empty sequence")
+    if not 0.0 <= probability <= 1.0:
+        raise ValueError("percentile probability must be within [0, 1]")
+    ordered = sorted(values)
+    position = probability * (len(ordered) - 1)
+    lower_index = math.floor(position)
+    upper_index = math.ceil(position)
+    if lower_index == upper_index:
+        return ordered[lower_index]
+    alpha = position - lower_index
+    return ordered[lower_index] + alpha * (
+        ordered[upper_index] - ordered[lower_index]
+    )
+
+
 def quaternion_to_roll_pitch(q: Sequence[float]) -> tuple[float, float]:
     w, x, y, z = q
     norm = math.sqrt(w * w + x * x + y * y + z * z)
@@ -294,6 +333,13 @@ def evaluate(args: argparse.Namespace) -> dict[str, float | int | str]:
     vehicle_attitudes: list[TimedVector] = []
     effective_gain_samples: list[TimedVector] = []
     estimated_deck_acceleration_samples: list[TimedVector] = []
+    mpc_status_samples: list[tuple[float, str]] = []
+    mpc_solve_time_samples: list[TimedVector] = []
+    mpc_iteration_samples: list[TimedVector] = []
+    mpc_objective_samples: list[TimedVector] = []
+    mpc_fallback_count_samples: list[TimedVector] = []
+    mpc_first_control_samples: list[TimedVector] = []
+    mpc_active_constraint_samples: list[TimedVector] = []
     final_bag_time_s = 0.0
 
     while reader.has_next():
@@ -341,6 +387,32 @@ def evaluate(args: argparse.Namespace) -> dict[str, float | int | str]:
             values = (float(acceleration.x), float(acceleration.y))
             if finite_values(values):
                 estimated_deck_acceleration_samples.append(TimedVector(time_s, values))
+        elif topic == MPC_STATUS_TOPIC:
+            mpc_status_samples.append((time_s, str(message.data)))
+        elif topic == MPC_SOLVE_TIME_TOPIC:
+            value = float(message.data)
+            if math.isfinite(value) and value >= 0.0:
+                mpc_solve_time_samples.append(TimedVector(time_s, (value,)))
+        elif topic == MPC_ITERATION_TOPIC:
+            value = float(message.data)
+            if math.isfinite(value) and value >= 0.0:
+                mpc_iteration_samples.append(TimedVector(time_s, (value,)))
+        elif topic == MPC_OBJECTIVE_TOPIC:
+            value = float(message.data)
+            if math.isfinite(value):
+                mpc_objective_samples.append(TimedVector(time_s, (value,)))
+        elif topic == MPC_FALLBACK_COUNT_TOPIC:
+            value = float(message.data)
+            if math.isfinite(value) and value >= 0.0:
+                mpc_fallback_count_samples.append(TimedVector(time_s, (value,)))
+        elif topic == MPC_FIRST_CONTROL_TOPIC:
+            values = (float(message.vector.x), float(message.vector.y))
+            if finite_values(values):
+                mpc_first_control_samples.append(TimedVector(time_s, values))
+        elif topic == MPC_ACTIVE_CONSTRAINTS_TOPIC:
+            value = float(message.data)
+            if math.isfinite(value) and value >= 0.0:
+                mpc_active_constraint_samples.append(TimedVector(time_s, (value,)))
 
     track_times = [time_s for time_s, state in state_samples if state == TRACK_STATE]
     if not track_times:
@@ -518,6 +590,112 @@ def evaluate(args: argparse.Namespace) -> dict[str, float | int | str]:
             }
         )
 
+    stable_solve_times = [
+        sample.values[0]
+        for sample in mpc_solve_time_samples
+        if sample.time_s >= stable_start_s
+    ]
+    if stable_solve_times:
+        result.update(
+            {
+                "mpc_solve_time_mean_ms": sum(stable_solve_times)
+                / len(stable_solve_times),
+                "mpc_solve_time_p95_ms": percentile(stable_solve_times, 0.95),
+                "mpc_solve_time_max_ms": max(stable_solve_times),
+                "mpc_solve_time_sample_count": len(stable_solve_times),
+                "mpc_control_period_ms": args.control_period_ms,
+                "mpc_deadline_miss_count": sum(
+                    value >= args.control_period_ms for value in stable_solve_times
+                ),
+            }
+        )
+
+    stable_iterations = [
+        sample.values[0]
+        for sample in mpc_iteration_samples
+        if sample.time_s >= stable_start_s
+    ]
+    if stable_iterations:
+        result.update(
+            {
+                "mpc_iteration_mean": sum(stable_iterations)
+                / len(stable_iterations),
+                "mpc_iteration_p95": percentile(stable_iterations, 0.95),
+                "mpc_iteration_max": max(stable_iterations),
+            }
+        )
+
+    stable_objectives = [
+        sample.values[0]
+        for sample in mpc_objective_samples
+        if sample.time_s >= stable_start_s
+    ]
+    if stable_objectives:
+        result["mpc_objective_mean"] = sum(stable_objectives) / len(
+            stable_objectives
+        )
+
+    stable_fallback_counts = [
+        sample.values[0]
+        for sample in mpc_fallback_count_samples
+        if sample.time_s >= stable_start_s
+    ]
+    if stable_fallback_counts:
+        result["mpc_fallback_count"] = int(max(stable_fallback_counts))
+
+    stable_statuses = [
+        status for time_s, status in mpc_status_samples if time_s >= stable_start_s
+    ]
+    if stable_statuses:
+        result["mpc_terminal_phase_p47_count"] = sum(
+            mpc_status_is_intentional_disengagement(status)
+            for status in stable_statuses
+        )
+        result["mpc_non_solved_status_count"] = sum(
+            not mpc_status_is_solver_success(status)
+            and not mpc_status_is_intentional_disengagement(status)
+            for status in stable_statuses
+        )
+
+    stable_active_constraints = [
+        sample.values[0]
+        for sample in mpc_active_constraint_samples
+        if sample.time_s >= stable_start_s
+    ]
+    if stable_active_constraints:
+        result.update(
+            {
+                "mpc_active_constraints_mean": sum(stable_active_constraints)
+                / len(stable_active_constraints),
+                "mpc_active_constraints_max": max(stable_active_constraints),
+            }
+        )
+
+    stable_controls = [
+        sample
+        for sample in mpc_first_control_samples
+        if sample.time_s >= stable_start_s
+    ]
+    if stable_controls:
+        control_norms = [math.hypot(*sample.values) for sample in stable_controls]
+        control_increments = [
+            math.hypot(
+                current.values[0] - previous.values[0],
+                current.values[1] - previous.values[1],
+            )
+            for previous, current in zip(stable_controls, stable_controls[1:])
+        ]
+        result.update(
+            {
+                "mpc_first_control_max_mps2": max(control_norms),
+                "mpc_first_control_rmse_mps2": rmse(control_norms),
+                "mpc_control_increment_rmse_mps2": (
+                    rmse(control_increments) if control_increments else 0.0
+                ),
+                "mpc_control_sample_count": len(stable_controls),
+            }
+        )
+
     return result
 
 
@@ -567,6 +745,30 @@ def print_human_readable(result: dict[str, float | int | str]) -> None:
             f"{result['estimated_deck_acceleration_rmse_mps2']:.4f} m/s^2 / "
             f"{result['estimated_deck_acceleration_max_mps2']:.4f} m/s^2"
         )
+    if "mpc_solve_time_mean_ms" in result:
+        print(
+            "MPC solve time mean / P95 / max: "
+            f"{result['mpc_solve_time_mean_ms']:.4f} / "
+            f"{result['mpc_solve_time_p95_ms']:.4f} / "
+            f"{result['mpc_solve_time_max_ms']:.4f} ms"
+        )
+        print(
+            "MPC iterations mean / P95 / max: "
+            f"{result.get('mpc_iteration_mean', 0.0):.2f} / "
+            f"{result.get('mpc_iteration_p95', 0.0):.2f} / "
+            f"{result.get('mpc_iteration_max', 0.0):.0f}"
+        )
+        print(
+            "MPC fallback / deadline misses: "
+            f"{result.get('mpc_fallback_count', 0)} / "
+            f"{result.get('mpc_deadline_miss_count', 0)}"
+        )
+        print(
+            "MPC control RMSE / increment RMSE / max: "
+            f"{result.get('mpc_first_control_rmse_mps2', 0.0):.4f} / "
+            f"{result.get('mpc_control_increment_rmse_mps2', 0.0):.4f} / "
+            f"{result.get('mpc_first_control_max_mps2', 0.0):.4f} m/s^2"
+        )
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -592,6 +794,12 @@ def parse_arguments() -> argparse.Namespace:
     )
     parser.add_argument("--world-origin-altitude", type=float, default=0.0)
     parser.add_argument(
+        "--control-period-ms",
+        type=float,
+        default=50.0,
+        help="MPC deadline used for solve-time checks in milliseconds (default: 50)",
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         help="print machine-readable JSON instead of the text summary",
@@ -599,6 +807,8 @@ def parse_arguments() -> argparse.Namespace:
     args = parser.parse_args()
     if not math.isfinite(args.discard_seconds) or args.discard_seconds < 0.0:
         parser.error("--discard-seconds must be finite and non-negative")
+    if not math.isfinite(args.control_period_ms) or args.control_period_ms <= 0.0:
+        parser.error("--control-period-ms must be finite and positive")
     if not finite_values(
         (
             args.world_origin_latitude,

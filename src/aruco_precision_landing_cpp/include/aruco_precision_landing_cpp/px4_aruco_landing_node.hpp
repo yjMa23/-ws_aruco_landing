@@ -12,6 +12,7 @@
 #include "aruco_precision_landing_cpp/motion_predictor.hpp"
 #include "aruco_precision_landing_cpp/moving_target_tracking_controller.hpp"
 #include "aruco_precision_landing_cpp/relative_descent_controller.hpp"
+#include "aruco_precision_landing_cpp/relative_mpc_controller.hpp"
 #include "aruco_precision_landing_cpp/target_state_estimator.hpp"
 #include "aruco_precision_landing_cpp/touchdown_detector.hpp"
 #include "aruco_precision_landing_cpp/touchdown_hold_controller.hpp"
@@ -29,6 +30,7 @@
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <geometry_msgs/msg/vector3_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
+#include <nav_msgs/msg/path.hpp>
 #include <px4_msgs/msg/offboard_control_mode.hpp>
 #include <px4_msgs/msg/trajectory_setpoint.hpp>
 #include <px4_msgs/msg/vehicle_command.hpp>
@@ -159,6 +161,7 @@ private:
 
   void set_target(double x, double y, double z, double yaw);
   void set_velocity_feedforward(double north_mps, double east_mps);
+  void set_horizontal_acceleration_feedforward(double north_mps2, double east_mps2);
   void set_vertical_velocity_feedforward(double down_mps);
   void set_adaptive_tracking_debug(
     const std::optional<double> & effective_gain,
@@ -183,6 +186,7 @@ private:
   void publish_estimated_deck_odometry(const rclcpp::Time & now);
   void publish_predicted_deck_pose(const rclcpp::Time & now);
   void publish_tracking_velocity_setpoint(const rclcpp::Time & now);
+  void publish_relative_mpc_debug(const rclcpp::Time & now);
   void publish_effective_relative_velocity_gain();
   void publish_estimated_deck_acceleration(const rclcpp::Time & now);
   void publish_estimated_deck_attitude();
@@ -293,6 +297,23 @@ private:
   double tracking_max_velocity_feedforward_mps_{1.5};
   double tracking_max_velocity_feedforward_acceleration_mps2_{1.0};
   double tracking_max_prediction_age_s_{0.75};
+  double relative_mpc_sample_period_s_{0.05};
+  int relative_mpc_horizon_steps_{20};
+  std::array<double, 4> relative_mpc_state_weights_{{8.0, 8.0, 2.0, 2.0}};
+  std::array<double, 4> relative_mpc_terminal_state_weights_{{16.0, 16.0, 4.0, 4.0}};
+  std::array<double, 2> relative_mpc_control_weights_{{0.20, 0.20}};
+  std::array<double, 2> relative_mpc_control_increment_weights_{{1.0, 1.0}};
+  double relative_mpc_speed_slack_weight_{1000.0};
+  double relative_mpc_maximum_uav_speed_mps_{2.0};
+  double relative_mpc_maximum_acceleration_mps2_{1.5};
+  double relative_mpc_maximum_acceleration_increment_mps2_{0.25};
+  double relative_mpc_maximum_speed_slack_mps_{2.0};
+  int relative_mpc_maximum_iterations_{1000};
+  double relative_mpc_absolute_tolerance_{1.0e-4};
+  double relative_mpc_relative_tolerance_{1.0e-4};
+  double relative_mpc_time_limit_s_{0.02};
+  bool relative_mpc_warm_start_enabled_{true};
+  double relative_mpc_active_constraint_tolerance_{1.0e-3};
   double deck_attitude_filter_gain_{0.20};
   double deck_attitude_minimum_upward_normal_component_{0.50};
   double landing_window_enter_horizontal_error_m_{0.15};
@@ -415,6 +436,9 @@ private:
   bool velocity_feedforward_valid_{false};
   double velocity_feedforward_north_mps_{0.0};
   double velocity_feedforward_east_mps_{0.0};
+  bool horizontal_acceleration_feedforward_valid_{false};
+  double horizontal_acceleration_feedforward_north_mps2_{0.0};
+  double horizontal_acceleration_feedforward_east_mps2_{0.0};
   bool vertical_velocity_feedforward_valid_{false};
   double vertical_velocity_feedforward_down_mps_{0.0};
   bool effective_relative_velocity_gain_valid_{false};
@@ -429,6 +453,10 @@ private:
   FinalDescentOutput final_descent_output_{};
   TouchdownDetectorOutput touchdown_result_{};
   TouchdownHoldOutput touchdown_hold_output_{};
+  RelativeMpcResult relative_mpc_result_{};
+  bool relative_mpc_debug_valid_{false};
+  std::uint32_t relative_mpc_fallback_count_{0U};
+  Eigen::Vector2d last_relative_mpc_control_xy_{Eigen::Vector2d::Zero()};
 
   std::unique_ptr<GnssRendezvousGuidance> gnss_guidance_;
   std::unique_ptr<VisualHandoverGuidance> visual_guidance_;
@@ -436,6 +464,8 @@ private:
   std::unique_ptr<VerticalStateEstimator> vertical_state_estimator_;
   std::unique_ptr<MotionPredictor> motion_predictor_;
   std::unique_ptr<MovingTargetTrackingController> tracking_controller_;
+  std::unique_ptr<MovingTargetTrackingController> p47_fallback_controller_;
+  std::unique_ptr<RelativeMpcController> relative_mpc_controller_;
   std::unique_ptr<VehiclePoseHistory> vehicle_pose_history_;
   std::unique_ptr<DeckAttitudeEstimator> deck_attitude_estimator_;
   std::unique_ptr<LandingWindow> landing_window_;
@@ -469,6 +499,16 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr predicted_deck_pose_pub_;
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr
     tracking_velocity_setpoint_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr relative_mpc_status_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr relative_mpc_solve_time_pub_;
+  rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr relative_mpc_iteration_count_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr relative_mpc_objective_pub_;
+  rclcpp::Publisher<std_msgs::msg::UInt32>::SharedPtr relative_mpc_fallback_count_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::Vector3Stamped>::SharedPtr
+    relative_mpc_first_control_pub_;
+  rclcpp::Publisher<std_msgs::msg::UInt32>::SharedPtr relative_mpc_active_constraints_pub_;
+  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr relative_mpc_state_pub_;
+  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr relative_mpc_predicted_path_pub_;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr
     effective_relative_velocity_gain_pub_;
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr

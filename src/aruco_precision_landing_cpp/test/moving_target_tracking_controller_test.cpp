@@ -64,11 +64,13 @@ TEST(MovingTargetTrackingControllerTest, ParsesAndNamesAllSupportedModes)
     tracking_control_mode_from_string("ESTIMATED_POSITION_VELOCITY_FF");
   const auto predicted_ff =
     tracking_control_mode_from_string("PREDICTED_POSITION_VELOCITY_FF");
+  const auto relative_mpc = tracking_control_mode_from_string("RELATIVE_MPC");
 
   ASSERT_TRUE(raw.has_value());
   ASSERT_TRUE(estimated.has_value());
   ASSERT_TRUE(estimated_ff.has_value());
   ASSERT_TRUE(predicted_ff.has_value());
+  ASSERT_TRUE(relative_mpc.has_value());
   EXPECT_STREQ(tracking_control_mode_name(*raw), "RAW_VISUAL_POSITION");
   EXPECT_STREQ(tracking_control_mode_name(*estimated), "ESTIMATED_POSITION");
   EXPECT_STREQ(
@@ -77,6 +79,10 @@ TEST(MovingTargetTrackingControllerTest, ParsesAndNamesAllSupportedModes)
   EXPECT_STREQ(
     tracking_control_mode_name(*predicted_ff),
     "PREDICTED_POSITION_VELOCITY_FF");
+  EXPECT_STREQ(tracking_control_mode_name(*relative_mpc), "RELATIVE_MPC");
+  EXPECT_EQ(
+    MovingTargetTrackingParameters{}.mode,
+    TrackingControlMode::kPredictedPositionVelocityFeedforward);
   EXPECT_FALSE(tracking_control_mode_from_string("UNKNOWN").has_value());
 }
 
@@ -120,6 +126,61 @@ TEST(MovingTargetTrackingControllerTest, PredictedModeUsesPredictionAndDeckVeloc
   EXPECT_TRUE(command->velocity_feedforward_xy->isApprox(Eigen::Vector2d{0.4, -0.2}));
   EXPECT_TRUE(command->used_prediction);
   EXPECT_FALSE(command->used_short_loss_prediction);
+}
+
+TEST(MovingTargetTrackingControllerTest, RelativeMpcModeKeepsDeckVelocityFeedforward)
+{
+  MovingTargetTrackingController controller(
+    permissive_parameters(TrackingControlMode::kRelativeMpc));
+  const auto command = controller.compute(make_input());
+
+  ASSERT_TRUE(command.has_value());
+  EXPECT_EQ(command->mode, TrackingControlMode::kRelativeMpc);
+  EXPECT_TRUE(command->position_target_xy.isApprox(Eigen::Vector2d{1.2, 1.9}));
+  ASSERT_TRUE(command->velocity_feedforward_xy.has_value());
+  EXPECT_TRUE(command->velocity_feedforward_xy->isApprox(Eigen::Vector2d{0.4, -0.2}));
+  EXPECT_TRUE(command->used_prediction);
+}
+
+TEST(MovingTargetTrackingControllerTest, RelativeMpcDoesNotDuplicateRelativeVelocityFeedback)
+{
+  auto parameters = permissive_parameters(TrackingControlMode::kRelativeMpc);
+  parameters.relative_velocity_gain = 1.0;
+  MovingTargetTrackingController controller(parameters);
+  auto input = make_input();
+  input.uav_velocity_xy = Eigen::Vector2d{-1.0, 1.0};
+
+  const auto command = controller.compute(input);
+
+  ASSERT_TRUE(command.has_value());
+  ASSERT_TRUE(command->velocity_feedforward_xy.has_value());
+  EXPECT_TRUE(command->velocity_feedforward_xy->isApprox(Eigen::Vector2d{0.4, -0.2}));
+  ASSERT_TRUE(command->effective_relative_velocity_gain.has_value());
+  EXPECT_DOUBLE_EQ(*command->effective_relative_velocity_gain, 0.0);
+}
+
+TEST(MovingTargetTrackingControllerTest, ParallelP47ControllerProvidesFullFallbackFeedback)
+{
+  auto mpc_parameters = permissive_parameters(TrackingControlMode::kRelativeMpc);
+  mpc_parameters.relative_velocity_gain = 1.0;
+  auto p47_parameters = mpc_parameters;
+  p47_parameters.mode = TrackingControlMode::kPredictedPositionVelocityFeedforward;
+  MovingTargetTrackingController mpc_controller(mpc_parameters);
+  MovingTargetTrackingController p47_controller(p47_parameters);
+  auto input = make_input();
+  input.uav_velocity_xy = Eigen::Vector2d{-1.0, 1.0};
+
+  const auto mpc_command = mpc_controller.compute(input);
+  const auto p47_command = p47_controller.compute(input);
+
+  ASSERT_TRUE(mpc_command.has_value());
+  ASSERT_TRUE(p47_command.has_value());
+  ASSERT_TRUE(mpc_command->velocity_feedforward_xy.has_value());
+  ASSERT_TRUE(p47_command->velocity_feedforward_xy.has_value());
+  EXPECT_TRUE(mpc_command->velocity_feedforward_xy->isApprox(Eigen::Vector2d{0.4, -0.2}));
+  EXPECT_TRUE(p47_command->velocity_feedforward_xy->isApprox(Eigen::Vector2d{1.8, -1.4}));
+  ASSERT_TRUE(p47_command->effective_relative_velocity_gain.has_value());
+  EXPECT_DOUBLE_EQ(*p47_command->effective_relative_velocity_gain, 1.0);
 }
 
 TEST(MovingTargetTrackingControllerTest, RelativeVelocityGainDampsUavVelocityError)

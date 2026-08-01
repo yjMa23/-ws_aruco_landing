@@ -36,6 +36,11 @@ STALE_PATTERN = (
     r"deck_gnss_simulator|parameter_bridge.*world/aruco|aruco_detector_node|"
     r"px4_aruco_landing_node"
 )
+TRACKING_MODES = (
+    "PREDICTED_POSITION_VELOCITY_FF",
+    "RELATIVE_MPC",
+)
+
 KNOWN_STATES = {
     "INIT",
     "WAIT_FOR_PX4",
@@ -73,6 +78,11 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--episode-id")
     parser.add_argument(
         "--camera-model", choices=("close-range", "px4-default"), default="close-range"
+    )
+    parser.add_argument(
+        "--tracking-mode",
+        choices=TRACKING_MODES,
+        default="PREDICTED_POSITION_VELOCITY_FF",
     )
     parser.add_argument("--record-camera-debug", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -121,6 +131,7 @@ def build_start_command(
     bag_path: Path,
     camera_model: str,
     record_camera_debug: bool,
+    tracking_mode: str = "PREDICTED_POSITION_VELOCITY_FF",
 ) -> list[str]:
     command = [
         str(workspace_dir / "scripts" / "start_sitl.sh"),
@@ -134,6 +145,8 @@ def build_start_command(
         "--auto-confirm-controller",
         "--camera-model",
         camera_model,
+        "--tracking-mode",
+        tracking_mode,
         "--enable-relative-descent",
         "--enable-final-descent",
     ]
@@ -248,7 +261,11 @@ def terminate_process_group(process: subprocess.Popen[str], timeout_s: float = 2
 
 
 def snapshot_configs(
-    workspace_dir: Path, episode_dir: Path, scenario: str, seed: int
+    workspace_dir: Path,
+    episode_dir: Path,
+    scenario: str,
+    seed: int,
+    tracking_mode: str,
 ) -> None:
     controller_source = (
         workspace_dir
@@ -276,7 +293,11 @@ def snapshot_configs(
     scenario_data["moving_deck_controller"]["ros__parameters"]["random_seed"] = seed
     gnss_data["deck_gnss_simulator"]["ros__parameters"]["random_seed"] = seed
     snapshot = {
-        "touchdown_episode": {"scenario": scenario, "seed": seed},
+        "touchdown_episode": {
+            "scenario": scenario,
+            "seed": seed,
+            "tracking_mode": tracking_mode,
+        },
         **scenario_data,
         **gnss_data,
     }
@@ -346,6 +367,11 @@ def run_episode(args: argparse.Namespace) -> dict[str, Any]:
     output_root = args.output_directory.expanduser().resolve()
     episode_dir = output_root / episode_id
     bag_path = episode_dir / "bag"
+    tracking_mode = getattr(
+        args, "tracking_mode", "PREDICTED_POSITION_VELOCITY_FF"
+    )
+    if tracking_mode not in TRACKING_MODES:
+        raise ValueError(f"unsupported tracking mode: {tracking_mode}")
     start_command = build_start_command(
         workspace_dir,
         args.scenario,
@@ -353,6 +379,7 @@ def run_episode(args: argparse.Namespace) -> dict[str, Any]:
         bag_path,
         args.camera_model,
         args.record_camera_debug,
+        tracking_mode,
     )
     if args.dry_run:
         result = {
@@ -384,6 +411,7 @@ def run_episode(args: argparse.Namespace) -> dict[str, Any]:
         "end_wall_time": None,
         "duration_s": None,
         "camera_model": args.camera_model,
+        "tracking_mode": tracking_mode,
         "record_camera_debug": args.record_camera_debug,
         "start_command": start_command,
         "exit_code": None,
@@ -396,7 +424,9 @@ def run_episode(args: argparse.Namespace) -> dict[str, Any]:
         "completed": False,
     }
     atomic_write_json(episode_dir / "manifest.json", manifest)
-    snapshot_configs(workspace_dir, episode_dir, args.scenario, args.seed)
+    snapshot_configs(
+        workspace_dir, episode_dir, args.scenario, args.seed, tracking_mode
+    )
 
     preexisting = stale_processes()
     if preexisting:

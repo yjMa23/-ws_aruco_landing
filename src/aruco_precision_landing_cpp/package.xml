@@ -11,6 +11,8 @@
   <buildtool_export_depend>eigen3_cmake_module</buildtool_export_depend>
 
   <depend>eigen</depend>
+  <depend>osqp</depend>
+  <depend>osqp_eigen</depend>
   <depend>rclcpp</depend>
   <depend>px4_msgs</depend>
   <depend>geometry_msgs</depend>

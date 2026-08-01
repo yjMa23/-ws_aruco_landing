@@ -115,6 +115,25 @@ px4_aruco_landing_node:
     tracking.max_velocity_feedforward_acceleration_mps2: 1.0
     tracking.max_prediction_age_s: 0.75
 
+    # P8B 显式选择 tracking.mode=RELATIVE_MPC 后启用；默认仍使用 P4.7。
+    relative_mpc.sample_period_s: 0.05
+    relative_mpc.horizon_steps: 20
+    relative_mpc.state_weights: [8.0, 8.0, 2.0, 2.0]
+    relative_mpc.terminal_state_weights: [16.0, 16.0, 4.0, 4.0]
+    relative_mpc.control_weights: [0.20, 0.20]
+    relative_mpc.control_increment_weights: [1.0, 1.0]
+    relative_mpc.speed_slack_weight: 1000.0
+    relative_mpc.maximum_uav_speed_mps: 2.0
+    relative_mpc.maximum_acceleration_mps2: 1.5
+    relative_mpc.maximum_acceleration_increment_mps2: 0.25
+    relative_mpc.maximum_speed_slack_mps: 2.0
+    relative_mpc.maximum_iterations: 1000
+    relative_mpc.absolute_tolerance: 0.0001
+    relative_mpc.relative_tolerance: 0.0001
+    relative_mpc.time_limit_s: 0.02
+    relative_mpc.warm_start_enabled: true
+    relative_mpc.active_constraint_tolerance: 0.001
+
     deck_attitude.filter_gain: 0.20
     deck_attitude.minimum_upward_normal_component: 0.50
 

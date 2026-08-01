@@ -24,7 +24,8 @@ enum class TrackingControlMode
   kRawVisualPosition,
   kEstimatedPosition,
   kEstimatedPositionVelocityFeedforward,
-  kPredictedPositionVelocityFeedforward
+  kPredictedPositionVelocityFeedforward,
+  kRelativeMpc
 };
 
 /**

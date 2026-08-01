@@ -30,6 +30,7 @@ bool is_supported_mode(TrackingControlMode mode)
     case TrackingControlMode::kEstimatedPosition:
     case TrackingControlMode::kEstimatedPositionVelocityFeedforward:
     case TrackingControlMode::kPredictedPositionVelocityFeedforward:
+    case TrackingControlMode::kRelativeMpc:
       return true;
   }
   return false;
@@ -71,6 +72,9 @@ std::optional<TrackingControlMode> tracking_control_mode_from_string(
   if (value == "PREDICTED_POSITION_VELOCITY_FF") {
     return TrackingControlMode::kPredictedPositionVelocityFeedforward;
   }
+  if (value == "RELATIVE_MPC") {
+    return TrackingControlMode::kRelativeMpc;
+  }
   return std::nullopt;
 }
 
@@ -85,6 +89,8 @@ const char * tracking_control_mode_name(TrackingControlMode mode)
       return "ESTIMATED_POSITION_VELOCITY_FF";
     case TrackingControlMode::kPredictedPositionVelocityFeedforward:
       return "PREDICTED_POSITION_VELOCITY_FF";
+    case TrackingControlMode::kRelativeMpc:
+      return "RELATIVE_MPC";
   }
   return "UNKNOWN";
 }
@@ -143,7 +149,8 @@ std::optional<MovingTargetTrackingCommand> MovingTargetTrackingController::compu
 
   const bool velocity_feedforward_mode =
     parameters_.mode == TrackingControlMode::kEstimatedPositionVelocityFeedforward ||
-    parameters_.mode == TrackingControlMode::kPredictedPositionVelocityFeedforward;
+    parameters_.mode == TrackingControlMode::kPredictedPositionVelocityFeedforward ||
+    parameters_.mode == TrackingControlMode::kRelativeMpc;
 
   std::optional<Eigen::Vector2d> velocity_feedforward;
   std::optional<double> effective_relative_velocity_gain;
@@ -217,6 +224,7 @@ MovingTargetTrackingController::select_position_reference(
       return input.estimated_state->position_ned.head<2>();
 
     case TrackingControlMode::kPredictedPositionVelocityFeedforward:
+    case TrackingControlMode::kRelativeMpc:
       if (input.estimate_age_s > parameters_.max_prediction_age_s ||
         !input.estimated_state.has_value() ||
         !estimate_is_finite(*input.estimated_state) ||
@@ -246,21 +254,29 @@ MovingTargetTrackingController::compute_velocity_feedforward(
 
   const Eigen::Vector2d deck_velocity_xy =
     input.estimated_state->velocity_ned.head<2>();
-  effective_relative_velocity_gain = parameters_.relative_velocity_gain;
+  const bool use_relative_velocity_feedback =
+    parameters_.mode != TrackingControlMode::kRelativeMpc;
+  effective_relative_velocity_gain = use_relative_velocity_feedback ?
+    parameters_.relative_velocity_gain : 0.0;
   estimated_deck_acceleration_xy.reset();
   if (parameters_.adaptive_relative_velocity_gain_enabled) {
     const auto adaptive_output = update_adaptive_gain(*input.estimated_state, input.dt_s);
     if (!adaptive_output.has_value()) {
       return std::nullopt;
     }
-    effective_relative_velocity_gain = adaptive_output->gain;
+    if (use_relative_velocity_feedback) {
+      effective_relative_velocity_gain = adaptive_output->gain;
+    }
     estimated_deck_acceleration_xy = adaptive_output->filtered_acceleration_xy;
   }
 
   Eigen::Vector2d desired_velocity =
     parameters_.velocity_feedforward_gain * deck_velocity_xy;
 
-  if (effective_relative_velocity_gain > 0.0) {
+  // RELATIVE_MPC owns relative-position and relative-velocity feedback. The velocity
+  // setpoint remains only the deck's kinematic feedforward so the PX4 position loop
+  // does not duplicate the MPC feedback action.
+  if (use_relative_velocity_feedback && effective_relative_velocity_gain > 0.0) {
     if (!input.uav_velocity_xy.has_value() || !input.uav_velocity_xy->allFinite()) {
       return std::nullopt;
     }

@@ -18,6 +18,7 @@ SCRIPTS_DIR = WORKSPACE_DIR / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 import aggregate_results  # noqa: E402
+import evaluate_p4_bag  # noqa: E402
 import run_batch_experiments  # noqa: E402
 import run_single_experiment  # noqa: E402
 from p7_experiment_utils import (  # noqa: E402
@@ -217,6 +218,22 @@ class P7ExperimentTests(unittest.TestCase):
             self.assertEqual(result["successful_episodes"], 1)
             self.assertEqual(result["failed_episodes"], 1)
 
+    def test_mpc_contact_disengagement_is_not_counted_as_solver_failure(self) -> None:
+        self.assertTrue(
+            evaluate_p4_bag.mpc_status_is_intentional_disengagement(
+                "TERMINAL_PHASE_P47"
+            )
+        )
+        self.assertFalse(
+            evaluate_p4_bag.mpc_status_is_solver_success("TERMINAL_PHASE_P47")
+        )
+        self.assertTrue(evaluate_p4_bag.mpc_status_is_solver_success("solved"))
+        self.assertFalse(
+            evaluate_p4_bag.mpc_status_is_intentional_disengagement(
+                "MAXIMUM_ITERATIONS"
+            )
+        )
+
     def test_aggregate_statistics(self) -> None:
         values = [1.0, 2.0, 3.0, 4.0]
         summary = summarize_values(values)
@@ -314,6 +331,30 @@ class P7ExperimentTests(unittest.TestCase):
             popen.assert_not_called()
             self.assertIn("heave_h1", result["command"])
             self.assertIn("--enable-final-descent", result["command"])
+
+    def test_mpc_dry_run_passes_explicit_tracking_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            args = SimpleNamespace(
+                scenario="heave_h1",
+                seed=101,
+                episode_timeout=180.0,
+                startup_timeout=60.0,
+                touchdown_hold=10.0,
+                output_directory=Path(directory),
+                batch_id="p8b-dry",
+                episode_id="p8b-dry-heave-h1",
+                camera_model="close-range",
+                tracking_mode="RELATIVE_MPC",
+                record_camera_debug=False,
+                dry_run=True,
+                workspace_dir=WORKSPACE_DIR,
+            )
+            with mock.patch.object(run_single_experiment.subprocess, "Popen") as popen:
+                result = run_single_experiment.run_episode(args)
+            popen.assert_not_called()
+            command = result["command"]
+            self.assertIn("--tracking-mode", command)
+            self.assertEqual(command[command.index("--tracking-mode") + 1], "RELATIVE_MPC")
 
     def test_dry_run_does_not_start_processes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

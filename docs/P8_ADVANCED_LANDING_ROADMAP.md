@@ -154,10 +154,11 @@ P8A 至少满足：
 
 ### 5.1 强制研究门槛
 
-第一步必须新增：
+已完成并保存：
 
 ```text
 docs/research/P8B_RELATIVE_MPC_REVIEW.md
+docs/P8B_RELATIVE_MPC_PLAN.md
 ```
 
 执行顺序：
@@ -178,7 +179,7 @@ docs/research/P8B_RELATIVE_MPC_REVIEW.md
 → docs/P8B_RELATIVE_MPC_VALIDATION.md
 ```
 
-未完成可验证综述和独立计划前不得编写 MPC 生产代码。
+可验证综述、独立计划、固定依赖、生产实现、全量测试和分级真实 SITL 已完成。安全高度 15/15、安全下降 6/6、最终代码真实触地 6/6 PASS，验收见 `docs/P8B_RELATIVE_MPC_VALIDATION.md`。
 
 ### 5.2 第一版边界
 
@@ -283,16 +284,16 @@ P7 的 20+20 配置和自动化继续保留，可在 P9 中作为正式实验子
 
 ## 8. 当前状态
 
-截至 2026-07-30：
+截至 2026-08-01：
 
 ```text
 P6B: VALIDATION PASS
 P7-lite: VALIDATION PASS (static/constant02 3+3, 6/6 PASS)
 P7 20+20: deferred to P9
 P8A: VALIDATION PASS (H1 3/3, H2 3/3)
-P8B: research not started
+P8B: RESEARCH PASS / PLAN PASS / IMPLEMENTATION PASS / VALIDATION PASS
 P8C: not started
 P9: not started
 ```
 
-P8A 验收见 `docs/P8A_HEAVE_TOUCHDOWN_VALIDATION.md`。当前默认下一任务是新增并完成 `docs/research/P8B_RELATIVE_MPC_REVIEW.md`；达到 `RESEARCH PASS` 前不得编写 MPC 生产实现。
+P8A 验收见 `docs/P8A_HEAVE_TOUCHDOWN_VALIDATION.md`。P8B 已完成 OSQP `v1.0.0` + OsqpEigen `v0.11.2` 固定依赖、水平相对 MPC、完整 P4.7 fallback、`TERMINAL_PHASE_P47` 安全 handoff、诊断、评测扩展、`271` 项全工作区测试和严格顺序真实 SITL，验收见 `docs/P8B_RELATIVE_MPC_VALIDATION.md`。当前默认下一任务是创建并完成 `docs/research/P8C_TILTED_DECK_LANDING_REVIEW.md`；P8C 未达到 `RESEARCH PASS` 并保存独立计划前，不得直接编写倾斜甲板终端控制生产代码。

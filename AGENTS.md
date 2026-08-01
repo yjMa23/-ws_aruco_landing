@@ -141,7 +141,7 @@ docs/COORDINATE_FRAMES.md
 当前缺少：
 
 * `P8A` 已完成升沉甲板最终下降、真实接触和接触后相对保持验收，H1 3/3、H2 3/3 PASS。
-* `P8B` 已完成可验证综述、论文级模型和独立执行计划；当前因 OSQP/OsqpEigen 未安装而 `DEPENDENCY BLOCKED`，尚未实现。
+* `P8B` 已完成固定 OSQP/OsqpEigen 依赖、4 状态水平相对 MPC、约束、warm start、完整 P4.7 fallback、`TERMINAL_PHASE_P47` 安全 handoff、诊断、`271` 项全工作区测试和严格顺序真实 SITL；安全高度 15/15、下降 6/6、最终代码真实触地 6/6 PASS，状态为 `VALIDATION PASS`。
 * `P8C` 固定倾斜与低频 roll/pitch 甲板的几何建模、计划、实现和验收。
 * `P9` 统一批量评测、消融和论文实验；P7 的 20+20 配置将在该阶段执行。
 * 触地后的 Land/Disarm 授权和最终恢复策略；当前仍保持 `NAV_LAND / Disarm = 0 / 0`。
@@ -171,11 +171,11 @@ Codex 必须按以下顺序推进，除非用户明确改变优先级：
 17. `P6B`：最终下降与终端接触确认已通过 static/constant02 单轮和 P7 3+3 冒烟。
 18. `P7-lite`：批量评测管线和真实 3+3 冒烟已完成并冻结；20+20 延后到 P9。
 19. `P8A`：升沉甲板最终下降与真实接触。
-20. `P8B`：水平相对运动线性 MPC，必须先完成综述、建模、求解器选型和独立执行计划。
+20. `P8B`：水平相对运动线性 MPC，综述、固定依赖、实现、全量测试和严格顺序真实 SITL 已完成，验收见 `docs/P8B_RELATIVE_MPC_VALIDATION.md`。
 21. `P8C`：固定倾斜及低频 roll/pitch 甲板降落，必须先完成综述和几何模型。
 22. `P9`：统一批量评测、消融和论文实验。
 
-P8A 已通过真实验收。P8B 当前仅允许解决求解器依赖并按已保存计划实现；P8B 未通过前不得进入 P8C。强化学习不属于本轮传统高级基线实现范围。
+P8A、P8B 已通过真实验收。当前只允许开始 P8C 倾斜甲板综述和几何建模；必须先完成 `docs/research/P8C_TILTED_DECK_LANDING_REVIEW.md` 并达到 `RESEARCH PASS`，再保存独立执行计划，未完成前不得修改倾斜甲板终端控制生产代码。强化学习不属于本轮传统高级基线实现范围。
 
 ---
 
@@ -416,8 +416,8 @@ colcon test-result --verbose
 ```text
 冻结当前终端落板、触地确认、Marker 和 close-range 相机参数；
 P8A 已完成 H1/H2 升沉触地真实验收；
-P8B 已完成 research → model → solver check → plan，当前因 OSQP/OsqpEigen 未安装而停止在 dependency gate；
-P8B 通过后再按 research → geometry → plan → implementation → validation 推进 P8C；
+P8B 已完成 research → model → fixed solver dependency → implementation → full test → strict SITL validation，验收为安全高度 15/15、下降 6/6、真实触地 6/6 PASS；
+下一步只推进 P8C research：先完成倾斜甲板综述、几何模型和独立计划，不直接编码终端控制；
 P7 20+20 配置继续保留并延后到 P9 统一论文实验；
 全程保持 NAV_LAND / Disarm = 0 / 0，Ground Truth 只能用于离线评测。
 ```

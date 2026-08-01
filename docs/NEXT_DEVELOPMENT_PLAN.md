@@ -88,8 +88,8 @@ src/moving_deck_sim
 
 ### 2.4 当前核心缺口
 
-- P8A 已完成升沉甲板最终下降、真实接触、相对垂直速度语义和接触后相对保持，H1 3/3、H2 3/3 PASS。P8B 已完成综述和执行计划，但因 OSQP/OsqpEigen 未安装而 DEPENDENCY BLOCKED。
-- P8B 水平相对运动线性 MPC 尚未完成可验证综述、论文级模型、求解器选型、独立执行计划、实现和验收。
+- P8A 已完成升沉甲板最终下降、真实接触、相对垂直速度语义和接触后相对保持，H1 3/3、H2 3/3 PASS。
+- P8B 已完成综述、计划、固定 OSQP/OsqpEigen 依赖、4 状态水平相对 MPC、约束、warm start、完整 P4.7 fallback、终端安全 handoff、诊断、`271` 项全工作区测试和严格顺序真实 SITL；安全高度 15/15、下降 6/6、最终代码真实触地 6/6 PASS，状态为 `VALIDATION PASS`。
 - P8C 固定倾斜及低频 roll/pitch 甲板降落尚未完成调研、几何建模、计划、实现和验收。
 - P9 统一批量评测、消融和论文实验尚未开始；P7 20+20 配置保留并延后到该阶段。
 - 没有触地后的 Land/Disarm 授权和最终恢复策略；当前继续保持 `NAV_LAND / Disarm = 0 / 0`。
@@ -1628,9 +1628,9 @@ H1/H2/H3 分别为 `0.10 m / 10 s`、`0.20 m / 8 s`、`0.30 m / 8 s`。第一次
 
 ## P8B：水平相对运动线性 MPC
 
-P8A 真实验收通过后，先新增 `docs/research/P8B_RELATIVE_MPC_REVIEW.md`。必须完成外部调研、项目问题定义、统一符号数学模型、至少三个候选方案比较、求解器与依赖检查、PX4 接口映射、求解失败回退和论文写作映射，达到 `RESEARCH PASS` 后才能新增 `docs/P8B_RELATIVE_MPC_PLAN.md`。
+P8B 综述、统一模型、候选方案、固定求解器、执行计划、生产实现和真实验收均已完成。第一版 MPC 只负责自由飞行与安全下降阶段的水平相对运动，P4.7 保持默认并作为 solver 失败回退；从 `FINAL_DESCENT` 起使用 `TERMINAL_PHASE_P47` 安全 handoff，没有接管最终垂直下降、touchdown detector、landing window 或姿态对齐。
 
-第一版 MPC 只负责水平相对运动，P4.7 保持默认并作为 solver 失败回退；不得接管最终垂直下降、touchdown detector、landing window 或姿态对齐。未完成可验证综述和独立执行计划前不得编写生产实现。
+严格顺序结果为安全高度 15/15、下降 6/6、真实触地 6/6 PASS，所有有效 MPC 轮次均为 0 deadline miss、0 solver failure、0 unexpected fallback；详细记录见 `docs/P8B_RELATIVE_MPC_VALIDATION.md`。
 
 ## P8C：固定倾斜及低频 roll/pitch 甲板降落
 
@@ -1896,24 +1896,23 @@ grep -R "/simulation/deck/ground_truth" \
 
 ---
 
-## 15. 当前下一项代码任务
+## 15. 当前下一项任务
 
-`P0`～`P6B` 已完成，P7-lite 真实 3+3 冒烟已冻结。下一项任务限定为：
+`P0`～`P8B` 已完成真实验收，P7-lite 真实 3+3 冒烟已冻结。P8B 验收见 `docs/P8B_RELATIVE_MPC_VALIDATION.md`。下一项任务限定为：
 
 ```text
-P8A：升沉甲板最终下降与真实接触
+P8C：固定倾斜及低频 roll/pitch 甲板降落调研
 ```
 
 具体顺序：
 
-1. 先保存 `docs/P8A_HEAVE_TOUCHDOWN_PLAN.md`。
-2. 核对 ENU/NED 垂直符号、UAV 世界系垂直速度、甲板垂直速度和相对垂直速度。
-3. 检查当前 touchdown detector 对共同非零世界速度和低相对速度的语义。
-4. 检查 `TOUCHDOWN_HOLD` 是否冻结世界系 z，必要时实现基于已有 deck state estimate 的相对保持。
-5. 先写单元测试，再做最小生产实现。
-6. static/constant02 回归后，按 H1 单轮、H1 三 seed、H2 单轮、H2 三 seed、必要时 H3 的顺序验收。
-7. P8A 未达到真实门槛时标记 `VALIDATION BLOCKED` 并停止，不进入 P8B。
-8. 全程保持 `NAV_LAND / Disarm = 0 / 0`，Ground Truth 仅用于 evaluator。
+1. 创建 `docs/research/P8C_TILTED_DECK_LANDING_REVIEW.md`；
+2. 定义甲板平面、法向、起落架点到平面距离和法向相对速度；
+3. 比较 UAV 保持水平、终端有限法向对齐和全程法向跟随；
+4. 明确固定 2° T1 场景、Ground Truth 评测边界和触地/滑移风险指标；
+5. 达到 `P8C RESEARCH PASS` 后保存独立执行计划；
+6. 未完成综述和计划前不得修改倾斜甲板终端控制生产代码；
+7. 全程保持 `NAV_LAND / Disarm = 0 / 0`，Ground Truth 仅用于 evaluator。
 
 ---
 
