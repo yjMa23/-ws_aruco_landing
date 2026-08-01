@@ -64,6 +64,7 @@ px4_aruco_landing_node:
     touchdown_detector.low_height_enter_m: 0.18
     touchdown_detector.low_height_exit_m: 0.28
     touchdown_detector.max_relative_vertical_speed_mps: 0.12
+    # UAV 世界系垂直速度只保留为诊断 evidence；触地确认使用有效相对垂直速度。
     touchdown_detector.max_uav_vertical_speed_mps: 0.15
     # PX4 在移动甲板上可能报告世界系水平运动；相对甲板速度低于该值仍可形成候选。
     touchdown_detector.max_relative_horizontal_speed_mps: 0.15
@@ -72,6 +73,13 @@ px4_aruco_landing_node:
     touchdown_detector.terminal_contact_min_reference_error_m: 0.10
     touchdown_detector.terminal_contact_max_vertical_speed_mps: 0.05
     touchdown_detector.candidate_required_duration_s: 0.50
+
+    # P8A 触地确认后锁存甲板相对高度；估计失效时保持最后安全世界系目标。
+    touchdown_hold.max_target_rate_mps: 0.60
+    # 静止甲板估计噪声实测峰值约 0.030 m/s；H1 理论峰值约 0.0628 m/s。
+    # 使用迟滞只在可辨识升沉时随动，避免静止甲板噪声导致离板。
+    touchdown_hold.motion_enter_speed_mps: 0.04
+    touchdown_hold.motion_exit_speed_mps: 0.02
 
     # P6B 默认关闭。0.50→0.25 m 快速接近，0.25 m 以下低速接触。
     final_descent.enabled: false

@@ -1,0 +1,16 @@
+moving_deck_controller:
+  ros__parameters:
+    world_name: aruco
+    model_name: moving_deck
+    scenario: S3_HEAVE
+    initial_position_enu: [0.0, 0.0, 2.0]
+    velocity_xy: [0.0, 0.0]
+    amplitude_xy: [0.0, 0.0]
+    period_xy: [10.0, 6.0]
+    amplitude_z_m: 0.20
+    period_z_s: 8.0
+    initial_rpy_deg: [0.0, 0.0, 0.0]
+    amplitude_rpy_deg: [0.0, 0.0, 0.0]
+    period_rpy_s: [8.0, 6.0, 10.0]
+    update_rate_hz: 50.0
+    random_seed: 1

@@ -15,7 +15,7 @@ P7 第一版将已经人工验证的 P6B 最终下降链路转化为可重复、
 - 下降速度；
 - 安全状态机。
 
-P7 完成后再进入 P8 传统方法消融，不在本阶段增加 MPC、强化学习、升沉触地、倾斜触地或组合运动触地。
+P7-lite 真实 3+3 冒烟完成后即可冻结为高级功能开发基线。本阶段不增加 MPC、强化学习、升沉触地、倾斜触地或组合运动触地；这些能力分别在 P8A、P8B、P8C 中独立推进。P7 自动化继续保留，大规模批量与论文消融统一延后到 P9。
 
 ---
 
@@ -55,16 +55,16 @@ constant02: 3 次
 
 只有 3+3 自动连续运行、逐轮清理和结果保存正常后，才进入回归。
 
-### 3.2 回归
+### 3.2 回归配置
 
-随后顺序运行：
+保留以下顺序回归配置：
 
 ```text
 static:     20 次
 constant02: 20 次
 ```
 
-第一版不并行。某一轮失败不得阻塞后续实验，失败轮必须立即写入结构化结果。
+该配置不再是进入 P8A 的硬门槛，统一延后到 P9 论文实验阶段执行。第一版不并行；某一轮失败不得阻塞后续实验，失败轮必须立即写入结构化结果。
 
 ---
 
@@ -417,7 +417,7 @@ P7 代码第一版完成需要：
 5. smoke 配置 `--dry-run` 正常；
 6. 聚合临时样例正常。
 
-P7 阶段正式完成还需要：
+P7-lite 开发基线冻结需要：
 
 1. P6B static/constant02 Bag 证据已冻结；
 2. 真实 3+3 冒烟可自动连续运行；
@@ -425,6 +425,8 @@ P7 阶段正式完成还需要：
 4. 无残留仿真进程；
 5. 冒烟失败不会阻塞后续轮；
 6. 聚合结果正确。
+
+20+20 属于保留的正式回归配置，不再属于 P7-lite 冻结或进入 P8A 的必要条件。
 
 当前环境若不适合真实 SITL，只声明“P7 管线代码第一版完成”，不得声明“P7 已完成”。
 
@@ -511,7 +513,8 @@ constant02: 201, 202, 203 → 3/3 PASS
 
 ```text
 P7 pipeline implementation: complete
-P7 3+3 smoke: complete, 6/6 PASS
-P7 20+20 regression: pending
-Next action: run config/experiments/p7_baseline.yaml
+P7-lite 3+3 smoke: complete, 6/6 PASS
+P7-lite development baseline: frozen
+P7 20+20 regression: deferred to P9
+Next action: start P8A heave touchdown planning
 ```

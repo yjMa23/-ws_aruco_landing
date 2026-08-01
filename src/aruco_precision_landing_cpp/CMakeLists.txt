@@ -34,6 +34,7 @@ add_library(
   src/vertical_state_estimator.cpp
   src/touchdown_detector.cpp
   src/final_descent_controller.cpp
+  src/touchdown_hold_controller.cpp
 )
 target_compile_features(aruco_landing_math PUBLIC cxx_std_17)
 target_include_directories(
@@ -183,12 +184,27 @@ if(BUILD_TESTING)
   )
   target_link_libraries(final_descent_controller_test aruco_landing_math)
 
+  ament_add_gtest(
+    touchdown_hold_controller_test
+    test/touchdown_hold_controller_test.cpp
+  )
+  target_link_libraries(touchdown_hold_controller_test aruco_landing_math)
+
   add_test(
     NAME p7_experiment_tests
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_p7_experiments.py
   )
   set_tests_properties(
     p7_experiment_tests
+    PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../..
+  )
+
+  add_test(
+    NAME p8a_heave_touchdown_tests
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_p8a_heave_touchdown.py
+  )
+  set_tests_properties(
+    p8a_heave_touchdown_tests
     PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../..
   )
 endif()

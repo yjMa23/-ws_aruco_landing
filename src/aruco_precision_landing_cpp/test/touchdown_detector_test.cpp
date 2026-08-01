@@ -40,6 +40,7 @@ TouchdownDetectorInput base_input(double time_s)
   input.visual_height_valid = true;
   input.visual_height_age_s = 0.02;
   input.relative_height_m = 0.10;
+  input.relative_vertical_speed_valid = true;
   input.relative_vertical_velocity_mps = 0.01;
   input.uav_vertical_velocity_mps = 0.01;
   input.relative_horizontal_speed_valid = true;
@@ -167,6 +168,7 @@ TEST(TouchdownDetectorTest, TerminalContactNeedsReferencePenetrationAndVerticalS
 
   input.sample_time_s = 0.1;
   input.relative_height_reference_m = 0.05;
+  input.relative_vertical_velocity_mps = 0.08;
   input.uav_vertical_velocity_mps = 0.08;
   const auto moving = detector.update(input);
   EXPECT_EQ(moving.status, TouchdownStatus::kAirborne);
@@ -284,22 +286,59 @@ TEST(TouchdownDetectorTest, MovingDeckNeedsRelativeHorizontalSpeedEstimate)
   EXPECT_FALSE(output.confirmed_latched);
 }
 
-TEST(TouchdownDetectorTest, LandedAndAtRestDoNotConfirmWhileMovementIsReported)
+TEST(TouchdownDetectorTest, HeavingDeckCanConfirmAtLowRelativeVerticalSpeed)
 {
   TouchdownDetector detector(test_parameters());
 
   TouchdownDetectorOutput output;
-  for (int index = 0; index <= 10; ++index) {
+  for (int index = 0; index <= 3; ++index) {
     auto input = base_input(index * 0.1);
-    input.visual_height_valid = false;
-    input.landed = true;
-    input.at_rest = true;
+    input.ground_contact = true;
     input.vertical_movement = true;
+    input.uav_vertical_velocity_mps = 0.18;
+    input.relative_vertical_velocity_mps = 0.02;
     output = detector.update(input);
   }
 
-  EXPECT_NE(output.status, TouchdownStatus::kCandidate);
-  EXPECT_NE(output.status, TouchdownStatus::kConfirmed);
+  EXPECT_EQ(output.status, TouchdownStatus::kConfirmed);
+  EXPECT_TRUE(output.confirmed_latched);
+  EXPECT_NE(
+    output.evidence_mask &
+    touchdown_evidence_mask(TouchdownEvidence::kLowRelativeVerticalSpeed),
+    0U);
+  EXPECT_EQ(
+    output.evidence_mask & touchdown_evidence_mask(TouchdownEvidence::kLowUavVerticalSpeed),
+    0U);
+}
+
+TEST(TouchdownDetectorTest, LowWorldSpeedCannotBypassHighRelativeVerticalSpeed)
+{
+  TouchdownDetector detector(test_parameters());
+  auto input = base_input(0.0);
+  input.ground_contact = true;
+  input.uav_vertical_velocity_mps = 0.01;
+  input.relative_vertical_velocity_mps = 0.20;
+
+  const auto output = detector.update(input);
+
+  EXPECT_EQ(output.status, TouchdownStatus::kAirborne);
+  EXPECT_FALSE(output.confirmed_latched);
+  EXPECT_DOUBLE_EQ(output.candidate_duration_s, 0.0);
+}
+
+TEST(TouchdownDetectorTest, InvalidRelativeVerticalSpeedCannotUseStrongPx4Evidence)
+{
+  TouchdownDetector detector(test_parameters());
+  auto input = base_input(0.0);
+  input.visual_height_valid = false;
+  input.landed = true;
+  input.at_rest = true;
+  input.relative_vertical_speed_valid = false;
+  input.relative_vertical_velocity_mps = 0.0;
+
+  const auto output = detector.update(input);
+
+  EXPECT_EQ(output.status, TouchdownStatus::kInsufficientEvidence);
   EXPECT_FALSE(output.confirmed_latched);
   EXPECT_DOUBLE_EQ(output.candidate_duration_s, 0.0);
 }

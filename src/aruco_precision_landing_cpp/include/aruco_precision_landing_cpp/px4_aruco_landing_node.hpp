@@ -14,6 +14,7 @@
 #include "aruco_precision_landing_cpp/relative_descent_controller.hpp"
 #include "aruco_precision_landing_cpp/target_state_estimator.hpp"
 #include "aruco_precision_landing_cpp/touchdown_detector.hpp"
+#include "aruco_precision_landing_cpp/touchdown_hold_controller.hpp"
 #include "aruco_precision_landing_cpp/vehicle_pose_history.hpp"
 #include "aruco_precision_landing_cpp/vertical_state_estimator.hpp"
 #include "aruco_precision_landing_cpp/visual_handover_guidance.hpp"
@@ -148,6 +149,12 @@ private:
     const std::optional<TargetStateEstimate> & estimate,
     bool visual_valid,
     double dt);
+  std::optional<VerticalStateEstimate> predicted_vertical_state(
+    const rclcpp::Time & now,
+    bool include_additional_prediction_horizon = true) const;
+  std::optional<TouchdownHoldOutput> update_touchdown_hold(
+    const rclcpp::Time & now,
+    double dt);
   void update_touchdown_detection(const rclcpp::Time & now);
 
   void set_target(double x, double y, double z, double yaw);
@@ -184,6 +191,8 @@ private:
   void publish_vertical_state(const rclcpp::Time & now);
   void publish_raw_relative_height(const rclcpp::Time & now);
   void publish_relative_vertical_velocity(const rclcpp::Time & now);
+  void publish_uav_vertical_velocity();
+  void publish_touchdown_hold_debug();
   void publish_final_descent_debug();
   void publish_touchdown_debug();
   void publish_guidance_source();
@@ -192,6 +201,8 @@ private:
   static const char * relative_descent_phase_name(RelativeDescentPhase phase);
   static const char * final_descent_phase_name(FinalDescentPhase phase);
   static const char * touchdown_status_name(TouchdownStatus status);
+  static const char * touchdown_hold_mode_name(TouchdownHoldMode mode);
+  static const char * touchdown_hold_reason_name(TouchdownHoldReason reason);
   static double quaternion_to_yaw(const float q[4]);
   static bool quaternion_is_valid(const float q[4]);
 
@@ -254,6 +265,9 @@ private:
   double touchdown_terminal_contact_max_vertical_speed_mps_{0.05};
   double touchdown_terminal_contact_px4_status_timeout_s_{2.0};
   double touchdown_candidate_required_duration_s_{0.50};
+  double touchdown_hold_max_target_rate_mps_{0.60};
+  double touchdown_hold_motion_enter_speed_mps_{0.04};
+  double touchdown_hold_motion_exit_speed_mps_{0.02};
   bool final_descent_enabled_{false};
   double final_descent_entry_height_m_{0.50};
   double final_descent_approach_rate_mps_{0.12};
@@ -349,7 +363,7 @@ private:
   bool raw_relative_height_valid_{false};
   bool touchdown_result_valid_{false};
   bool final_descent_debug_valid_{false};
-  bool touchdown_hold_target_valid_{false};
+  bool touchdown_hold_debug_valid_{false};
   bool descent_reentry_locked_{false};
   bool have_px4_to_ros_time_offset_{false};
   bool have_last_time_sync_observation_{false};
@@ -385,7 +399,6 @@ private:
   double last_vertical_state_measurement_receipt_time_s_{0.0};
   double last_vehicle_land_detected_receipt_time_s_{0.0};
   double raw_relative_height_m_{0.0};
-  double touchdown_hold_target_z_{0.0};
   double px4_to_ros_time_offset_s_{0.0};
   double last_time_sync_receipt_s_{0.0};
 
@@ -415,6 +428,7 @@ private:
   RelativeDescentPhase relative_descent_phase_{RelativeDescentPhase::kWaitingWindow};
   FinalDescentOutput final_descent_output_{};
   TouchdownDetectorOutput touchdown_result_{};
+  TouchdownHoldOutput touchdown_hold_output_{};
 
   std::unique_ptr<GnssRendezvousGuidance> gnss_guidance_;
   std::unique_ptr<VisualHandoverGuidance> visual_guidance_;
@@ -428,6 +442,7 @@ private:
   std::unique_ptr<RelativeDescentController> relative_descent_controller_;
   std::unique_ptr<TouchdownDetector> touchdown_detector_;
   std::unique_ptr<FinalDescentController> final_descent_controller_;
+  std::unique_ptr<TouchdownHoldController> touchdown_hold_controller_;
 
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr aruco_pose_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr aruco_visible_sub_;
@@ -471,6 +486,13 @@ private:
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr raw_relative_height_pub_;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr
     relative_vertical_velocity_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr uav_vertical_velocity_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr
+    touchdown_hold_relative_height_reference_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr
+    touchdown_hold_vertical_target_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr touchdown_hold_mode_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr touchdown_hold_reason_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr touchdown_status_pub_;
   rclcpp::Publisher<std_msgs::msg::UInt32>::SharedPtr touchdown_evidence_pub_;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr

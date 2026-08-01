@@ -20,7 +20,7 @@
 → 丢失恢复、安全中止和批量评测
 ```
 
-本文档是传统基线的阶段执行计划。当前已完成 `P2.0`～`P6B` 的代码与真实 PX4 SITL 验收。2026-07-30 终端落板逻辑完成复验：最终参考在安全终端段继续降到 `0.05 m`，static 和 constant02 均形成候选、确认并进入 `TOUCHDOWN_HOLD`。随后 P7 真实 3+3 冒烟以 6/6 PASS、0 failure 完成，平均落地时间约 `24.90 s`、水平 RMSE 约 `0.0251 m`、触地垂直速度约 `0.0060 m/s`。当前下一阶段为 P7 20+20 基线回归。
+本文档是传统基线的阶段执行计划。当前已完成 `P2.0`～`P6B` 的代码与真实 PX4 SITL 验收。2026-07-30 终端落板逻辑完成复验：最终参考在安全终端段继续降到 `0.05 m`，static 和 constant02 均形成候选、确认并进入 `TOUCHDOWN_HOLD`。随后 P7 真实 3+3 冒烟以 6/6 PASS、0 failure 完成，平均落地时间约 `24.90 s`、水平 RMSE 约 `0.0251 m`、触地垂直速度约 `0.0060 m/s`。P7-lite 已冻结为高级功能开发基线，20+20 不再是进入高级功能的硬门槛；当前路线为 `P8A 升沉触地 → P8B 水平相对 MPC → P8C 倾斜甲板 → P9 统一评测`，详见 `docs/P8_ADVANCED_LANDING_ROADMAP.md`。
 
 ---
 
@@ -88,10 +88,11 @@ src/moving_deck_sim
 
 ### 2.4 当前核心缺口
 
-- P7 20+20 基线回归尚未执行，需要验证不同种子下的成功率、落地时间、水平误差、触地速度、Marker 切换和恢复次数。
-- 20+20 完成前冻结当前终端落板、触地判据、Marker 和 close-range 相机参数；只有出现可重复失败时才重新进入根因分析。
+- P8A 已完成升沉甲板最终下降、真实接触、相对垂直速度语义和接触后相对保持，H1 3/3、H2 3/3 PASS。P8B 已完成综述和执行计划，但因 OSQP/OsqpEigen 未安装而 DEPENDENCY BLOCKED。
+- P8B 水平相对运动线性 MPC 尚未完成可验证综述、论文级模型、求解器选型、独立执行计划、实现和验收。
+- P8C 固定倾斜及低频 roll/pitch 甲板降落尚未完成调研、几何建模、计划、实现和验收。
+- P9 统一批量评测、消融和论文实验尚未开始；P7 20+20 配置保留并延后到该阶段。
 - 没有触地后的 Land/Disarm 授权和最终恢复策略；当前继续保持 `NAV_LAND / Disarm = 0 / 0`。
-- P8 消融实验尚未开始。
 
 ### 2.5 2026-07-29 P7 第一版状态
 
@@ -107,7 +108,7 @@ config/experiments/p7_baseline.yaml
 docs/P7_BATCH_EVALUATION_PLAN.md
 ```
 
-第一版只支持 `static` 和 `constant02`，顺序执行，单轮失败后继续。成功判据来自 `/landing/state` 的 `TOUCHDOWN_HOLD` 连续保持至少 10 秒，并由 `evaluate_p6b_touchdown.py` 复核；不使用固定 sleep 判定成功。真实执行还修复了 ROS CLI daemon 失效、PX4 就绪探测、状态监控、episode 计时和失败分类问题。2026-07-30 真实 3+3 冒烟已完成，6/6 PASS、0 failure，结果目录为 `results/p7_smoke_terminal_20260730/`；下一步执行 20+20。
+第一版只支持 `static` 和 `constant02`，顺序执行，单轮失败后继续。成功判据来自 `/landing/state` 的 `TOUCHDOWN_HOLD` 连续保持至少 10 秒，并由 `evaluate_p6b_touchdown.py` 复核；不使用固定 sleep 判定成功。真实执行还修复了 ROS CLI daemon 失效、PX4 就绪探测、状态监控、episode 计时和失败分类问题。2026-07-30 真实 3+3 冒烟已完成，6/6 PASS、0 failure，结果目录为 `results/p7_smoke_terminal_20260730/`；P7-lite 已冻结，20+20 配置延后到 P9。
 
 ---
 
@@ -1607,79 +1608,52 @@ baseline-batch-evaluation-v0.1
 
 ---
 
-# P8：传统方法消融实验
+# P8/P9：高级降落与统一论文实验
 
-## 目标
+## P8A：升沉甲板最终下降与真实接触
 
-形成论文传统基线对比结果。
-
-## 推荐基线
+执行顺序：
 
 ```text
-B0：当前静态位置增量控制
-B1：完整坐标变换 + GNSS 会合
-B2：B1 + 视觉位置滤波和速度估计
-B3：B2 + 速度前馈和短时预测
-B4：B3 + 着陆窗口和分阶段下降
+项目内垂直语义分析
+→ docs/P8A_HEAVE_TOUCHDOWN_PLAN.md
+→ 先写测试
+→ 最小实现
+→ static/constant02 回归
+→ H1/H2/H3 分级真实 SITL
+→ docs/P8A_HEAVE_TOUCHDOWN_VALIDATION.md
 ```
 
-可选：
+H1/H2/H3 分别为 `0.10 m / 10 s`、`0.20 m / 8 s`、`0.30 m / 8 s`。第一次只开放 H1，H2/H3 逐级开放；rollpitch 和 combined 继续阻断最终下降。P8A 必须验证相对垂直速度语义和 `TOUCHDOWN_HOLD` 是否需要随甲板 z 相对保持。
+
+## P8B：水平相对运动线性 MPC
+
+P8A 真实验收通过后，先新增 `docs/research/P8B_RELATIVE_MPC_REVIEW.md`。必须完成外部调研、项目问题定义、统一符号数学模型、至少三个候选方案比较、求解器与依赖检查、PX4 接口映射、求解失败回退和论文写作映射，达到 `RESEARCH PASS` 后才能新增 `docs/P8B_RELATIVE_MPC_PLAN.md`。
+
+第一版 MPC 只负责水平相对运动，P4.7 保持默认并作为 solver 失败回退；不得接管最终垂直下降、touchdown detector、landing window 或姿态对齐。未完成可验证综述和独立执行计划前不得编写生产实现。
+
+## P8C：固定倾斜及低频 roll/pitch 甲板降落
+
+P8B 通过后，先新增 `docs/research/P8C_TILTED_DECK_LANDING_REVIEW.md`，推导甲板平面、法向、点到平面距离、法向相对速度、平面内相对运动、姿态误差和接触后保持目标，再新增独立执行计划。
+
+第一版从 T1 固定 2° 且 UAV 保持水平开始。只有 T1 暴露单侧冲击、滑移、倾覆风险、触地证据不稳定或 hold 失败时，才单独调研和计划甲板法向姿态对齐。T1 未通过，不进入动态 roll/pitch；combined 最后处理。
+
+## P9：统一批量评测、消融和论文实验
+
+P9 复用并扩展 P7 自动化。P7 的 static/constant02 20+20 配置保留并在此阶段执行，不再作为 P8A 的前置门槛。每个新方法-场景组合先做 3 次 smoke，再根据论文问题设计正式次数，不机械规定所有组合 50 次。
+
+推荐方法：
 
 ```text
-B5：线性 MPC 跟踪与约束下降
+B0：完整 P4.7 规则式基线
+B1：关闭额外预测
+B2：关闭速度前馈
+B3：完整水平相对 MPC
+B4：MPC + 升沉处理
+B5：若已实现，MPC + 法向姿态对齐
 ```
 
-未完成 B0 到 B4 的稳定实验前，不开始 MPC 或强化学习对比。
-
-## 实验场景
-
-```text
-S0_STATIC
-S1_CONSTANT_XY_SLOW
-S1_CONSTANT_XY_MEDIUM
-S2_SINUSOIDAL_XY
-S3_HEAVE
-S4_ROLL_PITCH
-S5_COMBINED
-S6_SENSOR_DEGRADED
-```
-
-`S6_SENSOR_DEGRADED` 包括：
-
-- GNSS 噪声增加。
-- GNSS 延迟。
-- GNSS 丢包。
-- 视觉短时遮挡。
-- 视觉测量噪声。
-
-## 每个配置运行次数
-
-开发验收：
-
-```text
-3 次冒烟
-20 次固定场景回归
-```
-
-论文实验：
-
-```text
-每配置至少 50 次
-```
-
-## 指标
-
-- 成功率。
-- 触地点水平误差。
-- 触地垂直速度。
-- 跟踪 RMSE。
-- 最大水平误差。
-- 平均降落时间。
-- ArUco 捕获时间。
-- GNSS 到视觉接管时间。
-- 恢复次数。
-- 失败类型占比。
-- 均值、标准差、中位数、P90/P95。
+统一输出 `overall`、`by_scenario`、`by_method` 和 failure breakdown，并保留失败轮完整诊断与成功轮轻量 Bag。
 
 ---
 
@@ -1904,30 +1878,42 @@ grep -R "/simulation/deck/ground_truth" \
 第十四步：P6
 实现触地、恢复和中止
 
-第十五步：P7/P8
-批量评测和消融实验
+第十五步：P7-lite
+冻结 static/constant02 3+3 自动冒烟开发基线
+
+第十六步：P8A
+升沉甲板最终下降与真实接触
+
+第十七步：P8B
+先完成 MPC 综述、建模和计划，再实现与验收
+
+第十八步：P8C
+先完成倾斜几何综述和计划，再实现与验收
+
+第十九步：P9
+统一批量评测、消融和论文实验
 ```
 
 ---
 
 ## 15. 当前下一项代码任务
 
-`P2.0`、`P2A`、`P2B`、`P2C`、`P2D` 和 `P3` 已完成。下一项任务限定为：
+`P0`～`P6B` 已完成，P7-lite 真实 3+3 冒烟已冻结。下一项任务限定为：
 
 ```text
-P4：安全高度移动甲板水平跟踪与速度前馈
+P8A：升沉甲板最终下降与真实接触
 ```
 
-具体只做：
+具体顺序：
 
-1. 将 `/landing/predicted_deck_pose` 的水平位置作为可配置跟踪目标。
-2. 使用 `/landing/estimated_deck_odometry` 的水平速度生成 PX4 速度前馈。
-3. 保留 P2D 原始视觉位置控制作为对照模式。
-4. 限制目标位置、速度和模式切换跳变。
-5. 在静止、`0.4 m/s` 匀速和 XY 正弦甲板上统计水平误差。
-6. 短时视觉丢失时使用受限预测，长时丢失仍回到 GNSS。
-7. 全程保持 `rendezvous_altitude_m`，不实现下降。
-8. 暂不实现着陆窗口、触地或强化学习。
+1. 先保存 `docs/P8A_HEAVE_TOUCHDOWN_PLAN.md`。
+2. 核对 ENU/NED 垂直符号、UAV 世界系垂直速度、甲板垂直速度和相对垂直速度。
+3. 检查当前 touchdown detector 对共同非零世界速度和低相对速度的语义。
+4. 检查 `TOUCHDOWN_HOLD` 是否冻结世界系 z，必要时实现基于已有 deck state estimate 的相对保持。
+5. 先写单元测试，再做最小生产实现。
+6. static/constant02 回归后，按 H1 单轮、H1 三 seed、H2 单轮、H2 三 seed、必要时 H3 的顺序验收。
+7. P8A 未达到真实门槛时标记 `VALIDATION BLOCKED` 并停止，不进入 P8B。
+8. 全程保持 `NAV_LAND / Disarm = 0 / 0`，Ground Truth 仅用于 evaluator。
 
 ---
 

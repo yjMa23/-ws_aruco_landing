@@ -113,10 +113,11 @@ docs/COORDINATE_FRAMES.md
   * 四尺度有状态 Marker 选择器和项目内 `near=0.02 m` 相机模型已接入。
   * 2026-07-30 已完成终端落板修补与复验：参考在安全终端段继续降到 `0.05 m`，static/constant02 均进入 `TOUCHDOWN_CANDIDATE_HOLD → TOUCHDOWN_HOLD` 并保持 10 秒，P6B 正向验收 PASS，见 `docs/P6B_FINAL_DESCENT_AND_TOUCHDOWN_VALIDATION.md`。
 
-* `P7` 批量评测管线第一版。
+* `P7-lite` 批量评测开发基线。
   * 已实现单轮运行、顺序批量、seed 展开、resume、统一失败分类、轻量 Bag、参数快照和基础聚合。
-  * 第一版只支持 static 和 constant02；2026-07-30 已完成真实 3+3 冒烟，6/6 PASS、0 failure，录包、清理、评测和聚合结果完整。下一步执行 20+20 基线回归。
-  * 执行计划见 `docs/P7_BATCH_EVALUATION_PLAN.md`。
+  * 第一版支持 static 和 constant02；2026-07-30 已完成真实 3+3 冒烟，6/6 PASS、0 failure，录包、清理、评测和聚合结果完整。
+  * P7-lite 已冻结为高级功能开发基线；static 20 次 + constant02 20 次不再是进入 P8A 的硬门槛，配置和自动化保留，大规模实验延后到 P9。
+  * 执行计划见 `docs/P7_BATCH_EVALUATION_PLAN.md`，高级路线见 `docs/P8_ADVANCED_LANDING_ROADMAP.md`。
 
 现有运行包：
 
@@ -139,10 +140,11 @@ docs/COORDINATE_FRAMES.md
 
 当前缺少：
 
-* P7 static 20 次 + constant02 20 次基线回归及统一聚合。
-* 根据 20+20 结果决定是否进入 P8；没有可重复失败时不得继续调整末端下降或触地阈值。
+* `P8A` 已完成升沉甲板最终下降、真实接触和接触后相对保持验收，H1 3/3、H2 3/3 PASS。
+* `P8B` 已完成可验证综述、论文级模型和独立执行计划；当前因 OSQP/OsqpEigen 未安装而 `DEPENDENCY BLOCKED`，尚未实现。
+* `P8C` 固定倾斜与低频 roll/pitch 甲板的几何建模、计划、实现和验收。
+* `P9` 统一批量评测、消融和论文实验；P7 的 20+20 配置将在该阶段执行。
 * 触地后的 Land/Disarm 授权和最终恢复策略；当前仍保持 `NAV_LAND / Disarm = 0 / 0`。
-* P8 传统方法消融。
 
 ---
 
@@ -167,10 +169,13 @@ Codex 必须按以下顺序推进，除非用户明确改变优先级：
 15. `P5C`：低高度垂直状态估计、偏差标定和相对高度跟踪优化，已完成。
 16. `P6A`：多源触地候选、确认和负向验收，已完成。
 17. `P6B`：最终下降与终端接触确认已通过 static/constant02 单轮和 P7 3+3 冒烟。
-18. `P7`：批量评测管线和真实 3+3 冒烟已完成，当前执行 20+20 基线回归。
-19. `P8`：传统方法消融实验。
+18. `P7-lite`：批量评测管线和真实 3+3 冒烟已完成并冻结；20+20 延后到 P9。
+19. `P8A`：升沉甲板最终下降与真实接触。
+20. `P8B`：水平相对运动线性 MPC，必须先完成综述、建模、求解器选型和独立执行计划。
+21. `P8C`：固定倾斜及低频 roll/pitch 甲板降落，必须先完成综述和几何模型。
+22. `P9`：统一批量评测、消融和论文实验。
 
-未完成 `P0~P7` 前，不实现强化学习或 MPC。
+P8A 已通过真实验收。P8B 当前仅允许解决求解器依赖并按已保存计划实现；P8B 未通过前不得进入 P8C。强化学习不属于本轮传统高级基线实现范围。
 
 ---
 
@@ -298,6 +303,7 @@ ABORT
 
 ## 代码修改规则
 
+* 对于需要在论文中详细建模的复杂方法，未完成可验证的综述文档和独立执行计划前，不得编写生产实现。
 * 每次只完成一个明确任务。
 * 只修改与当前任务直接相关的文件。
 * 不顺手重构相邻模块。
@@ -405,12 +411,13 @@ colcon test-result --verbose
 
 ## 默认下一任务
 
-`P0`～`P6B` 已完成，P7 真实 3+3 冒烟已于 2026-07-30 以 6/6 PASS 完成。没有额外指令时：
+`P0`～`P6B` 已完成，P7-lite 真实 3+3 冒烟已于 2026-07-30 以 6/6 PASS 完成并冻结为开发基线。没有额外指令时：
 
 ```text
 冻结当前终端落板、触地确认、Marker 和 close-range 相机参数；
-执行 P7 static 20 次 + constant02 20 次顺序基线回归并聚合结果；
-只有出现可重复失败时才进入根因分析，不因单次随机波动立即调参；
-20+20 通过后再进入 P8，不得提前加入 MPC、强化学习、升沉、倾斜或组合触地；
+P8A 已完成 H1/H2 升沉触地真实验收；
+P8B 已完成 research → model → solver check → plan，当前因 OSQP/OsqpEigen 未安装而停止在 dependency gate；
+P8B 通过后再按 research → geometry → plan → implementation → validation 推进 P8C；
+P7 20+20 配置继续保留并延后到 P9 统一论文实验；
 全程保持 NAV_LAND / Disarm = 0 / 0，Ground Truth 只能用于离线评测。
 ```

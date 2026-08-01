@@ -61,6 +61,30 @@ class P7ExperimentTests(unittest.TestCase):
             self.assertEqual(config.scenarios[1].seeds, (20, 30))
             self.assertEqual(config.output_root, root / "results")
 
+    def test_p8a_heave_profile_is_supported_by_batch_automation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "p8a.yaml"
+            config_path.write_text(
+                textwrap.dedent(
+                    """
+                    name: p8a-h1
+                    output_root: results
+                    episode_timeout_s: 180
+                    startup_timeout_s: 60
+                    touchdown_hold_s: 10
+                    scenarios:
+                      - scenario: heave_h1
+                        repetitions: 3
+                        seeds: [101]
+                    """
+                ),
+                encoding="utf-8",
+            )
+            config = load_batch_config(config_path, workspace_dir=root)
+            self.assertEqual(config.scenarios[0].scenario, "heave_h1")
+            self.assertEqual(config.scenarios[0].seeds, (101, 102, 103))
+
     def test_seed_expansion_rejects_mismatch(self) -> None:
         with self.assertRaises(ValueError):
             expand_seeds(3, [1, 2])
@@ -254,6 +278,42 @@ class P7ExperimentTests(unittest.TestCase):
             summary = aggregate_results.aggregate(batch_dir)
             self.assertEqual(summary["success_count"], 2)
             self.assertEqual(summary["metrics"]["landing_time_s"]["mean"], 5.0)
+
+    def test_evaluator_selection_uses_p8a_for_heave_profiles(self) -> None:
+        self.assertEqual(
+            run_single_experiment.evaluator_path_for_scenario(
+                WORKSPACE_DIR, "static"
+            ).name,
+            "evaluate_p6b_touchdown.py",
+        )
+        self.assertEqual(
+            run_single_experiment.evaluator_path_for_scenario(
+                WORKSPACE_DIR, "heave_h1"
+            ).name,
+            "evaluate_p8a_heave_touchdown.py",
+        )
+
+    def test_heave_dry_run_uses_graded_scenario(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            args = SimpleNamespace(
+                scenario="heave_h1",
+                seed=101,
+                episode_timeout=180.0,
+                startup_timeout=60.0,
+                touchdown_hold=10.0,
+                output_directory=Path(directory),
+                batch_id="p8a-dry",
+                episode_id="p8a-dry-heave-h1",
+                camera_model="close-range",
+                record_camera_debug=False,
+                dry_run=True,
+                workspace_dir=WORKSPACE_DIR,
+            )
+            with mock.patch.object(run_single_experiment.subprocess, "Popen") as popen:
+                result = run_single_experiment.run_episode(args)
+            popen.assert_not_called()
+            self.assertIn("heave_h1", result["command"])
+            self.assertIn("--enable-final-descent", result["command"])
 
     def test_dry_run_does_not_start_processes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

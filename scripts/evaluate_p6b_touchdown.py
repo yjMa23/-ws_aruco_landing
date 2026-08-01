@@ -38,6 +38,7 @@ GROUND_TRUTH_TOPIC = "/simulation/deck/ground_truth"
 MARKER_ID_TOPIC = "/landing/active_marker_id"
 ARUCO_VISIBLE_TOPIC = "/aruco/visible"
 RELATIVE_VERTICAL_VELOCITY_TOPIC = "/landing/relative_vertical_velocity"
+TOUCHDOWN_HOLD_MODE_TOPIC = "/landing/touchdown_hold_mode"
 
 REQUIRED_TOPICS = {
     STATE_TOPIC,
@@ -59,6 +60,7 @@ OPTIONAL_TOPICS = {
     MARKER_ID_TOPIC,
     ARUCO_VISIBLE_TOPIC,
     RELATIVE_VERTICAL_VELOCITY_TOPIC,
+    TOUCHDOWN_HOLD_MODE_TOPIC,
 }
 
 FINAL_STATES = {
@@ -201,6 +203,7 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
     marker_ids: list[tuple[float, int]] = []
     aruco_visible: list[tuple[float, bool]] = []
     relative_vertical_velocity: list[TimedVector] = []
+    touchdown_hold_modes: list[tuple[float, str]] = []
 
     while reader.has_next():
         topic, serialized_data, timestamp_ns = reader.read_next()
@@ -274,6 +277,8 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
             value = float(message.data)
             if math.isfinite(value):
                 relative_vertical_velocity.append(TimedVector(time_s, (value,)))
+        elif topic == TOUCHDOWN_HOLD_MODE_TOPIC:
+            touchdown_hold_modes.append((time_s, str(message.data)))
 
     final_start_s = first_time(states, "FINAL_DESCENT")
     candidate_start_s = first_time(touchdown_status, "CANDIDATE")
@@ -384,12 +389,16 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
 
     target_span_after_hold = math.nan
     max_abs_z_velocity_after_hold = 0.0
+    hold_relative_height_span_m = math.nan
+    hold_contact_clearance_min_m = math.nan
+    hold_contact_clearance_max_m = math.nan
     hold_duration_s = 0.0
     if hold_start_s is not None:
         hold_targets_all = values_after(target_z, hold_start_s)
         hold_measurement_start_s = hold_start_s + args.hold_settling_time_s
         hold_targets = values_after(target_z, hold_measurement_start_s)
         hold_velocities = values_after(trajectory_z_velocity, hold_measurement_start_s)
+        hold_actual_heights = values_after(actual_heights, hold_measurement_start_s)
         if hold_targets_all:
             hold_duration_s = hold_targets_all[-1].time_s - hold_start_s
         if hold_targets:
@@ -397,6 +406,41 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
             target_span_after_hold = max(target_values) - min(target_values)
         if hold_velocities:
             max_abs_z_velocity_after_hold = max(abs(sample.values[0]) for sample in hold_velocities)
+        if hold_actual_heights:
+            hold_height_values = [sample.values[0] for sample in hold_actual_heights]
+            hold_relative_height_span_m = max(hold_height_values) - min(hold_height_values)
+            hold_clearances = [
+                value - args.vehicle_reference_to_contact_m for value in hold_height_values
+            ]
+            hold_contact_clearance_min_m = min(hold_clearances)
+            hold_contact_clearance_max_m = max(hold_clearances)
+
+    relative_deck_hold_observed = any(
+        value == "RELATIVE_DECK_HOLD"
+        for time_s, value in touchdown_hold_modes
+        if hold_start_s is not None and time_s >= hold_start_s
+    )
+    frozen_world_hold_passed = (
+        math.isfinite(target_span_after_hold)
+        and target_span_after_hold <= args.maximum_hold_target_span_m
+        and math.isfinite(max_abs_z_velocity_after_hold)
+        and max_abs_z_velocity_after_hold <= args.maximum_hold_z_velocity_mps
+    )
+    relative_deck_hold_passed = (
+        math.isfinite(target_span_after_hold)
+        and target_span_after_hold <= args.maximum_hold_target_span_m
+        and math.isfinite(hold_relative_height_span_m)
+        and hold_relative_height_span_m <= args.maximum_hold_relative_height_span_m
+        and math.isfinite(hold_contact_clearance_min_m)
+        and hold_contact_clearance_min_m >= -args.maximum_contact_penetration_m
+        and math.isfinite(hold_contact_clearance_max_m)
+        and hold_contact_clearance_max_m <= args.maximum_contact_clearance_m
+    )
+    hold_vertical_semantics_passed = (
+        relative_deck_hold_passed
+        if relative_deck_hold_observed
+        else frozen_world_hold_passed
+    )
 
     first_land_flag_times = {
         field: next(
@@ -505,6 +549,23 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         "hold_duration_s": hold_duration_s,
         "target_z_span_after_hold_m": target_span_after_hold,
         "max_abs_z_velocity_after_hold_mps": max_abs_z_velocity_after_hold,
+        "relative_deck_hold_observed": relative_deck_hold_observed,
+        "hold_relative_height_span_m": (
+            hold_relative_height_span_m
+            if math.isfinite(hold_relative_height_span_m)
+            else None
+        ),
+        "hold_contact_clearance_min_m": (
+            hold_contact_clearance_min_m
+            if math.isfinite(hold_contact_clearance_min_m)
+            else None
+        ),
+        "hold_contact_clearance_max_m": (
+            hold_contact_clearance_max_m
+            if math.isfinite(hold_contact_clearance_max_m)
+            else None
+        ),
+        "hold_vertical_semantics_passed": hold_vertical_semantics_passed,
         "first_px4_land_flag_times_s": first_land_flag_times,
         "nav_land_commands": nav_land_commands,
         "disarm_commands": disarm_commands,
@@ -523,10 +584,7 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
             and moving_deck_passed
             and physical_contact_passed
             and hold_duration_s >= args.minimum_hold_duration_s
-            and math.isfinite(target_span_after_hold)
-            and target_span_after_hold <= args.maximum_hold_target_span_m
-            and math.isfinite(max_abs_z_velocity_after_hold)
-            and max_abs_z_velocity_after_hold <= args.maximum_hold_z_velocity_mps
+            and hold_vertical_semantics_passed
             and nav_land_commands == 0
             and disarm_commands == 0
         ),
@@ -584,6 +642,14 @@ def print_human_readable(result: dict[str, Any]) -> None:
         f"{result['target_z_span_after_hold_m']} m / "
         f"{result['max_abs_z_velocity_after_hold_mps']} m/s"
     )
+    print(
+        "Hold semantics / relative-height span / contact clearance min/max: "
+        f"{'RELATIVE_DECK_HOLD' if result['relative_deck_hold_observed'] else 'FROZEN_WORLD_Z'} / "
+        f"{result['hold_relative_height_span_m']} m / "
+        f"{result['hold_contact_clearance_min_m']} / "
+        f"{result['hold_contact_clearance_max_m']} m; "
+        f"semantics={'PASS' if result['hold_vertical_semantics_passed'] else 'FAIL'}"
+    )
     print(f"First PX4 land flags: {result['first_px4_land_flag_times_s']}")
     print(
         "Marker sequence / switches: "
@@ -614,6 +680,9 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--minimum-hold-duration-s", type=float, default=10.0)
     parser.add_argument("--maximum-hold-target-span-m", type=float, default=0.05)
     parser.add_argument("--maximum-hold-z-velocity-mps", type=float, default=1.0e-3)
+    parser.add_argument(
+        "--maximum-hold-relative-height-span-m", type=float, default=0.08
+    )
     parser.add_argument("--hold-settling-time-s", type=float, default=0.20)
     parser.add_argument("--vehicle-reference-to-contact-m", type=float, default=0.227)
     parser.add_argument("--maximum-contact-clearance-m", type=float, default=0.03)

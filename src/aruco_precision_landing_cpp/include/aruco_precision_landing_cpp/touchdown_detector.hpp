@@ -84,6 +84,9 @@ struct TouchdownDetectorInput
   bool visual_height_valid{false};
   double visual_height_age_s{0.0};
   double relative_height_m{0.0};
+  /** 相对垂直速度是否由有效且新鲜的甲板垂直状态估计得到。 */
+  bool relative_vertical_speed_valid{false};
+  /** `deck_vz_ned - uav_vz_ned`，单位 m/s，Down 为正。 */
   double relative_vertical_velocity_mps{0.0};
   double uav_vertical_velocity_mps{0.0};
   bool relative_horizontal_speed_valid{false};
@@ -108,8 +111,9 @@ struct TouchdownDetectorOutput
  * @brief 使用 PX4 接触状态、相对低运动状态和视觉低高度联合确认触地。
  *
  * 视觉高度只能作为普通触地路径的辅助证据，不能单独确认触地。PX4 报告世界系
- * 水平运动时，只有无人机相对估计甲板的水平速度足够小才允许形成候选，从而支持
- * 水平移动平台而不放宽垂直或旋转运动约束。终端落板段只有在最低落板命令已经
+ * 水平运动时，只有无人机相对估计甲板的水平速度足够小才允许形成候选；PX4 报告
+ * 世界系垂直运动时，必须有有效且足够小的甲板相对垂直速度，从而支持升沉平台而
+ * 不绕过相对运动约束。终端落板段只有在最低落板命令已经
  * 到达后，才允许使用“低高度、参考已压入甲板、实际垂直运动持续停滞、PX4
  * close-to-ground”为组合接触证据，
  * 用于 Offboard 位置环已经压住起落架但 PX4 land detector 尚未置位的情况。强触地

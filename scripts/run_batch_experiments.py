@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""顺序运行 P7 static/constant02 批量实验。"""
+"""顺序运行 P7/P8A 触地批量实验。"""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from typing import Any
 
 from p7_experiment_utils import (
     FAILURE_TYPES,
+    SUPPORTED_SCENARIOS,
     atomic_write_json,
     episode_result_complete,
     load_batch_config,
@@ -39,8 +40,8 @@ EPISODE_CSV_FIELDS = (
 
 
 def parse_arguments() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run a sequential P7 experiment batch.")
-    parser.add_argument("config", type=Path, help="P7 YAML configuration")
+    parser = argparse.ArgumentParser(description="Run a sequential touchdown experiment batch.")
+    parser.add_argument("config", type=Path, help="Experiment YAML configuration")
     parser.add_argument("--batch-id", help="Explicit batch ID; required to resume a known batch")
     parser.add_argument("--resume", action="store_true", help="Skip completed episodes")
     parser.add_argument("--dry-run", action="store_true", help="Print the expanded plan only")
@@ -198,7 +199,7 @@ def run_batch(args: argparse.Namespace) -> dict[str, Any]:
         "completed_episodes": 0,
         "successful_episodes": 0,
         "failed_episodes": 0,
-        "supported_scenarios": ["static", "constant02"],
+        "supported_scenarios": list(SUPPORTED_SCENARIOS),
         "episodes": plan,
         "completed": False,
     }

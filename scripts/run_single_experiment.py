@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""运行一轮 P7 SITL 实验并保存结构化结果。"""
+"""运行一轮 P7/P8A SITL 实验并保存结构化结果。"""
 
 from __future__ import annotations
 
@@ -61,7 +61,7 @@ KNOWN_STATES = {
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run one P7 static/constant02 SITL episode."
+        description="Run one P7/P8A touchdown SITL episode."
     )
     parser.add_argument("--scenario", choices=SUPPORTED_SCENARIOS, required=True)
     parser.add_argument("--seed", type=int, required=True)
@@ -261,6 +261,9 @@ def snapshot_configs(
     scenario_filename = {
         "static": "static.yaml",
         "constant02": "constant_velocity_0p2.yaml",
+        "heave_h1": "heave_h1.yaml",
+        "heave_h2": "heave_h2.yaml",
+        "heave_h3": "heave_h3.yaml",
     }[scenario]
     scenario_source = (
         workspace_dir / "src" / "moving_deck_sim" / "config" / scenario_filename
@@ -273,13 +276,24 @@ def snapshot_configs(
     scenario_data["moving_deck_controller"]["ros__parameters"]["random_seed"] = seed
     gnss_data["deck_gnss_simulator"]["ros__parameters"]["random_seed"] = seed
     snapshot = {
-        "p7_episode": {"scenario": scenario, "seed": seed},
+        "touchdown_episode": {"scenario": scenario, "seed": seed},
         **scenario_data,
         **gnss_data,
     }
     (episode_dir / "scenario_config.yaml").write_text(
         yaml.safe_dump(snapshot, sort_keys=False, allow_unicode=True), encoding="utf-8"
     )
+
+
+def evaluator_path_for_scenario(workspace_dir: Path, scenario: str) -> Path:
+    """根据场景选择复用的 P6B 或 P8A 离线评测器。"""
+
+    filename = (
+        "evaluate_p8a_heave_touchdown.py"
+        if scenario.startswith("heave_h")
+        else "evaluate_p6b_touchdown.py"
+    )
+    return workspace_dir / "scripts" / filename
 
 
 def run_evaluator(
@@ -289,14 +303,14 @@ def run_evaluator(
     episode_dir: Path,
     run_log: TextIO,
 ) -> tuple[dict[str, Any] | None, str | None]:
-    evaluator = workspace_dir / "scripts" / "evaluate_p6b_touchdown.py"
+    evaluator = evaluator_path_for_scenario(workspace_dir, scenario)
     base_command = [sys.executable, str(evaluator), str(bag_path)]
     if scenario == "constant02":
         base_command.append("--require-moving-deck")
     human = subprocess.run(base_command, text=True, capture_output=True, check=False)
     human_output = human.stdout + human.stderr
     (episode_dir / "evaluation.txt").write_text(human_output, encoding="utf-8")
-    run_log.write("\n===== P6B evaluation =====\n")
+    run_log.write(f"\n===== {evaluator.stem} =====\n")
     run_log.write(human_output)
     run_log.flush()
 

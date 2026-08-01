@@ -7,9 +7,10 @@ usage() {
 Usage: ./scripts/start_sitl.sh [options]
 
 Options:
-  --scenario static|constant02|constant|sinusoidal|heave|rollpitch|combined
+  --scenario static|constant02|constant|sinusoidal|heave|heave_h1|heave_h2|heave_h3|rollpitch|combined
                                          Deck scenario (default: static)
                                          constant02 = 0.2 m/s, constant = 0.4 m/s
+                                         heave_h1/h2/h3 = P8A graded profiles
   --headless                             Run Gazebo without GUI
   --record                               Record evaluation and ArUco diagnostics topics
   --record-camera-debug                  Record a bag and additionally include raw camera topics
@@ -313,9 +314,12 @@ case "$scenario" in
   constant) scenario_config="constant_velocity.yaml" ;;
   sinusoidal) scenario_config="sinusoidal_xy.yaml" ;;
   heave) scenario_config="heave.yaml" ;;
+  heave_h1) scenario_config="heave_h1.yaml" ;;
+  heave_h2) scenario_config="heave_h2.yaml" ;;
+  heave_h3) scenario_config="heave_h3.yaml" ;;
   rollpitch) scenario_config="roll_pitch.yaml" ;;
   combined) scenario_config="combined.yaml" ;;
-  *) die "invalid scenario '$scenario' (expected static, constant02, constant, sinusoidal, heave, rollpitch, or combined)" ;;
+  *) die "invalid scenario '$scenario' (expected static, constant02, constant, sinusoidal, heave, heave_h1, heave_h2, heave_h3, rollpitch, or combined)" ;;
 esac
 
 case "$camera_model_profile" in
@@ -417,8 +421,8 @@ if [[ "$final_descent_enabled" == "true" ]]; then
   [[ "$relative_descent_enabled" == "true" ]] ||
     die "--enable-final-descent requires --enable-relative-descent"
   case "$scenario" in
-    static | constant02 | constant | sinusoidal) ;;
-    *) die "--enable-final-descent currently supports static and horizontal-motion scenarios only" ;;
+    static | constant02 | constant | sinusoidal | heave_h1 | heave_h2 | heave_h3) ;;
+    *) die "--enable-final-descent currently supports static, horizontal-motion, and P8A heave profiles only" ;;
   esac
   awk -v value="$descent_minimum_test_height_m" \
     'BEGIN {exit !(value == 0.50)}' ||
@@ -685,6 +689,11 @@ if [[ "$record" == "true" ]]; then
     /landing/vertical_state
     /landing/raw_relative_height
     /landing/relative_vertical_velocity
+    /landing/uav_vertical_velocity
+    /landing/touchdown_hold_relative_height_reference
+    /landing/touchdown_hold_vertical_target
+    /landing/touchdown_hold_mode
+    /landing/touchdown_hold_reason
     /landing/touchdown_status
     /landing/touchdown_evidence
     /landing/touchdown_candidate_duration

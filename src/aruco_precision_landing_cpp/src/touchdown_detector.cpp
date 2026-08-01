@@ -137,6 +137,7 @@ TouchdownDetectorOutput TouchdownDetector::update(const TouchdownDetectorInput &
     TouchdownEvidence::kVisualLowHeight);
 
   const bool relative_speed_valid =
+    input.relative_vertical_speed_valid &&
     std::isfinite(input.relative_vertical_velocity_mps);
   const bool uav_speed_valid = std::isfinite(input.uav_vertical_velocity_mps);
   const bool relative_horizontal_speed_valid =
@@ -169,15 +170,17 @@ TouchdownDetectorOutput TouchdownDetector::update(const TouchdownDetectorInput &
     input.relative_height_m - input.relative_height_reference_m >=
     parameters_.terminal_contact_min_reference_error_m;
   const bool terminal_vertical_stall =
-    relative_speed_valid && uav_speed_valid &&
+    relative_speed_valid &&
     std::abs(input.relative_vertical_velocity_mps) <=
-    parameters_.terminal_contact_max_vertical_speed_mps &&
-    std::abs(input.uav_vertical_velocity_mps) <=
     parameters_.terminal_contact_max_vertical_speed_mps;
   const bool horizontal_motion_compatible =
     !input.horizontal_movement || low_relative_horizontal_speed;
+  // PX4 的 vertical_movement 描述世界系运动。升沉甲板接触后 UAV 可能随甲板共同
+  // 运动，因此只有相对垂直速度超限时才把该状态视为不兼容。
+  const bool vertical_motion_compatible =
+    !input.vertical_movement || low_relative_speed;
   const bool movement_compatible =
-    !input.vertical_movement &&
+    vertical_motion_compatible &&
     !input.rotational_movement &&
     horizontal_motion_compatible;
 
@@ -207,21 +210,22 @@ TouchdownDetectorOutput TouchdownDetector::update(const TouchdownDetectorInput &
     TouchdownEvidence::kTerminalContactStall);
 
   const bool strong_touchdown_evidence =
-    px4_status_fresh && input.landed && input.at_rest && movement_compatible;
+    px4_status_fresh && input.landed && input.at_rest &&
+    low_relative_speed && movement_compatible;
   const bool contact_evidence =
     px4_status_fresh &&
     (input.ground_contact || input.maybe_landed || input.landed);
   const bool normal_touchdown_evidence =
     (contact_evidence || terminal_contact_stall) && visual_fresh &&
     (visual_low_height_latched_ || terminal_contact_stall) &&
-    low_relative_speed && low_uav_speed && movement_compatible;
+    low_relative_speed && movement_compatible;
 
   if (!strong_touchdown_evidence && !normal_touchdown_evidence) {
     clear_candidate();
     if (!visual_fresh && !strong_touchdown_evidence) {
       return make_output(TouchdownStatus::kInsufficientEvidence, evidence_mask);
     }
-    if (!relative_speed_valid || !uav_speed_valid ||
+    if (!relative_speed_valid ||
       (input.horizontal_movement && !relative_horizontal_speed_valid))
     {
       return make_output(TouchdownStatus::kInsufficientEvidence, evidence_mask);

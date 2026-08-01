@@ -16,7 +16,13 @@ from typing import Any, Iterable, Mapping, Sequence
 
 import yaml
 
-SUPPORTED_SCENARIOS = ("static", "constant02")
+SUPPORTED_SCENARIOS = (
+    "static",
+    "constant02",
+    "heave_h1",
+    "heave_h2",
+    "heave_h3",
+)
 FAILURE_TYPES = (
     "NONE",
     "STARTUP_FAILURE",
@@ -43,6 +49,12 @@ METRIC_FIELDS = (
     "recovery_count",
     "marker_switch_count",
     "hold_duration_s",
+    "deck_vertical_span_final_m",
+    "hold_relative_height_span_m",
+    "hold_relative_vertical_velocity_p95_mps",
+    "detach_count",
+    "secondary_contact_count",
+    "candidate_repeat_count",
 )
 
 
@@ -163,7 +175,7 @@ def load_batch_config(path: Path, workspace_dir: Path | None = None) -> BatchCon
         scenario = str(entry.get("scenario", ""))
         if scenario not in SUPPORTED_SCENARIOS:
             raise ValueError(
-                f"unsupported scenario '{scenario}'; P7 v1 supports {SUPPORTED_SCENARIOS}"
+                f"unsupported scenario '{scenario}'; automation supports {SUPPORTED_SCENARIOS}"
             )
         if scenario in seen_scenarios:
             raise ValueError(f"duplicate scenario '{scenario}'")

@@ -18,7 +18,7 @@
 → 视觉或状态失效时安全暂停/恢复
 ```
 
-当前阶段为 **P7：20+20 批量基线回归准备**。2026-07-30 已完成终端落板逻辑复验：最终下降参考不再停在 `0.15 m`，而是在安全终端段继续降到 `0.05 m`；最低命令到达后，只有近地、低垂直速度、参考与实际高度持续存在接触压差且其余着陆窗口条件安全时，才允许形成终端接触候选。`static` 和 `constant02` 单轮均进入 `TOUCHDOWN_CANDIDATE_HOLD → TOUCHDOWN_HOLD` 并保持 10 秒，随后 P7 真实 3+3 冒烟以 6/6 PASS、0 failure 完成。下一步执行 20+20 基线回归，不再修改末端下降参数。
+当前开发基线为 **P7-lite 冻结**。2026-07-30 已完成终端落板逻辑复验：最终下降参考在安全终端段继续降到 `0.05 m`，`static` 和 `constant02` 均进入 `TOUCHDOWN_CANDIDATE_HOLD → TOUCHDOWN_HOLD` 并保持 10 秒；随后 P7 真实 3+3 冒烟以 6/6 PASS、0 failure 完成。该结果足够作为高级功能开发基线，`static 20 次 + constant02 20 次` 不再是进入下一阶段的硬门槛，P7 自动化继续保留，大规模批量实验统一推迟到 P9。当前按 `P8A 升沉触地 → P8B 水平相对 MPC → P8C 倾斜甲板 → P9 统一评测` 推进，详见 [`docs/P8_ADVANCED_LANDING_ROADMAP.md`](docs/P8_ADVANCED_LANDING_ROADMAP.md)。
 
 > 相对下降和最终下降均默认关闭。P6B 必须同时显式传入 `--enable-relative-descent --enable-final-descent`；当前只开放静止和纯水平运动的 `static / constant02 / constant / sinusoidal` 场景，升沉、倾斜和组合场景仍被脚本阻断。系统不会发送 `NAV_LAND`，也不会自动 Disarm。
 
@@ -44,8 +44,11 @@
 | P5C 垂直状态估计与标定 | 已完成 | 相机 z 外参修正、独立垂直估计、低高度标定和 z 速度前馈 | — |
 | P6A 多源触地确认 | 已完成 | PX4 land detector、视觉高度和垂直速度联合判据及负向 SITL 验收 | — |
 | P6B 最终下降与真实接触 | 已完成 | 终端参考继续降到 `0.05 m`，static/constant02 均形成接触候选、确认并保持 10 秒；见 `docs/P6B_FINAL_DESCENT_AND_TOUCHDOWN_VALIDATION.md` | — |
-| P7 批量评测 | 3+3 冒烟完成 | 顺序批量、resume、失败分类、轻量 Bag 和聚合已实现；2026-07-30 static 3 次 + constant02 3 次全部 PASS，20+20 回归待执行 | — |
-| P8 传统方法消融 | 未开始 | P7 完成后再进入 | — |
+| P7-lite 开发基线 | 已冻结 | 顺序批量、resume、失败分类、轻量 Bag 和聚合已实现；2026-07-30 static 3 次 + constant02 3 次全部 PASS；20+20 延后到 P9 | — |
+| P8A 升沉甲板触地 | VALIDATION PASS | H1 3/3、H2 3/3，真实接触、10 s 相对甲板 hold、无离板/二次接触 | `docs/P8A_HEAVE_TOUCHDOWN_VALIDATION.md` |
+| P8B 水平相对 MPC | 未开始 | 先完成可验证综述、论文级模型、求解器选型和独立执行计划，再实现 | — |
+| P8C 倾斜甲板降落 | 未开始 | 先完成倾斜几何与触地建模，从固定 2° 小倾角逐级验证 | — |
+| P9 统一评测与消融 | 未开始 | 复用 P7 自动化执行批量回归、方法消融和论文实验 | — |
 
 当前完整工作区测试结果：
 
@@ -74,7 +77,7 @@
 - **工程化近距模型**：项目内 `moving_deck_sim/models/mono_cam` 与 PX4 默认 SDF 的唯一传感器差异为 `near=0.02 m`；`start_sitl.sh` 支持 `px4-default/close-range` A/B，并仅在 `--record-camera-debug` 时增加图像录包。
 - **动态下降丢帧去抖**：`constant02` 首次试验暴露单帧 `aruco_visible=false` 会立即触发 `RECOVER_CLIMB` 并锁止再次下降；现已改为 `<0.5 s` 仅暂停、`0.5~2.0 s` 恢复爬升、`>=2.0 s` 回退 GNSS，控制器包 180 项测试通过。
 
-当前下一步：冻结当前终端落板参数，执行 P7 `20+20` 基线回归并聚合成功率、落地时间、水平误差、触地速度、Marker 切换和恢复次数。除非批量结果出现可重复失败，否则不要继续调整最终下降或触地阈值。
+当前下一步：P8A 已完成 H1/H2 真实验收。P8B 已完成综述和独立执行计划，但当前机器未安装 OSQP/OsqpEigen，状态为 `RESEARCH PASS / PLAN PASS / DEPENDENCY BLOCKED`；依赖解决前不得实现 MPC 或进入 P8C。P7 `20+20` 配置继续保留并延后到 P9。
 
 ---
 
@@ -223,7 +226,7 @@ results/<batch_id>/
     bag/
 ```
 
-P7 自动化只用于 SITL。2026-07-30 真实 3+3 冒烟已连续运行通过；下一步执行 20+20 基线回归。`constant/sinusoidal/heave/rollpitch/combined` 暂不进入第一版批量触地。
+P7 自动化只用于 SITL。2026-07-30 真实 3+3 冒烟已连续运行通过，P7-lite 开发基线已冻结。`20+20` 配置继续保留并延后到 P9；P8A 将单独开放和验证 heave，rollpitch/combined 在 P8C 通过前继续阻断最终下降。
 
 # 5. 完整启动流程
 
@@ -906,9 +909,10 @@ ps -ef | grep -E \
 - [P6A 多源触地确认验收](docs/P6_TOUCHDOWN_CONFIRMATION_VALIDATION.md)
 - [P6B 最终下降与真实接触计划（含动态平台增量）](docs/P6B_FINAL_DESCENT_AND_TOUCHDOWN_PLAN.md)
 - [P6B 近距多尺度视觉子计划](docs/P6B_CLOSE_RANGE_VISUAL_PLAN.md)
-- [P6B 有状态 Marker 选择执行计划](docs/P6B_STATEFUL_MARKER_SELECTION_PLAN.md)
-- [P6B 相机 Near Clip 诊断计划](docs/P6B_CAMERA_NEAR_CLIP_DIAGNOSTIC_PLAN.md)
+- [P6B 有状态 Marker 选择与 Near Clip 分析（保存在近距多尺度视觉子计划）](docs/P6B_CLOSE_RANGE_VISUAL_PLAN.md)
+- [P6B Near Clip 与近距视觉验证结果](docs/P6B_CLOSE_RANGE_VISUAL_VALIDATION.md)
 - [P6B 近距多尺度视觉验收记录](docs/P6B_CLOSE_RANGE_VISUAL_VALIDATION.md)
+- [P8 高级移动甲板降落路线图](docs/P8_ADVANCED_LANDING_ROADMAP.md)
 
 ---
 
