@@ -21,7 +21,7 @@
 详细验收记录：
 
 ```text
-docs/P4_5_TIME_ALIGNMENT_VALIDATION.md
+docs/validation/P4_5_TIME_ALIGNMENT_VALIDATION.md
 ```
 
 ---

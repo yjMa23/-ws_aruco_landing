@@ -206,5 +206,5 @@ heave → 0.50 m
 详细验收记录：
 
 ```text
-docs/P5B_RELATIVE_DESCENT_VALIDATION.md
+docs/validation/P5B_RELATIVE_DESCENT_VALIDATION.md
 ```

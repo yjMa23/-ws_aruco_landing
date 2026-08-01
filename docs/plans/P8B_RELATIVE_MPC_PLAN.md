@@ -9,7 +9,7 @@ IMPLEMENTATION PASS
 VALIDATION PASS
 ```
 
-本计划严格引用 `docs/research/P8B_RELATIVE_MPC_REVIEW.md` 的最终方案：4 状态二维相对双积分线性 MPC，OSQP 求解，OsqpEigen 作为 C++ 接口，P4.7 为默认与失败回退。固定依赖、生产实现、全量构建、单元测试和严格顺序的真实 SITL 均已完成，验收记录见 `docs/P8B_RELATIVE_MPC_VALIDATION.md`。
+本计划严格引用 `docs/research/P8B_RELATIVE_MPC_REVIEW.md` 的最终方案：4 状态二维相对双积分线性 MPC，OSQP 求解，OsqpEigen 作为 C++ 接口，P4.7 为默认与失败回退。固定依赖、生产实现、全量构建、单元测试和严格顺序的真实 SITL 均已完成，验收记录见 `docs/validation/P8B_RELATIVE_MPC_VALIDATION.md`。
 
 ## 2. 依赖门槛
 
@@ -39,7 +39,7 @@ export LD_LIBRARY_PATH="$P8B_MPC_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
 - 必要的 solver adapter 测试；
 - P8B evaluator 或对现有 P4/P8A evaluator 的复用扩展；
 - P8B 场景与批量配置；
-- `docs/P8B_RELATIVE_MPC_VALIDATION.md`，仅在真实门槛通过后创建。
+- `docs/validation/P8B_RELATIVE_MPC_VALIDATION.md`，仅在真实门槛通过后创建。
 
 修改：
 
@@ -200,7 +200,7 @@ QGroundControl 连接后，已严格按 static → constant02 → constant → s
 所有有效 MPC 轮次的 deadline miss、solver failure 和 unexpected fallback 均为 0；constant02 与 H1 最终代码真实触地均为 3/3 PASS，`NAV_LAND=0`、Disarm=0。详细 Bag、指标、根因修复和 PASS 判定见：
 
 ```text
-docs/P8B_RELATIVE_MPC_VALIDATION.md
+docs/validation/P8B_RELATIVE_MPC_VALIDATION.md
 ```
 
 因此 P8B 标记 `VALIDATION PASS`。下一步允许开始 P8C 调研，但必须先完成 `docs/research/P8C_TILTED_DECK_LANDING_REVIEW.md`，不得直接编写倾斜甲板终端控制生产代码。

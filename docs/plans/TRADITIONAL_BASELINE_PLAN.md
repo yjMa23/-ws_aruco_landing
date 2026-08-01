@@ -52,12 +52,12 @@
    - `P1` 水平移动甲板仿真已完成，标签 `baseline-moving-deck-v0.1`。
    - `P2.0` 项目状态和设计文档同步已完成。
    - `P2A` 坐标契约、刚体变换和 WGS84 / ENU / NED 纯数学模块已完成。
-   - `P2B` 船舶 GNSS 传感器仿真已完成，验收记录见 `docs/P2B_DECK_GNSS_VALIDATION.md`。
-   - `P2C` GNSS 会合与移动甲板上方粗跟踪已完成，验收记录见 `docs/P2C_GNSS_RENDEZVOUS_VALIDATION.md`。
-   - `P2D` ArUco 完整变换与 GNSS—视觉接管已完成，验收记录见 `docs/P2D_GNSS_VISION_HANDOVER_VALIDATION.md`。
-   - `P3` 视觉状态估计与短时预测已完成，验收记录见 `docs/P3_VISUAL_STATE_ESTIMATION_VALIDATION.md`。
-   - `P4` 移动甲板安全高度水平跟踪代码、测试和真实 PX4 SITL 验收已完成，见 `docs/P4_MOVING_TARGET_TRACKING_VALIDATION.md`。
-   - `P4.5` 离线评测、统一仿真时钟、PX4 位姿历史、图像采样时刻时间对齐和四场景完整 SITL 回归已完成，见 `docs/P4_5_TIME_ALIGNMENT_VALIDATION.md`。
+   - `P2B` 船舶 GNSS 传感器仿真已完成，验收记录见 `docs/validation/P2B_DECK_GNSS_VALIDATION.md`。
+   - `P2C` GNSS 会合与移动甲板上方粗跟踪已完成，验收记录见 `docs/validation/P2C_GNSS_RENDEZVOUS_VALIDATION.md`。
+   - `P2D` ArUco 完整变换与 GNSS—视觉接管已完成，验收记录见 `docs/validation/P2D_GNSS_VISION_HANDOVER_VALIDATION.md`。
+   - `P3` 视觉状态估计与短时预测已完成，验收记录见 `docs/validation/P3_VISUAL_STATE_ESTIMATION_VALIDATION.md`。
+   - `P4` 移动甲板安全高度水平跟踪代码、测试和真实 PX4 SITL 验收已完成，见 `docs/validation/P4_MOVING_TARGET_TRACKING_VALIDATION.md`。
+   - `P4.5` 离线评测、统一仿真时钟、PX4 位姿历史、图像采样时刻时间对齐和四场景完整 SITL 回归已完成，见 `docs/validation/P4_5_TIME_ALIGNMENT_VALIDATION.md`。
    - `P4.6`、`P4.7` 水平跟踪优化已完成。
    - `P5A`～`P5C` 动态甲板、着陆窗口、相对下降和垂直状态估计已完成。
    - `P6A`、`P6B` 多源触地确认、最终下降与 static/constant02 真实接触已完成。
@@ -175,10 +175,12 @@ ws_aruco_landing/
 ├── AGENTS.md
 ├── README.md
 ├── docs/
-│   ├── SYSTEM_ARCHITECTURE.md
-│   ├── COORDINATE_FRAMES.md
-│   ├── EXPERIMENT_PROTOCOL.md
-│   └── FAILURE_CATALOG.md
+│   ├── README.md
+│   ├── guides/
+│   ├── reference/
+│   ├── plans/
+│   ├── research/
+│   └── validation/
 ├── src/
 │   ├── aruco_detector/
 │   │   ├── include/aruco_detector/
@@ -338,7 +340,7 @@ PX4 带版本后缀的话题必须在 launch 中重映射，业务代码内部�
 
 ## 7. 坐标系约定
 
-坐标语义、四元数顺序、当前下视相机名义外参、Gazebo spherical origin 与 PX4 local origin 的关系，统一以 [`docs/COORDINATE_FRAMES.md`](COORDINATE_FRAMES.md) 为准。
+坐标语义、四元数顺序、当前下视相机名义外参、Gazebo spherical origin 与 PX4 local origin 的关系，统一以 [`docs/reference/COORDINATE_FRAMES.md`](../reference/COORDINATE_FRAMES.md) 为准。
 
 必须固定以下坐标系：
 
@@ -825,7 +827,7 @@ colcon test-result --verbose
 - ArUco 不可见时仍能到达并粗跟踪移动甲板上方。
 - GNSS 过期或跳变不会继续追踪错误目标。
 - 稳定 ArUco 后保持安全高度，不接入视觉控制、不下降。
-- 纯逻辑和合成 PX4 消息验收见 `docs/P2C_GNSS_RENDEZVOUS_VALIDATION.md`；真实飞行闭环仍待环境完整后验证。
+- 纯逻辑和合成 PX4 消息验收见 `docs/validation/P2C_GNSS_RENDEZVOUS_VALIDATION.md`；真实飞行闭环仍待环境完整后验证。
 
 ### P2D：GNSS 到视觉接管与下降前恢复
 
@@ -842,7 +844,7 @@ colcon test-result --verbose
 - 接管过程目标连续且高度保持不变。
 - 视觉长时丢失能够回到 GNSS 粗引导。
 - 本阶段仍不下降。
-- 已完成 55 项测试和消息级状态机验收，详见 `docs/P2D_GNSS_VISION_HANDOVER_VALIDATION.md`。
+- 已完成 55 项测试和消息级状态机验收，详见 `docs/validation/P2D_GNSS_VISION_HANDOVER_VALIDATION.md`。
 
 ### P3：甲板状态估计和预测
 
@@ -860,7 +862,7 @@ colcon test-result --verbose
 - 全工作区累计 77 项测试通过。
 - 预测位置只发布调试，不进入 PX4 setpoint。
 - Ground Truth 仅进入评测器。
-- 详细计划和验收见 `docs/P3_VISUAL_STATE_ESTIMATION_PLAN.md`、`docs/P3_VISUAL_STATE_ESTIMATION_VALIDATION.md`。
+- 详细计划和验收见 `docs/plans/P3_VISUAL_STATE_ESTIMATION_PLAN.md`、`docs/validation/P3_VISUAL_STATE_ESTIMATION_VALIDATION.md`。
 
 ### P4：移动甲板水平跟踪
 
@@ -873,7 +875,7 @@ colcon test-result --verbose
 - 全程保持 `rendezvous_altitude_m`，不执行下降。
 - 已完成 13 项纯控制测试和静止、East `0.4 m/s` 消息级验收。
 - 全工作区累计 93 项测试通过。
-- 详细计划和验收见 `docs/P4_MOVING_TARGET_TRACKING_PLAN.md`、`docs/P4_MOVING_TARGET_TRACKING_VALIDATION.md`。
+- 详细计划和验收见 `docs/plans/P4_MOVING_TARGET_TRACKING_PLAN.md`、`docs/validation/P4_MOVING_TARGET_TRACKING_VALIDATION.md`。
 
 真实 PX4 验收：
 
@@ -932,7 +934,7 @@ P7 自动化继续保留，不删除、不废弃。static 20 次 + constant02 20
 
 ```text
 项目内垂直语义分析
-→ docs/P8A_HEAVE_TOUCHDOWN_PLAN.md
+→ docs/plans/P8A_HEAVE_TOUCHDOWN_PLAN.md
 → 先写测试
 → 最小实现
 → static/constant02 回归
@@ -946,7 +948,7 @@ P8A 重点验证相对垂直速度语义和 `TOUCHDOWN_HOLD` 对升沉甲板的�
 
 P8B 综述、统一数学模型、固定求解器、执行计划、生产实现和真实验收均已完成。第一版只负责自由飞行和安全下降阶段的水平相对运动，P4.7 保持默认并作为 solver 失败回退；从 `FINAL_DESCENT` 起使用 `TERMINAL_PHASE_P47` 安全 handoff，不接管最终垂直下降、touchdown detector、landing window 或姿态对齐。
 
-严格顺序结果为安全高度 15/15、下降 6/6、真实触地 6/6 PASS，所有有效 MPC 轮次均为 0 deadline miss、0 solver failure、0 unexpected fallback，验收见 `docs/P8B_RELATIVE_MPC_VALIDATION.md`。下一步只允许开始 P8C 综述和几何建模。
+严格顺序结果为安全高度 15/15、下降 6/6、真实触地 6/6 PASS，所有有效 MPC 轮次均为 0 deadline miss、0 solver failure、0 unexpected fallback，验收见 `docs/validation/P8B_RELATIVE_MPC_VALIDATION.md`。下一步只允许开始 P8C 综述和几何建模。
 
 ### P8C：固定倾斜及低频 roll/pitch 甲板降落
 

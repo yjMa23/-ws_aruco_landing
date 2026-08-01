@@ -4,7 +4,7 @@
 当前实现阶段为：
 
 ```text
-P4：安全高度移动甲板水平跟踪
+P8B：水平相对运动线性 MPC（VALIDATION PASS）
 ```
 
 当前主路径：
@@ -17,17 +17,22 @@ PX4 状态有效
 → ArUco 完整 local NED 位姿变换
 → GNSS—视觉平滑接管
 → 视觉位置/速度状态估计
-→ 预测位置 + 甲板速度前馈水平跟踪
-→ 视觉长时丢失时恢复到 GNSS
+→ P4.7 水平跟踪或显式 P8B MPC
+→ 规则式着陆窗口
+→ 相对高度和最终下降
+→ 多源触地确认
+→ 接触后相对保持
 ```
 
-P4 全程保持固定安全高度，不执行下降，不判断着陆窗口，不发送 Land。默认：
+相对下降和最终下降均需显式授权。默认：
 
 ```yaml
 enable_auto_land: false
+descent.enabled: false
+final_descent.enabled: false
 ```
 
-控制器禁止订阅 Gazebo 甲板 Ground Truth。
+控制器禁止订阅 Gazebo 甲板 Ground Truth，不发送 `NAV_LAND`，不自动 Disarm。
 
 ## 1. 依赖与环境
 
@@ -36,6 +41,7 @@ enable_auto_land: false
 - PX4 SITL 与 Gazebo Harmonic
 - PX4 uXRCE-DDS Agent
 - 与运行中 PX4 版本匹配的 `px4_msgs`
+- OSQP `v1.0.0` 与 OsqpEigen `v0.11.2`
 - `moving_deck_sim` 发布船舶 GNSS
 - `aruco_detector` 发布 ArUco 位姿与可见性
 
@@ -45,6 +51,10 @@ enable_auto_land: false
 cd ~/ws_aruco_landing
 source /opt/ros/humble/setup.bash
 source ~/ws_sensor_combined/install/setup.bash
+
+export P8B_MPC_PREFIX="$HOME/.local/p8b-mpc/osqp-1.0.0-osqpeigen-0.11.2"
+export CMAKE_PREFIX_PATH="$P8B_MPC_PREFIX${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
+export LD_LIBRARY_PATH="$P8B_MPC_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 colcon build --symlink-install \
   --packages-select aruco_precision_landing_cpp \
@@ -258,12 +268,13 @@ tracking.mode: PREDICTED_POSITION_VELOCITY_FF
 
 支持：
 
-| 模式 | 位置目标 | 速度前馈 |
+| 模式 | 位置目标 | 前馈/控制 |
 | --- | --- | --- |
 | `RAW_VISUAL_POSITION` | P2D 原始视觉位置 | 无 |
 | `ESTIMATED_POSITION` | Kalman 估计位置 | 无 |
-| `ESTIMATED_POSITION_VELOCITY_FF` | Kalman 估计位置 | 有 |
-| `PREDICTED_POSITION_VELOCITY_FF` | 控制时刻预测位置 | 有 |
+| `ESTIMATED_POSITION_VELOCITY_FF` | Kalman 估计位置 | 甲板速度 |
+| `PREDICTED_POSITION_VELOCITY_FF` | 控制时刻预测位置 | P4.7 速度前馈与自适应阻尼 |
+| `RELATIVE_MPC` | 控制时刻预测位置 | MPC 水平加速度，失败或终端阶段回退 P4.7 |
 
 切换为原始视觉对照：
 
@@ -298,6 +309,7 @@ ros2 launch aruco_precision_landing_cpp px4_aruco_landing.launch.py \
 | `/deck/gps/velocity` | `geometry_msgs/msg/TwistStamped` | 船舶 ENU 粗速度 |
 | `/aruco/pose` | `geometry_msgs/msg/PoseStamped` | Marker camera optical 位姿 |
 | `/aruco/visible` | `std_msgs/msg/Bool` | Marker 可见性 |
+| `/fmu/out/vehicle_land_detected` | `px4_msgs/msg/VehicleLandDetected` | 多源触地证据 |
 
 ### 9.2 输出
 
@@ -316,6 +328,8 @@ ros2 launch aruco_precision_landing_cpp px4_aruco_landing.launch.py \
 | `/landing/tracking_velocity_setpoint` | `geometry_msgs/msg/TwistStamped` | 实际水平速度前馈调试值 |
 | `/landing/effective_relative_velocity_gain` | `std_msgs/msg/Float64` | 当前实际使用的相对速度阻尼增益 |
 | `/landing/estimated_deck_acceleration` | `geometry_msgs/msg/TwistStamped` | local NED 过滤后甲板水平加速度 |
+| `/landing/relative_mpc/*` | 多种标准消息 | MPC 求解、控制、约束和预测诊断 |
+| `/landing/touchdown_*` | 多种标准消息 | 触地证据、候选时间、确认和接触后保持诊断 |
 
 监控：
 
@@ -413,20 +427,27 @@ colcon test-result --verbose
 详细文档：
 
 ```text
-docs/P3_VISUAL_STATE_ESTIMATION_PLAN.md
-docs/P3_VISUAL_STATE_ESTIMATION_VALIDATION.md
-docs/P4_MOVING_TARGET_TRACKING_PLAN.md
-docs/P4_MOVING_TARGET_TRACKING_VALIDATION.md
-docs/P4_5_EXECUTION_PLAN.md
-docs/P4_5_TIME_ALIGNMENT_VALIDATION.md
-docs/P5A_DECK_DYNAMICS_AND_LANDING_WINDOW_PLAN.md
-docs/P5A_DECK_DYNAMICS_AND_LANDING_WINDOW_VALIDATION.md
-docs/P5B_RELATIVE_DESCENT_PLAN.md
-docs/P5B_RELATIVE_DESCENT_VALIDATION.md
-docs/P5C_VERTICAL_STATE_ESTIMATION_PLAN.md
-docs/P5C_VERTICAL_STATE_ESTIMATION_VALIDATION.md
-docs/P6_TOUCHDOWN_CONFIRMATION_PLAN.md
-docs/P6_TOUCHDOWN_CONFIRMATION_VALIDATION.md
+docs/plans/P3_VISUAL_STATE_ESTIMATION_PLAN.md
+docs/validation/P3_VISUAL_STATE_ESTIMATION_VALIDATION.md
+docs/plans/P4_MOVING_TARGET_TRACKING_PLAN.md
+docs/validation/P4_MOVING_TARGET_TRACKING_VALIDATION.md
+docs/plans/P4_5_EXECUTION_PLAN.md
+docs/validation/P4_5_TIME_ALIGNMENT_VALIDATION.md
+docs/plans/P5A_DECK_DYNAMICS_AND_LANDING_WINDOW_PLAN.md
+docs/validation/P5A_DECK_DYNAMICS_AND_LANDING_WINDOW_VALIDATION.md
+docs/plans/P5B_RELATIVE_DESCENT_PLAN.md
+docs/validation/P5B_RELATIVE_DESCENT_VALIDATION.md
+docs/plans/P5C_VERTICAL_STATE_ESTIMATION_PLAN.md
+docs/validation/P5C_VERTICAL_STATE_ESTIMATION_VALIDATION.md
+docs/plans/P6_TOUCHDOWN_CONFIRMATION_PLAN.md
+docs/validation/P6_TOUCHDOWN_CONFIRMATION_VALIDATION.md
+docs/plans/P6B_FINAL_DESCENT_AND_TOUCHDOWN_PLAN.md
+docs/validation/P6B_FINAL_DESCENT_AND_TOUCHDOWN_VALIDATION.md
+docs/plans/P7_BATCH_EVALUATION_PLAN.md
+docs/plans/P8A_HEAVE_TOUCHDOWN_PLAN.md
+docs/validation/P8A_HEAVE_TOUCHDOWN_VALIDATION.md
+docs/plans/P8B_RELATIVE_MPC_PLAN.md
+docs/validation/P8B_RELATIVE_MPC_VALIDATION.md
 ```
 
 ## 12. 当前验收边界
@@ -445,9 +466,9 @@ P4～P4.6 已完成静止、`0.2 m/s`、`0.4 m/s`、正弦、时间对齐和参�
 P4.7 已完成加速度感知连续增益调度，并设为统一默认：0.4 m/s 匀速位置 RMSE 为
 `0.0554 m`，XY 正弦位置 RMSE 为 `0.3490 m`，Marker 丢失和 GNSS 恢复均为 0。
 
-P5A 已完成规则式着陆窗口，P5B 已完成相对高度分阶段下降与恢复，P5C 已完成垂直估计和默认 z 速度前馈。P6A 已完成 PX4 land detector、视觉低高度和垂直速度联合判据及三类负向 SITL 验收。当前进入 P6B：最终下降与真实接触正向验证。
+P5A～P6B 已完成着陆窗口、相对下降、垂直估计、最终下降和真实接触。P7-lite 真实 3+3 冒烟为 6/6 PASS；P8A H1/H2 升沉触地均为 3/3 PASS；P8B 已完成固定 OSQP/OsqpEigen 依赖、完整 P4.7 回退、271 项测试和严格顺序真实 SITL，安全高度 15/15、下降 6/6、真实触地 6/6 PASS。
 
 ## 13. 安全提示
 
-节点会自动发送 Offboard 和 Arm 命令，只应先在 SITL 中运行。相对下降默认关闭；显式启用时只下降到 `0.50 m` 安全测试高度，不触地、不发送 Land 或 Disarm。
+节点会自动发送 Offboard 和 Arm 命令，只应先在 SITL 中运行。相对下降和最终下降默认关闭；最终下降必须双重显式授权，且当前只允许静止、纯水平运动和 P8A 分级升沉场景。不发送 `NAV_LAND` 或 Disarm。
 实机测试前必须重新核对相机外参、时间同步、PX4 坐标系、速度/加速度限制、failsafe、人工接管和解锁策略。

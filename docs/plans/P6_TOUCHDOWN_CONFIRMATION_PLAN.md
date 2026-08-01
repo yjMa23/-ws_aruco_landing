@@ -336,5 +336,5 @@ touchdown_detector.candidate_required_duration_s
 - 静止 `0.50 m`、升沉 `0.70 m` 和恢复爬升三类负向 PX4 SITL 验收均通过。
 - 三轮候选样本数、最大候选持续时间和确认次数均为 0；无 `NAV_LAND` 或 Disarm。
 - 全工作区 `182 tests`，全部通过。
-- 详细结果见 `docs/P6_TOUCHDOWN_CONFIRMATION_VALIDATION.md`。
+- 详细结果见 `docs/validation/P6_TOUCHDOWN_CONFIRMATION_VALIDATION.md`。
 - P6B 真实接触正向试验尚未开始，必须先保存独立计划。

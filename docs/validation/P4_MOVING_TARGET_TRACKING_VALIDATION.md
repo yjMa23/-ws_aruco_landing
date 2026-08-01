@@ -25,7 +25,7 @@ test/moving_target_tracking_controller_test.cpp
 新增详细计划：
 
 ```text
-docs/P4_MOVING_TARGET_TRACKING_PLAN.md
+docs/plans/P4_MOVING_TARGET_TRACKING_PLAN.md
 ```
 
 默认跟踪模式：

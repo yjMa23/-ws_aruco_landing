@@ -143,7 +143,7 @@ python3 scripts/evaluate_p4_bag.py bags/<bag_name>
 新增：
 
 ```text
-docs/P4_6_SINUSOIDAL_TUNING_VALIDATION.md
+docs/validation/P4_6_SINUSOIDAL_TUNING_VALIDATION.md
 ```
 
 内容包括：
@@ -164,4 +164,4 @@ docs/P4_6_SINUSOIDAL_TUNING_VALIDATION.md
 - 最佳正弦结果为 `ESTIMATED_POSITION_VELOCITY_FF + rvg=1.00`，位置 RMSE `0.3439 m`。
 - 第一阶段 `RMSE < 0.40 m` 目标已完成，最终 `RMSE < 0.30 m` 目标未完成。
 - 0.4 m/s 匀速交叉验证表明高阻尼会恶化稳态跟踪，因此不修改全局默认参数。
-- 本阶段停止继续单参数扫描，详细结论见 `docs/P4_6_SINUSOIDAL_TUNING_VALIDATION.md`。
+- 本阶段停止继续单参数扫描，详细结论见 `docs/validation/P4_6_SINUSOIDAL_TUNING_VALIDATION.md`。

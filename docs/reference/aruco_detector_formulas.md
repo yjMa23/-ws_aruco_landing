@@ -1,6 +1,6 @@
 # ArUco 检测模块公式说明
 
-本文档对应 [`aruco_detector_node.cpp`](../src/aruco_detector/src/aruco_detector_node.cpp)，只解释当前实现实际使用或直接依赖的数学关系。OpenCV 内部的候选轮廓提取、角点细化和 PnP 求解器实现不在本项目中重复展开。
+本文档对应 [`aruco_detector_node.cpp`](../../src/aruco_detector/src/aruco_detector_node.cpp)，只解释当前实现实际使用或直接依赖的数学关系。OpenCV 内部的候选轮廓提取、角点细化和 PnP 求解器实现不在本项目中重复展开。
 
 ## 1. 处理链路
 

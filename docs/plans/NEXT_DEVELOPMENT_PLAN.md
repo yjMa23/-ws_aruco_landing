@@ -20,7 +20,7 @@
 → 丢失恢复、安全中止和批量评测
 ```
 
-本文档是传统基线的阶段执行计划。当前已完成 `P2.0`～`P6B` 的代码与真实 PX4 SITL 验收。2026-07-30 终端落板逻辑完成复验：最终参考在安全终端段继续降到 `0.05 m`，static 和 constant02 均形成候选、确认并进入 `TOUCHDOWN_HOLD`。随后 P7 真实 3+3 冒烟以 6/6 PASS、0 failure 完成，平均落地时间约 `24.90 s`、水平 RMSE 约 `0.0251 m`、触地垂直速度约 `0.0060 m/s`。P7-lite 已冻结为高级功能开发基线，20+20 不再是进入高级功能的硬门槛；当前路线为 `P8A 升沉触地 → P8B 水平相对 MPC → P8C 倾斜甲板 → P9 统一评测`，详见 `docs/P8_ADVANCED_LANDING_ROADMAP.md`。
+本文档是传统基线的阶段执行计划。当前 `P0`～`P8B` 已完成代码、测试和真实 PX4 SITL 验收：P7-lite 真实 3+3 冒烟为 6/6 PASS；P8A 升沉触地 H1/H2 均为 3/3 PASS；P8B 水平相对 MPC 完成固定依赖、生产实现、P4.7 安全回退和严格顺序验收，安全高度 15/15、下降 6/6、真实触地 6/6 PASS。下一阶段为 `P8C 倾斜甲板研究与几何建模 → P9 统一评测`，详见 `docs/plans/P8_ADVANCED_LANDING_ROADMAP.md`。
 
 ---
 
@@ -33,7 +33,7 @@
 | `P0` 仓库整理与静态基线冻结 | 已完成 | `aruco_detector` 纳入主仓库，工作区可统一构建，标签 `baseline-static-v0.1` |
 | `P1` 水平移动甲板仿真 | 已完成 | 静止、匀速、XY 正弦甲板，确定性 reset，Ground Truth，标签 `baseline-moving-deck-v0.1` |
 | `P2.0` 项目状态和设计文档同步 | 已完成 | 更新项目阶段、GNSS 到视觉流程、Ground Truth 边界和默认任务 |
-| `P2A-1` 坐标契约确认 | 已完成 | 新增 `docs/COORDINATE_FRAMES.md`，核对 PX4、Gazebo、相机和地理原点语义 |
+| `P2A-1` 坐标契约确认 | 已完成 | 新增 `docs/reference/COORDINATE_FRAMES.md`，核对 PX4、Gazebo、相机和地理原点语义 |
 | `P2A-2～4` 纯数学模块与测试 | 已完成 | 实现 `coordinate_transform`、`geodetic_converter` 和 GTest |
 | `P2B` 船舶 GNSS 传感器仿真 | 已完成 | 实现理想/含噪 GNSS、ENU 速度、固定采样/延迟/丢包、确定性 reset 和端到端冒烟验证 |
 | `P2C` GNSS 会合与移动甲板上方粗跟踪 | 已完成 | 实现 WGS84→local NED、GNSS 校验、会合目标限幅、移动中心搜索和超时回退 |
@@ -47,6 +47,10 @@
 | `P5B` 相对甲板高度分阶段下降 | 已完成 | 分段下降、窗口暂停、恢复爬升、恢复后重新授权锁止和 `0.50 m` 安全高度验收 |
 | `P5C` 低高度垂直状态估计与标定 | 已完成 | 相机 z 外参修正、独立垂直估计、低高度标定和甲板垂直速度前馈 |
 | `P6A` 多源触地候选与确认 | 已完成 | PX4 land detector、视觉高度和垂直速度联合判据及三类负向 SITL 验收 |
+| `P6B` 最终下降与真实接触 | 已完成 | 分段最终下降、动态平台证据、多尺度 Marker、触地候选/确认和接触保持 |
+| `P7-lite` 批量评测基线 | 已冻结 | 单轮、批量、resume、失败分类和聚合；真实 3+3 冒烟 6/6 PASS |
+| `P8A` 升沉甲板触地 | VALIDATION PASS | H1/H2 各 3/3，真实接触与 10 秒相对甲板保持通过 |
+| `P8B` 水平相对 MPC | VALIDATION PASS | 4 状态 MPC、约束、warm start、完整 P4.7 回退和终端 handoff；三类验收共 27/27 PASS |
 
 ### 2.2 当前已有 ROS 2 包
 
@@ -58,7 +62,7 @@ src/moving_deck_sim
 
 ### 2.3 当前控制器能力
 
-`aruco_precision_landing_cpp` 当前 P6A 主路径已经具备：
+`aruco_precision_landing_cpp` 当前生产路径已经具备：
 
 - PX4 Offboard 预发布、自动切换 Offboard、解锁和起飞。
 - 使用 PX4 `VehicleLocalPosition.ref_lat/ref_lon/ref_alt` 建立 local NED 地理参考。
@@ -83,6 +87,9 @@ src/moving_deck_sim
 - 订阅 PX4 `VehicleLandDetected`，联合视觉低高度和垂直速度运行多源触地候选与确认。
 - 发布 `/landing/touchdown_status`、`/landing/touchdown_evidence`、`/landing/touchdown_candidate_duration` 和 `/landing/touchdown_confirmed`。
 - P6A 负向阶段只并行评估触地证据；显式启用 P6B 后，候选会冻结最终下降参考，确认后进入 `TOUCHDOWN_HOLD`，仍不发送 `NAV_LAND` 或 Disarm。
+- 使用四尺度有状态 Marker 选择器和 `near=0.02 m` 项目相机模型持续观测至接触。
+- 在升沉甲板触地后按甲板相对高度和垂直速度执行接触保持。
+- 显式选择 `RELATIVE_MPC` 时使用四状态水平相对 MPC；求解异常和终端阶段自动回退完整 P4.7。
 
 旧静态对中、下降和 `NAV_LAND` 代码仍保留用于历史基线参考，但从当前主路径不可达。相对下降默认关闭，`enable_auto_land=false`。
 
@@ -105,7 +112,7 @@ scripts/aggregate_results.py
 scripts/p7_experiment_utils.py
 config/experiments/p7_smoke.yaml
 config/experiments/p7_baseline.yaml
-docs/P7_BATCH_EVALUATION_PLAN.md
+docs/plans/P7_BATCH_EVALUATION_PLAN.md
 ```
 
 第一版只支持 `static` 和 `constant02`，顺序执行，单轮失败后继续。成功判据来自 `/landing/state` 的 `TOUCHDOWN_HOLD` 连续保持至少 10 秒，并由 `evaluate_p6b_touchdown.py` 复核；不使用固定 sleep 判定成功。真实执行还修复了 ROS CLI daemon 失效、PX4 就绪探测、状态监控、episode 计时和失败分类问题。2026-07-30 真实 3+3 冒烟已完成，6/6 PASS、0 failure，结果目录为 `results/p7_smoke_terminal_20260730/`；P7-lite 已冻结，20+20 配置延后到 P9。
@@ -588,8 +595,8 @@ alpha: 0 → 1
 
 ```text
 AGENTS.md
-docs/TRADITIONAL_BASELINE_PLAN.md
-docs/NEXT_DEVELOPMENT_PLAN.md
+docs/plans/TRADITIONAL_BASELINE_PLAN.md
+docs/plans/NEXT_DEVELOPMENT_PLAN.md
 README.md（仅在需要增加入口时修改）
 ```
 
@@ -630,7 +637,7 @@ src/aruco_precision_landing_cpp/
     ├── coordinate_transform_test.cpp
     └── geodetic_converter_test.cpp
 
-docs/COORDINATE_FRAMES.md
+docs/reference/COORDINATE_FRAMES.md
 ```
 
 ## 任务 A：确认实际坐标语义
@@ -972,7 +979,7 @@ aruco_pose_timeout_s: 0.3
 P2C 已实现并通过纯逻辑测试和合成 PX4 消息状态机冒烟测试。验收记录：
 
 ```text
-docs/P2C_GNSS_RENDEZVOUS_VALIDATION.md
+docs/validation/P2C_GNSS_RENDEZVOUS_VALIDATION.md
 ```
 
 真实 PX4 动力学下的移动甲板飞行闭环仍需在 QGroundControl/心跳和相机插件环境完整后继续验证。
@@ -1071,7 +1078,7 @@ target_xy = (1-alpha) * gnss_target_xy + alpha * visual_target_xy
 P2D 已实现并通过 55 项工作区测试、完整变换消息级验收、单帧误检验收和视觉丢失恢复验收。记录：
 
 ```text
-docs/P2D_GNSS_VISION_HANDOVER_VALIDATION.md
+docs/validation/P2D_GNSS_VISION_HANDOVER_VALIDATION.md
 ```
 
 真实 PX4 动力学下的视觉联合飞行仍需在相机插件环境完整后继续验证。
@@ -1089,8 +1096,8 @@ baseline-gnss-vision-handover-v0.1
 详细实施计划和验收记录：
 
 ```text
-docs/P3_VISUAL_STATE_ESTIMATION_PLAN.md
-docs/P3_VISUAL_STATE_ESTIMATION_VALIDATION.md
+docs/plans/P3_VISUAL_STATE_ESTIMATION_PLAN.md
+docs/validation/P3_VISUAL_STATE_ESTIMATION_VALIDATION.md
 ```
 
 ## 目标
@@ -1270,15 +1277,15 @@ tracking.max_prediction_age_s: 0.75
 详细计划和验收：
 
 ```text
-docs/P4_MOVING_TARGET_TRACKING_PLAN.md
-docs/P4_MOVING_TARGET_TRACKING_VALIDATION.md
+docs/plans/P4_MOVING_TARGET_TRACKING_PLAN.md
+docs/validation/P4_MOVING_TARGET_TRACKING_VALIDATION.md
 ```
 
 ## P4.5 SITL 回归结果
 
 P4.5 已使用新的图像—PX4 位姿时间对齐实现完成静止、`0.2 m/s`、`0.4 m/s` 和
 XY 正弦四个场景回归。四轮均无丢标、无 GNSS 恢复、无时间同步或位姿历史告警；
-详细指标见 `docs/P4_5_TIME_ALIGNMENT_VALIDATION.md`。
+详细指标见 `docs/validation/P4_5_TIME_ALIGNMENT_VALIDATION.md`。
 
 Ground Truth 仍只进入 rosbag 离线评测。P5A、P5B 和 P5C 的计划与验收分别见对应文档。下一任务为 P6：多源触地确认、最终下降与安全中止。
 
@@ -1616,12 +1623,12 @@ baseline-batch-evaluation-v0.1
 
 ```text
 项目内垂直语义分析
-→ docs/P8A_HEAVE_TOUCHDOWN_PLAN.md
+→ docs/plans/P8A_HEAVE_TOUCHDOWN_PLAN.md
 → 先写测试
 → 最小实现
 → static/constant02 回归
 → H1/H2/H3 分级真实 SITL
-→ docs/P8A_HEAVE_TOUCHDOWN_VALIDATION.md
+→ docs/validation/P8A_HEAVE_TOUCHDOWN_VALIDATION.md
 ```
 
 H1/H2/H3 分别为 `0.10 m / 10 s`、`0.20 m / 8 s`、`0.30 m / 8 s`。第一次只开放 H1，H2/H3 逐级开放；rollpitch 和 combined 继续阻断最终下降。P8A 必须验证相对垂直速度语义和 `TOUCHDOWN_HOLD` 是否需要随甲板 z 相对保持。
@@ -1630,7 +1637,7 @@ H1/H2/H3 分别为 `0.10 m / 10 s`、`0.20 m / 8 s`、`0.30 m / 8 s`。第一次
 
 P8B 综述、统一模型、候选方案、固定求解器、执行计划、生产实现和真实验收均已完成。第一版 MPC 只负责自由飞行与安全下降阶段的水平相对运动，P4.7 保持默认并作为 solver 失败回退；从 `FINAL_DESCENT` 起使用 `TERMINAL_PHASE_P47` 安全 handoff，没有接管最终垂直下降、touchdown detector、landing window 或姿态对齐。
 
-严格顺序结果为安全高度 15/15、下降 6/6、真实触地 6/6 PASS，所有有效 MPC 轮次均为 0 deadline miss、0 solver failure、0 unexpected fallback；详细记录见 `docs/P8B_RELATIVE_MPC_VALIDATION.md`。
+严格顺序结果为安全高度 15/15、下降 6/6、真实触地 6/6 PASS，所有有效 MPC 轮次均为 0 deadline miss、0 solver failure、0 unexpected fallback；详细记录见 `docs/validation/P8B_RELATIVE_MPC_VALIDATION.md`。
 
 ## P8C：固定倾斜及低频 roll/pitch 甲板降落
 
@@ -1662,11 +1669,11 @@ B5：若已实现，MPC + 法向姿态对齐
 ```text
 ws_aruco_landing/
 ├── docs/
-│   ├── NEXT_DEVELOPMENT_PLAN.md
-│   ├── COORDINATE_FRAMES.md
-│   ├── SYSTEM_ARCHITECTURE.md
-│   ├── EXPERIMENT_PROTOCOL.md
-│   ├── FAILURE_CATALOG.md
+│   ├── README.md
+│   ├── guides/
+│   ├── reference/
+│   ├── plans/
+│   ├── research/
 │   └── validation/
 ├── src/
 │   ├── aruco_detector/
@@ -1898,7 +1905,7 @@ grep -R "/simulation/deck/ground_truth" \
 
 ## 15. 当前下一项任务
 
-`P0`～`P8B` 已完成真实验收，P7-lite 真实 3+3 冒烟已冻结。P8B 验收见 `docs/P8B_RELATIVE_MPC_VALIDATION.md`。下一项任务限定为：
+`P0`～`P8B` 已完成真实验收，P7-lite 真实 3+3 冒烟已冻结。P8B 验收见 `docs/validation/P8B_RELATIVE_MPC_VALIDATION.md`。下一项任务限定为：
 
 ```text
 P8C：固定倾斜及低频 roll/pitch 甲板降落调研

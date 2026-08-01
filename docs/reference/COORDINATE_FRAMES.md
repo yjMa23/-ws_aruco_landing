@@ -761,12 +761,12 @@ Marker local NED ≈ [0.0, 0.0, 0.2] m
 结果与完整变换链一致。详细验收见：
 
 ```text
-docs/P2D_GNSS_VISION_HANDOVER_VALIDATION.md
+docs/validation/P2D_GNSS_VISION_HANDOVER_VALIDATION.md
 ```
 
 P4.5 已解决图像采样时刻与 PX4 位姿的时间对齐。详细实现与验收边界见：
 
 ```text
-docs/P4_5_EXECUTION_PLAN.md
-docs/P4_5_TIME_ALIGNMENT_VALIDATION.md
+docs/plans/P4_5_EXECUTION_PLAN.md
+docs/validation/P4_5_TIME_ALIGNMENT_VALIDATION.md
 ```

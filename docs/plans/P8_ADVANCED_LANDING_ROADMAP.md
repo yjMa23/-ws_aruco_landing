@@ -105,12 +105,12 @@ static 20 次 + constant02 20 次不再是进入 P8A 的硬门槛。P7 自动化
 
 ```text
 项目内垂直语义分析
-→ docs/P8A_HEAVE_TOUCHDOWN_PLAN.md
+→ docs/plans/P8A_HEAVE_TOUCHDOWN_PLAN.md
 → 测试
 → 最小实现
 → static/constant02 回归
 → H1/H2/H3 分级 SITL
-→ docs/P8A_HEAVE_TOUCHDOWN_VALIDATION.md
+→ docs/validation/P8A_HEAVE_TOUCHDOWN_VALIDATION.md
 ```
 
 P8A 若只修正已有相对垂直速度语义和 `TOUCHDOWN_HOLD` 随动保持，可先做项目内技术分析。若引入预测控制、扰动观测器、波浪预测器或新接触动力学模型，则必须先完成完整外部综述。
@@ -158,7 +158,7 @@ P8A 至少满足：
 
 ```text
 docs/research/P8B_RELATIVE_MPC_REVIEW.md
-docs/P8B_RELATIVE_MPC_PLAN.md
+docs/plans/P8B_RELATIVE_MPC_PLAN.md
 ```
 
 执行顺序：
@@ -171,15 +171,15 @@ docs/P8B_RELATIVE_MPC_PLAN.md
 → 候选方案比较
 → 求解器选型与依赖确认
 → RESEARCH PASS
-→ docs/P8B_RELATIVE_MPC_PLAN.md
+→ docs/plans/P8B_RELATIVE_MPC_PLAN.md
 → PLAN PASS
 → 测试
 → 最小实现
 → 分级 SITL
-→ docs/P8B_RELATIVE_MPC_VALIDATION.md
+→ docs/validation/P8B_RELATIVE_MPC_VALIDATION.md
 ```
 
-可验证综述、独立计划、固定依赖、生产实现、全量测试和分级真实 SITL 已完成。安全高度 15/15、安全下降 6/6、最终代码真实触地 6/6 PASS，验收见 `docs/P8B_RELATIVE_MPC_VALIDATION.md`。
+可验证综述、独立计划、固定依赖、生产实现、全量测试和分级真实 SITL 已完成。安全高度 15/15、安全下降 6/6、最终代码真实触地 6/6 PASS，验收见 `docs/validation/P8B_RELATIVE_MPC_VALIDATION.md`。
 
 ### 5.2 第一版边界
 
@@ -223,12 +223,12 @@ docs/research/P8C_TILTED_DECK_LANDING_REVIEW.md
 → 倾斜甲板几何模型
 → 候选策略比较
 → RESEARCH PASS
-→ docs/P8C_TILTED_DECK_LANDING_PLAN.md
+→ docs/plans/P8C_TILTED_DECK_LANDING_PLAN.md
 → PLAN PASS
 → 固定小倾角 T1
 → 必要时再做法向姿态对齐调研和实现
 → 动态低频 roll/pitch
-→ docs/P8C_TILTED_DECK_LANDING_VALIDATION.md
+→ docs/validation/P8C_TILTED_DECK_LANDING_VALIDATION.md
 ```
 
 ### 6.2 第一版策略选择原则
@@ -254,7 +254,7 @@ T1 未通过，不进入动态 roll/pitch；combined 最后处理。
 P9 开始前新增：
 
 ```text
-docs/P9_UNIFIED_EVALUATION_PLAN.md
+docs/plans/P9_UNIFIED_EVALUATION_PLAN.md
 ```
 
 P9 复用并扩展 P7 自动化，统一处理：
@@ -296,4 +296,4 @@ P8C: not started
 P9: not started
 ```
 
-P8A 验收见 `docs/P8A_HEAVE_TOUCHDOWN_VALIDATION.md`。P8B 已完成 OSQP `v1.0.0` + OsqpEigen `v0.11.2` 固定依赖、水平相对 MPC、完整 P4.7 fallback、`TERMINAL_PHASE_P47` 安全 handoff、诊断、评测扩展、`271` 项全工作区测试和严格顺序真实 SITL，验收见 `docs/P8B_RELATIVE_MPC_VALIDATION.md`。当前默认下一任务是创建并完成 `docs/research/P8C_TILTED_DECK_LANDING_REVIEW.md`；P8C 未达到 `RESEARCH PASS` 并保存独立计划前，不得直接编写倾斜甲板终端控制生产代码。
+P8A 验收见 `docs/validation/P8A_HEAVE_TOUCHDOWN_VALIDATION.md`。P8B 已完成 OSQP `v1.0.0` + OsqpEigen `v0.11.2` 固定依赖、水平相对 MPC、完整 P4.7 fallback、`TERMINAL_PHASE_P47` 安全 handoff、诊断、评测扩展、`271` 项全工作区测试和严格顺序真实 SITL，验收见 `docs/validation/P8B_RELATIVE_MPC_VALIDATION.md`。当前默认下一任务是创建并完成 `docs/research/P8C_TILTED_DECK_LANDING_REVIEW.md`；P8C 未达到 `RESEARCH PASS` 并保存独立计划前，不得直接编写倾斜甲板终端控制生产代码。

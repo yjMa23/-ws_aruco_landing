@@ -355,7 +355,7 @@ MPC 持续进入接触阶段时，H1 出现临界离板或接触压入边界。�
 
 ## 10. PASS 判定
 
-逐项满足 `docs/P8B_RELATIVE_MPC_PLAN.md` 门槛：
+逐项满足 `docs/plans/P8B_RELATIVE_MPC_PLAN.md` 门槛：
 
 - static、constant02、constant、sinusoidal、H1 安全高度 3/3；
 - constant02 下降到 `0.50 m` 3/3；

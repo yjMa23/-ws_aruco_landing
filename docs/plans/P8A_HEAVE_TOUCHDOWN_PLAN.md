@@ -394,7 +394,7 @@ P8A 的 hold 判据必须检查“相对高度稳定”，不能继续沿用 P6B
 计划新增：
 
 ```text
-docs/P8A_HEAVE_TOUCHDOWN_PLAN.md
+docs/plans/P8A_HEAVE_TOUCHDOWN_PLAN.md
 src/aruco_precision_landing_cpp/include/aruco_precision_landing_cpp/touchdown_hold_controller.hpp
 src/aruco_precision_landing_cpp/src/touchdown_hold_controller.cpp
 src/aruco_precision_landing_cpp/test/touchdown_hold_controller_test.cpp
@@ -418,9 +418,9 @@ scripts/start_sitl.sh
 scripts/evaluate_p6b_touchdown.py（仅提取复用接口或兼容新 hold 语义）
 README.md
 AGENTS.md
-docs/NEXT_DEVELOPMENT_PLAN.md
-docs/TRADITIONAL_BASELINE_PLAN.md
-docs/P8_ADVANCED_LANDING_ROADMAP.md
+docs/plans/NEXT_DEVELOPMENT_PLAN.md
+docs/plans/TRADITIONAL_BASELINE_PLAN.md
+docs/plans/P8_ADVANCED_LANDING_ROADMAP.md
 ```
 
 不得修改与 P8A 无关的 P4.7 水平控制算法和参数。

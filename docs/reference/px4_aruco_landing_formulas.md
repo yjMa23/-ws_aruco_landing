@@ -1,6 +1,6 @@
 # PX4 ArUco 精准降落控制公式说明
 
-本文档对应 [`px4_aruco_landing_node.hpp`](../src/aruco_precision_landing_cpp/include/aruco_precision_landing_cpp/px4_aruco_landing_node.hpp) 和 [`px4_aruco_landing_node.cpp`](../src/aruco_precision_landing_cpp/src/px4_aruco_landing_node.cpp)，描述当前状态机真实使用的坐标变换、阈值和设定点更新公式。
+本文档对应 [`px4_aruco_landing_node.hpp`](../../src/aruco_precision_landing_cpp/include/aruco_precision_landing_cpp/px4_aruco_landing_node.hpp) 和 [`px4_aruco_landing_node.cpp`](../../src/aruco_precision_landing_cpp/src/px4_aruco_landing_node.cpp)，描述当前状态机真实使用的坐标变换、阈值和设定点更新公式。
 
 ## 1. 符号与坐标系
 

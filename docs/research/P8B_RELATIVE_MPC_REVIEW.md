@@ -9,7 +9,7 @@ VALIDATION PASS
 依赖核验、实现与验收日期：2026-08-01
 ```
 
-调研、项目模型、候选方案、PX4 接口和回退策略已经明确。初始环境确实没有可供 C++/CMake 使用的 QP 求解器；现已从官方仓库按固定 tag 构建 OSQP `v1.0.0` 与 OsqpEigen `v0.11.2`，安装到独立用户前缀，并完成最小求解示例、生产实现、全工作区测试和严格顺序的真实 PX4 SITL。P8B 已达到 `VALIDATION PASS`，详细结果见 `docs/P8B_RELATIVE_MPC_VALIDATION.md`。
+调研、项目模型、候选方案、PX4 接口和回退策略已经明确。初始环境确实没有可供 C++/CMake 使用的 QP 求解器；现已从官方仓库按固定 tag 构建 OSQP `v1.0.0` 与 OsqpEigen `v0.11.2`，安装到独立用户前缀，并完成最小求解示例、生产实现、全工作区测试和严格顺序的真实 PX4 SITL。P8B 已达到 `VALIDATION PASS`，详细结果见 `docs/validation/P8B_RELATIVE_MPC_VALIDATION.md`。
 
 ## 1. 研究问题
 
@@ -200,4 +200,4 @@ P4.7 保持默认；MPC 显式启用。节点并行维护完整 P4.7 控制器�
 
 研究问题、模型、约束、候选方案、求解器、PX4 接口、回退和论文映射均已明确，标记 `RESEARCH PASS`。固定依赖、纯 C++ 控制器、显式模式、完整 P4.7 fallback、终端安全 handoff、ROS 2 诊断、启动脚本和评测扩展均已实现，全工作区 `271` 项测试通过，标记 `IMPLEMENTATION PASS`。
 
-已按 static → constant02 → constant → sinusoidal → H1 → 安全下降 → 真实触地的顺序完成真实 PX4 SITL、Bag 和 P4.7 对比。安全高度 15/15、安全下降 6/6、最终代码真实触地 6/6 PASS，所有有效 MPC 轮次均为 0 deadline miss、0 solver failure、0 unexpected fallback。因此标记 `VALIDATION PASS`，验收文档为 `docs/P8B_RELATIVE_MPC_VALIDATION.md`。
+已按 static → constant02 → constant → sinusoidal → H1 → 安全下降 → 真实触地的顺序完成真实 PX4 SITL、Bag 和 P4.7 对比。安全高度 15/15、安全下降 6/6、最终代码真实触地 6/6 PASS，所有有效 MPC 轮次均为 0 deadline miss、0 solver failure、0 unexpected fallback。因此标记 `VALIDATION PASS`，验收文档为 `docs/validation/P8B_RELATIVE_MPC_VALIDATION.md`。

@@ -24,9 +24,9 @@
 详细需求、目录结构、状态机、实验场景和验收指标见：
 
 ```text
-docs/TRADITIONAL_BASELINE_PLAN.md
-docs/NEXT_DEVELOPMENT_PLAN.md
-docs/COORDINATE_FRAMES.md
+docs/plans/TRADITIONAL_BASELINE_PLAN.md
+docs/plans/NEXT_DEVELOPMENT_PLAN.md
+docs/reference/COORDINATE_FRAMES.md
 ```
 
 ---
@@ -57,67 +57,67 @@ docs/COORDINATE_FRAMES.md
   * 已实现 `WAIT_DECK_GNSS`、`RENDEZVOUS_GNSS` 和 `ACQUIRE_ARUCO`。
   * 已实现船舶 WGS84 转 PX4 local NED、跳变拒绝、超时回退和目标限幅。
   * 搜索中心随实时船舶 GNSS 移动。
-  * 验收记录见 `docs/P2C_GNSS_RENDEZVOUS_VALIDATION.md`。
+  * 验收记录见 `docs/validation/P2C_GNSS_RENDEZVOUS_VALIDATION.md`。
 
 * `P2D` GNSS—视觉接管与下降前恢复。
   * 已将完整相机外参和 PX4 `VehicleOdometry` 接入视觉坐标链。
   * 已实现 `VISUAL_HANDOVER`、`TRACK_TARGET` 和 `RECOVER_TO_GNSS`。
   * 已实现 GNSS—视觉一致性、测量跳变拒绝、线性接管、短时保持和长时恢复。
-  * 全程保持安全高度，不下降；验收记录见 `docs/P2D_GNSS_VISION_HANDOVER_VALIDATION.md`。
+  * 全程保持安全高度，不下降；验收记录见 `docs/validation/P2D_GNSS_VISION_HANDOVER_VALIDATION.md`。
 
 * `P3` 视觉状态估计与短时预测。
   * 已实现独立三维常速度 Kalman Filter 和受限常速度预测器。
   * 使用视觉采样时间处理滤波 `dt`，处理乱序、离群点、短时丢帧和长时重初始化。
   * 已发布 `/landing/estimated_deck_odometry` 和 `/landing/predicted_deck_pose`。
-  * 验收记录见 `docs/P3_VISUAL_STATE_ESTIMATION_VALIDATION.md`。
+  * 验收记录见 `docs/validation/P3_VISUAL_STATE_ESTIMATION_VALIDATION.md`。
 
 * `P4` 安全高度移动甲板水平跟踪。
   * 已实现原始视觉、估计位置、估计位置+速度前馈、预测位置+速度前馈四种模式。
   * 默认将预测位置写入 PX4 position setpoint，并将甲板速度与相对速度阻尼写入水平 velocity feedforward。
   * 已实现位置目标、前馈速度和前馈加速度限制，以及短时丢失衰减和长时 GNSS 恢复。
-  * 已完成静止、0.2 m/s、0.4 m/s 和 XY 正弦真实 PX4 SITL 验收，见 `docs/P4_MOVING_TARGET_TRACKING_VALIDATION.md`。
+  * 已完成静止、0.2 m/s、0.4 m/s 和 XY 正弦真实 PX4 SITL 验收，见 `docs/validation/P4_MOVING_TARGET_TRACKING_VALIDATION.md`。
 
 * `P4.5` 实验可复现与视觉时间对齐。
   * 已新增 `scripts/evaluate_p4_bag.py`，统一计算 P4 rosbag 指标，`bags/` 默认不进入 Git。
   * 已统一 SITL 下 ArUco 检测器和降落控制器的 `use_sim_time`。
   * 已实现 `VehiclePoseHistory`、PX4→ROS 时间映射和图像采样时刻位姿插值。
-  * 代码、103 项测试和静止、0.2 m/s、0.4 m/s、XY 正弦完整 PX4 SITL 回归均通过，见 `docs/P4_5_TIME_ALIGNMENT_VALIDATION.md`。
+  * 代码、103 项测试和静止、0.2 m/s、0.4 m/s、XY 正弦完整 PX4 SITL 回归均通过，见 `docs/validation/P4_5_TIME_ALIGNMENT_VALIDATION.md`。
 
 * `P5A` 动态甲板与规则式着陆窗口。
   * 已实现升沉、横摇/纵摇和组合甲板轨迹，并发布完整姿态、线速度和角速度 Ground Truth。
   * 已实现基于 Marker 向上法向量的甲板倾角估计，Ground Truth 只用于离线比较。
   * 已实现 `LandingWindow` 迟滞、连续满足时间和多原因拒绝，并接入 `WAIT_LANDING_WINDOW`。
-  * 静止、0.4 m/s、升沉、倾斜和组合场景 SITL 验收通过，全程保持 `5 m`，见 `docs/P5A_DECK_DYNAMICS_AND_LANDING_WINDOW_VALIDATION.md`。
+  * 静止、0.4 m/s、升沉、倾斜和组合场景 SITL 验收通过，全程保持 `5 m`，见 `docs/validation/P5A_DECK_DYNAMICS_AND_LANDING_WINDOW_VALIDATION.md`。
 
 * `P5B` 相对甲板高度分阶段下降。
   * 已实现 `RelativeDescentController`、`DESCEND`、`TEST_HEIGHT_HOLD` 和 `RECOVER_CLIMB`。
   * 已完成静止、0.4 m/s 匀速和升沉甲板下降到 `0.50 m` 安全测试高度的 PX4 SITL 验收。
   * 已验证组合运动窗口未打开时不会绕过条件下降，严重失效时可恢复到 `2.0 m`。
   * 恢复后会锁止再次下降，必须重新完成视觉接管或重启任务才解除。
-  * 默认 `descent.enabled=false`，不触地、不 `NAV_LAND`、不 Disarm，见 `docs/P5B_RELATIVE_DESCENT_VALIDATION.md`。
+  * 默认 `descent.enabled=false`，不触地、不 `NAV_LAND`、不 Disarm，见 `docs/validation/P5B_RELATIVE_DESCENT_VALIDATION.md`。
 
 * `P5C` 低高度垂直状态估计与标定。
   * 已将 `x500_mono_cam_down` 相机外参修正为 FRD `[0, 0, 0.14]`，消除约 `0.24 m` 垂直系统偏差。
   * 已实现独立 `VerticalStateEstimator`、P5C 离线评测和垂直状态调试话题。
   * 已将甲板垂直速度前馈 `gain=1.0` 设为相对下降默认；`--disable-vertical-ff` 保留用于消融。
-  * 静止 `0.50 m` 和升沉 `0.70 m` 验收通过，见 `docs/P5C_VERTICAL_STATE_ESTIMATION_VALIDATION.md`。
+  * 静止 `0.50 m` 和升沉 `0.70 m` 验收通过，见 `docs/validation/P5C_VERTICAL_STATE_ESTIMATION_VALIDATION.md`。
 
 * `P6A` 多源触地候选与确认。
   * 已实现独立 `TouchdownDetector`，联合 PX4 land detector、视觉相对高度和垂直速度证据。
   * 视觉高度不能单独确认；候选必须连续满足并具备迟滞，确认后锁存。
   * 已并行接入四个触地调试话题，但不改变状态机、TrajectorySetpoint 或 Land/Disarm。
-  * 静止 `0.50 m`、升沉 `0.70 m` 和恢复爬升三类负向 SITL 验收均无候选和确认，见 `docs/P6_TOUCHDOWN_CONFIRMATION_VALIDATION.md`。
+  * 静止 `0.50 m`、升沉 `0.70 m` 和恢复爬升三类负向 SITL 验收均无候选和确认，见 `docs/validation/P6_TOUCHDOWN_CONFIRMATION_VALIDATION.md`。
 
 * `P6B` 最终下降与真实接触功能。
   * 已实现 `FINAL_DESCENT`、`TOUCHDOWN_CANDIDATE_HOLD`、`TOUCHDOWN_HOLD`、分段最终下降、动态平台相对水平速度证据和视觉短时丢帧去抖。
   * 四尺度有状态 Marker 选择器和项目内 `near=0.02 m` 相机模型已接入。
-  * 2026-07-30 已完成终端落板修补与复验：参考在安全终端段继续降到 `0.05 m`，static/constant02 均进入 `TOUCHDOWN_CANDIDATE_HOLD → TOUCHDOWN_HOLD` 并保持 10 秒，P6B 正向验收 PASS，见 `docs/P6B_FINAL_DESCENT_AND_TOUCHDOWN_VALIDATION.md`。
+  * 2026-07-30 已完成终端落板修补与复验：参考在安全终端段继续降到 `0.05 m`，static/constant02 均进入 `TOUCHDOWN_CANDIDATE_HOLD → TOUCHDOWN_HOLD` 并保持 10 秒，P6B 正向验收 PASS，见 `docs/validation/P6B_FINAL_DESCENT_AND_TOUCHDOWN_VALIDATION.md`。
 
 * `P7-lite` 批量评测开发基线。
   * 已实现单轮运行、顺序批量、seed 展开、resume、统一失败分类、轻量 Bag、参数快照和基础聚合。
   * 第一版支持 static 和 constant02；2026-07-30 已完成真实 3+3 冒烟，6/6 PASS、0 failure，录包、清理、评测和聚合结果完整。
   * P7-lite 已冻结为高级功能开发基线；static 20 次 + constant02 20 次不再是进入 P8A 的硬门槛，配置和自动化保留，大规模实验延后到 P9。
-  * 执行计划见 `docs/P7_BATCH_EVALUATION_PLAN.md`，高级路线见 `docs/P8_ADVANCED_LANDING_ROADMAP.md`。
+  * 执行计划见 `docs/plans/P7_BATCH_EVALUATION_PLAN.md`，高级路线见 `docs/plans/P8_ADVANCED_LANDING_ROADMAP.md`。
 
 现有运行包：
 
@@ -128,9 +128,10 @@ docs/COORDINATE_FRAMES.md
   * 订阅 PX4 状态、船舶 GNSS、ArUco 完整位姿和可见性。
   * 通过 PX4 Offboard 位置设定点完成起飞、GNSS 会合、移动搜索、视觉接管、移动甲板水平跟踪和 GNSS 恢复。
   * 估计并发布甲板视觉位置、速度、协方差、短时预测位置和视觉倾角。
-  * 在 `WAIT_LANDING_WINDOW`、`DESCEND`、`TEST_HEIGHT_HOLD` 和 `RECOVER_CLIMB` 中持续运行 P4.7 水平跟踪。
-  * P5B 仅在显式启用时下降到 `0.50 m` 安全测试高度；P5C 垂直速度前馈默认启用但只在相对下降状态生效。
-  * 默认不触地、不 Land、不 Disarm。
+  * 默认运行 P4.7 水平跟踪；显式选择时运行 P8B 水平相对 MPC，并在失败或终端阶段安全回退 P4.7。
+  * 相对下降和最终下降仅在显式授权时启用；P5C 垂直速度前馈只在相对下降状态生效。
+  * 已支持 static、纯水平运动和 P8A 分级升沉场景的真实接触与接触后保持。
+  * 默认不下降，不发送 `NAV_LAND`，不自动 Disarm。
   * 旧静态下降代码仅作为历史基线保留且从主路径不可达。
 
 * `moving_deck_sim`
@@ -138,7 +139,7 @@ docs/COORDINATE_FRAMES.md
   * 仿真传感器节点将真值处理为船舶 GNSS 位置和 ENU 速度。
   * Ground Truth 禁止进入降落控制器。
 
-当前缺少：
+高级阶段状态与剩余工作：
 
 * `P8A` 已完成升沉甲板最终下降、真实接触和接触后相对保持验收，H1 3/3、H2 3/3 PASS。
 * `P8B` 已完成固定 OSQP/OsqpEigen 依赖、4 状态水平相对 MPC、约束、warm start、完整 P4.7 fallback、`TERMINAL_PHASE_P47` 安全 handoff、诊断、`271` 项全工作区测试和严格顺序真实 SITL；安全高度 15/15、下降 6/6、最终代码真实触地 6/6 PASS，状态为 `VALIDATION PASS`。
@@ -170,8 +171,8 @@ Codex 必须按以下顺序推进，除非用户明确改变优先级：
 16. `P6A`：多源触地候选、确认和负向验收，已完成。
 17. `P6B`：最终下降与终端接触确认已通过 static/constant02 单轮和 P7 3+3 冒烟。
 18. `P7-lite`：批量评测管线和真实 3+3 冒烟已完成并冻结；20+20 延后到 P9。
-19. `P8A`：升沉甲板最终下降与真实接触。
-20. `P8B`：水平相对运动线性 MPC，综述、固定依赖、实现、全量测试和严格顺序真实 SITL 已完成，验收见 `docs/P8B_RELATIVE_MPC_VALIDATION.md`。
+19. `P8A`：升沉甲板最终下降与真实接触，已完成 H1/H2 真实验收。
+20. `P8B`：水平相对运动线性 MPC，综述、固定依赖、实现、全量测试和严格顺序真实 SITL 已完成，验收见 `docs/validation/P8B_RELATIVE_MPC_VALIDATION.md`。
 21. `P8C`：固定倾斜及低频 roll/pitch 甲板降落，必须先完成综述和几何模型。
 22. `P9`：统一批量评测、消融和论文实验。
 

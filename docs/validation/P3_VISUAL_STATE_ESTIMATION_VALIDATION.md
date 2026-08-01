@@ -17,7 +17,7 @@
 详细设计见：
 
 ```text
-docs/P3_VISUAL_STATE_ESTIMATION_PLAN.md
+docs/plans/P3_VISUAL_STATE_ESTIMATION_PLAN.md
 ```
 
 ---

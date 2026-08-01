@@ -200,4 +200,4 @@ linear.x / linear.y = 过滤后的 North / East 甲板加速度
 - 按计划仅进行一轮小修正，将 `max_gain` 提升到 `1.2`。
 - 最终参数在 0.4 m/s 匀速和 XY 正弦场景均通过门槛。
 - 自适应调度已设为统一默认，固定增益保留为消融入口。
-- 详细验收见 `docs/P4_7_ADAPTIVE_GAIN_SCHEDULING_VALIDATION.md`。
+- 详细验收见 `docs/validation/P4_7_ADAPTIVE_GAIN_SCHEDULING_VALIDATION.md`。
