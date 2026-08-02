@@ -25,11 +25,13 @@ import run_batch_experiments  # noqa: E402
 import run_single_experiment  # noqa: E402
 from p7_experiment_utils import (  # noqa: E402
     classify_failure,
+    combination_is_applicable,
     episode_result_complete,
     expand_seeds,
     load_batch_config,
     make_batch_id,
     make_episode_id,
+    metric_value,
     read_evaluation_json,
     summarize_values,
 )
@@ -661,6 +663,341 @@ class P7ExperimentTests(unittest.TestCase):
             popen.assert_not_called()
             self.assertTrue(result["dry_run"])
             self.assertFalse((Path(directory) / "dry-episode").exists())
+
+    def test_p9_method_config_and_episode_id(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "p9.yaml"
+            config_path.write_text(
+                textwrap.dedent(
+                    """
+                    name: p9-test
+                    output_root: results
+                    experiments:
+                      - method: B1
+                        scenario: constant02
+                        profile: safe-altitude
+                        repetitions: 2
+                        seeds: [11, 12]
+                      - method: B2
+                        scenario: static
+                        profile: safe-altitude
+                        repetitions: 1
+                        seeds: [21]
+                    """
+                ),
+                encoding="utf-8",
+            )
+            config = load_batch_config(config_path, workspace_dir=root)
+            self.assertEqual(config.experiments[0].prediction_horizon_s, 0.0)
+            self.assertEqual(config.experiments[1].velocity_feedforward_gain, 0.0)
+            plan = run_batch_experiments.expanded_plan(config, "p9-fixed")
+            self.assertIn("B1_constant02_safe_altitude", plan[0]["episode_id"])
+            self.assertEqual(plan[0]["method"], "B1")
+
+    def test_p9_duplicate_combination_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "duplicate.yaml"
+            path.write_text(
+                textwrap.dedent(
+                    """
+                    experiments:
+                      - method: B1
+                        scenario: static
+                        profile: safe-altitude
+                        repetitions: 1
+                        seeds: [1]
+                      - method: B1
+                        scenario: static
+                        profile: safe-altitude
+                        repetitions: 1
+                        seeds: [2]
+                    """
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "duplicate"):
+                load_batch_config(path, workspace_dir=Path(directory))
+
+    def test_p9_incompatible_matrix_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "bad.yaml"
+            path.write_text(
+                textwrap.dedent(
+                    """
+                    experiments:
+                      - method: B5
+                        scenario: constant02
+                        profile: touchdown
+                        repetitions: 1
+                        seeds: [1]
+                    """
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "not safety-authorized"):
+                load_batch_config(path, workspace_dir=Path(directory))
+
+    def test_p9_negative_and_dynamic_tilt_remain_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            for scenario in ("tilt_roll_neg_2deg", "rollpitch", "combined"):
+                path = Path(directory) / f"{scenario}.yaml"
+                path.write_text(
+                    textwrap.dedent(
+                        f"""
+                        experiments:
+                          - method: B5
+                            scenario: {scenario}
+                            profile: touchdown
+                            repetitions: 1
+                            seeds: [1]
+                        """
+                    ),
+                    encoding="utf-8",
+                )
+                with self.assertRaises(ValueError):
+                    load_batch_config(path, workspace_dir=Path(directory))
+
+    def test_p9_b3_b4_and_b5_frozen_parameters(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "methods.yaml"
+            path.write_text(
+                textwrap.dedent(
+                    """
+                    experiments:
+                      - method: B3
+                        scenario: sinusoidal
+                        profile: safe-altitude
+                        repetitions: 1
+                        seeds: [1]
+                      - method: B4
+                        scenario: heave_h1
+                        profile: touchdown
+                        repetitions: 1
+                        seeds: [2]
+                      - method: B5
+                        scenario: tilt_pitch_pos_2deg
+                        profile: touchdown
+                        repetitions: 1
+                        seeds: [3]
+                    """
+                ),
+                encoding="utf-8",
+            )
+            config = load_batch_config(path, workspace_dir=Path(directory))
+            self.assertEqual(config.experiments[0].tracking_mode, "RELATIVE_MPC")
+            self.assertTrue(config.experiments[1].vertical_velocity_feedforward_enabled)
+            self.assertEqual(config.experiments[2].terminal_stabilization_mode, "active")
+
+    def test_p9_method_identity_cannot_be_redefined(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "redefine.yaml"
+            path.write_text(
+                textwrap.dedent(
+                    """
+                    experiments:
+                      - method: B1
+                        scenario: static
+                        profile: safe-altitude
+                        repetitions: 1
+                        seeds: [1]
+                        prediction_horizon_s: 0.1
+                    """
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "cannot override"):
+                load_batch_config(path, workspace_dir=Path(directory))
+
+    def test_p9_not_applicable_is_not_executed_or_failed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "na.yaml"
+            path.write_text(
+                textwrap.dedent(
+                    """
+                    experiments:
+                      - method: B1
+                        scenario: constant
+                        profile: touchdown
+                        applicability: NOT_APPLICABLE
+                        repetitions: 2
+                        seeds: [1, 2]
+                    """
+                ),
+                encoding="utf-8",
+            )
+            config = load_batch_config(path, workspace_dir=Path(directory))
+            self.assertEqual(config.experiments[0].applicability, "NOT_APPLICABLE")
+            self.assertEqual(run_batch_experiments.expanded_plan(config, "na"), [])
+
+    def test_p9_evaluator_auto_routing(self) -> None:
+        self.assertEqual(
+            run_single_experiment.evaluator_path_for_scenario(
+                WORKSPACE_DIR,
+                "sinusoidal",
+                experiment_profile="safe-altitude",
+            ).name,
+            "evaluate_p4_bag.py",
+        )
+        self.assertEqual(
+            run_single_experiment.evaluator_path_for_scenario(
+                WORKSPACE_DIR,
+                "constant02",
+                experiment_profile="safe-descent",
+            ).name,
+            "evaluate_p5b_bag.py",
+        )
+        self.assertEqual(
+            run_single_experiment.evaluator_path_for_scenario(
+                WORKSPACE_DIR,
+                "tilt_roll_pos_2deg",
+                use_p8c_evaluator=True,
+                experiment_profile="touchdown",
+            ).name,
+            "evaluate_p8c_tilted_deck.py",
+        )
+
+    def test_p9_start_command_includes_method_parameters(self) -> None:
+        command = run_single_experiment.build_start_command(
+            WORKSPACE_DIR,
+            "constant02",
+            1,
+            Path("/tmp/p9-bag"),
+            "close-range",
+            False,
+            "PREDICTED_POSITION_VELOCITY_FF",
+            "safe-altitude",
+            "disabled",
+            0.0,
+            0.0,
+            False,
+            1.0,
+            0.6,
+        )
+        self.assertEqual(command[command.index("--prediction-horizon") + 1], "0.0")
+        self.assertEqual(command[command.index("--velocity-ff-gain") + 1], "0.0")
+        self.assertIn("--disable-vertical-ff", command)
+        self.assertNotIn("--enable-final-descent", command)
+
+    def test_p9_resume_fingerprint_detects_code_change(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            episode_dir = Path(directory)
+            evaluation = episode_dir / "evaluation.json"
+            evaluation.write_text(json.dumps({"positive_touchdown_passed": True}))
+            (episode_dir / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "completed": True,
+                        "success": True,
+                        "failure_reason": "NONE",
+                        "evaluation_path": str(evaluation),
+                        "git_commit": "old",
+                        "dirty_worktree": False,
+                    }
+                )
+            )
+            self.assertTrue(episode_result_complete(episode_dir))
+            self.assertFalse(
+                episode_result_complete(
+                    episode_dir,
+                    expected_git_commit="new",
+                    expected_dirty_worktree=False,
+                )
+            )
+
+    def test_p9_safe_altitude_primary_gate(self) -> None:
+        self.assertTrue(
+            run_single_experiment.evaluators_passed(
+                {
+                    "horizontal_position_rmse_m": 0.04,
+                    "maximum_horizontal_error_m": 0.10,
+                    "gnss_recovery_count": 0,
+                    "mpc_non_solved_status_count": 0,
+                    "mpc_deadline_miss_count": 0,
+                },
+                None,
+                experiment_profile="safe-altitude",
+                scenario="constant02",
+            )
+        )
+        self.assertFalse(
+            run_single_experiment.evaluators_passed(
+                {
+                    "horizontal_position_rmse_m": 0.20,
+                    "maximum_horizontal_error_m": 0.40,
+                    "gnss_recovery_count": 0,
+                },
+                None,
+                experiment_profile="safe-altitude",
+                scenario="constant02",
+            )
+        )
+
+    def test_p9_aggregate_groups_and_nonfinite_values(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            batch_dir = Path(directory)
+            for index, method in enumerate(("B0", "B3"), start=1):
+                episode_dir = batch_dir / f"episode-{index}"
+                episode_dir.mkdir()
+                evaluation_path = episode_dir / "evaluation.json"
+                evaluation_path.write_text(
+                    json.dumps(
+                        {
+                            "positive_touchdown_passed": True,
+                            "horizontal_error_rmse_m": 0.1 * index,
+                            "landing_time_s": 5.0 + index,
+                            "nav_land_commands": 0,
+                            "disarm_commands": 0,
+                            "unused_nan": float("nan"),
+                        }
+                    )
+                )
+                (episode_dir / "manifest.json").write_text(
+                    json.dumps(
+                        {
+                            "episode_id": episode_dir.name,
+                            "method": method,
+                            "scenario": "constant02",
+                            "profile": "touchdown",
+                            "seed": index,
+                            "completed": True,
+                            "success": True,
+                            "failure_reason": "NONE",
+                            "evaluation_path": str(evaluation_path),
+                        }
+                    )
+                )
+            summary = aggregate_results.aggregate(
+                batch_dir, generate_plot_files=False
+            )
+            self.assertEqual(summary["overall"]["success_count"], 2)
+            self.assertIn("B0", summary["by_method"])
+            self.assertIn("B3|constant02", summary["by_method_and_scenario"])
+            self.assertTrue((batch_dir / "by_method.csv").is_file())
+            self.assertTrue((batch_dir / "P9_RESULTS_SUMMARY.md").is_file())
+            self.assertEqual(summary["safety"]["nav_land_count"], 0)
+
+    def test_metric_alias_and_null_handling(self) -> None:
+        self.assertEqual(
+            metric_value({"horizontal_position_rmse_m": 0.25}, "horizontal_error_rmse_m"),
+            0.25,
+        )
+        self.assertIsNone(metric_value({"horizontal_error_rmse_m": None}, "horizontal_error_rmse_m"))
+        self.assertIsNone(metric_value({"horizontal_error_rmse_m": float("inf")}, "horizontal_error_rmse_m"))
+        summary = summarize_values([1.0, float("nan"), 3.0])
+        self.assertEqual(summary["count"], 2)
+        self.assertEqual(summary["min"], 1.0)
+        self.assertEqual(summary["max"], 3.0)
+
+    def test_frozen_applicability_examples(self) -> None:
+        self.assertTrue(combination_is_applicable("B4", "heave_h1", "touchdown"))
+        self.assertTrue(
+            combination_is_applicable(
+                "B5", "tilt_roll_pos_2deg", "touchdown"
+            )
+        )
+        self.assertFalse(combination_is_applicable("B4", "heave_h2", "touchdown"))
+        self.assertFalse(combination_is_applicable("B5", "constant02", "touchdown"))
 
 
 if __name__ == "__main__":

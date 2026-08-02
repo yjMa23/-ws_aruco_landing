@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import queue
 import shlex
@@ -22,9 +23,13 @@ import yaml
 
 from p7_experiment_utils import (
     FAILURE_TYPES,
+    SUPPORTED_BAG_POLICIES,
+    SUPPORTED_EVALUATORS,
+    SUPPORTED_METHODS,
     SUPPORTED_SCENARIOS,
     atomic_write_json,
     classify_failure,
+    combination_is_applicable,
     make_batch_id,
     make_episode_id,
     read_evaluation_json,
@@ -111,6 +116,7 @@ def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run one P7/P8A touchdown SITL episode."
     )
+    parser.add_argument("--method", choices=SUPPORTED_METHODS, default="B0")
     parser.add_argument("--scenario", choices=SUPPORTED_SCENARIOS, required=True)
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--episode-timeout", type=float, default=600.0)
@@ -127,6 +133,22 @@ def parse_arguments() -> argparse.Namespace:
         choices=TRACKING_MODES,
         default="PREDICTED_POSITION_VELOCITY_FF",
     )
+    parser.add_argument("--prediction-horizon", type=float, default=0.10)
+    parser.add_argument("--velocity-ff-gain", type=float, default=1.0)
+    vertical_group = parser.add_mutually_exclusive_group()
+    vertical_group.add_argument(
+        "--enable-vertical-ff",
+        dest="vertical_ff_enabled",
+        action="store_true",
+    )
+    vertical_group.add_argument(
+        "--disable-vertical-ff",
+        dest="vertical_ff_enabled",
+        action="store_false",
+    )
+    parser.set_defaults(vertical_ff_enabled=True)
+    parser.add_argument("--vertical-ff-gain", type=float, default=1.0)
+    parser.add_argument("--vertical-ff-max", type=float, default=0.60)
     parser.add_argument(
         "--experiment-profile",
         choices=EXPERIMENT_PROFILES,
@@ -138,6 +160,22 @@ def parse_arguments() -> argparse.Namespace:
         choices=TERMINAL_STABILIZATION_MODES,
         default="disabled",
         help="P8C-4 terminal stabilization mode represented by this episode",
+    )
+    parser.add_argument(
+        "--evaluator",
+        choices=SUPPORTED_EVALUATORS,
+        default="auto",
+        help="explicit evaluator route or automatic selection",
+    )
+    parser.add_argument(
+        "--success-bag-policy",
+        choices=SUPPORTED_BAG_POLICIES,
+        default="lightweight",
+    )
+    parser.add_argument(
+        "--failure-bag-policy",
+        choices=SUPPORTED_BAG_POLICIES,
+        default="diagnostic",
     )
     parser.add_argument("--record-camera-debug", action="store_true")
     parser.add_argument(
@@ -257,6 +295,11 @@ def build_start_command(
     tracking_mode: str = "PREDICTED_POSITION_VELOCITY_FF",
     experiment_profile: str = "touchdown",
     terminal_stabilization_mode: str = "disabled",
+    prediction_horizon_s: float = 0.10,
+    velocity_feedforward_gain: float = 1.0,
+    vertical_velocity_feedforward_enabled: bool = True,
+    vertical_velocity_feedforward_gain: float = 1.0,
+    vertical_velocity_feedforward_max_mps: float = 0.60,
 ) -> list[str]:
     command = [
         str(workspace_dir / "scripts" / "start_sitl.sh"),
@@ -272,7 +315,20 @@ def build_start_command(
         camera_model,
         "--tracking-mode",
         tracking_mode,
+        "--prediction-horizon",
+        str(prediction_horizon_s),
+        "--velocity-ff-gain",
+        str(velocity_feedforward_gain),
+        "--vertical-ff-gain",
+        str(vertical_velocity_feedforward_gain),
+        "--vertical-ff-max",
+        str(vertical_velocity_feedforward_max_mps),
     ]
+    command.append(
+        "--enable-vertical-ff"
+        if vertical_velocity_feedforward_enabled
+        else "--disable-vertical-ff"
+    )
     if experiment_profile in {"safe-descent", "rehearsal", "touchdown"}:
         command.extend(
             ["--enable-relative-descent", "--descent-test-height", "0.50"]
@@ -421,6 +477,14 @@ def snapshot_configs(
     tracking_mode: str,
     experiment_profile: str = "touchdown",
     terminal_stabilization_mode: str = "disabled",
+    *,
+    method: str = "B0",
+    prediction_horizon_s: float = 0.10,
+    velocity_feedforward_gain: float = 1.0,
+    vertical_velocity_feedforward_enabled: bool = True,
+    vertical_velocity_feedforward_gain: float = 1.0,
+    vertical_velocity_feedforward_max_mps: float = 0.60,
+    evaluator: str = "auto",
 ) -> None:
     controller_source = (
         workspace_dir
@@ -433,6 +497,8 @@ def snapshot_configs(
     scenario_filename = {
         "static": "static.yaml",
         "constant02": "constant_velocity_0p2.yaml",
+        "constant": "constant_velocity.yaml",
+        "sinusoidal": "sinusoidal_xy.yaml",
         "heave_h1": "heave_h1.yaml",
         "heave_h2": "heave_h2.yaml",
         "heave_h3": "heave_h3.yaml",
@@ -451,17 +517,40 @@ def snapshot_configs(
     gnss_data["deck_gnss_simulator"]["ros__parameters"]["random_seed"] = seed
     snapshot = {
         "experiment_episode": {
+            "method": method,
             "scenario": scenario,
             "seed": seed,
             "tracking_mode": tracking_mode,
+            "prediction_horizon_s": prediction_horizon_s,
+            "velocity_feedforward_gain": velocity_feedforward_gain,
+            "vertical_velocity_feedforward_enabled": vertical_velocity_feedforward_enabled,
+            "vertical_velocity_feedforward_gain": vertical_velocity_feedforward_gain,
+            "vertical_velocity_feedforward_max_mps": vertical_velocity_feedforward_max_mps,
             "experiment_profile": experiment_profile,
             "terminal_stabilization_mode": terminal_stabilization_mode,
+            "evaluator": evaluator,
         },
         **scenario_data,
         **gnss_data,
     }
     (episode_dir / "scenario_config.yaml").write_text(
         yaml.safe_dump(snapshot, sort_keys=False, allow_unicode=True), encoding="utf-8"
+    )
+    method_snapshot = {
+        "method": method,
+        "tracking_mode": tracking_mode,
+        "prediction_horizon_s": prediction_horizon_s,
+        "velocity_feedforward_gain": velocity_feedforward_gain,
+        "vertical_velocity_feedforward_enabled": vertical_velocity_feedforward_enabled,
+        "vertical_velocity_feedforward_gain": vertical_velocity_feedforward_gain,
+        "vertical_velocity_feedforward_max_mps": vertical_velocity_feedforward_max_mps,
+        "experiment_profile": experiment_profile,
+        "terminal_stabilization_mode": terminal_stabilization_mode,
+        "evaluator": evaluator,
+    }
+    (episode_dir / "method_parameters.yaml").write_text(
+        yaml.safe_dump(method_snapshot, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
     )
 
 
@@ -471,11 +560,28 @@ def evaluator_path_for_scenario(
     *,
     p8c3_touchdown: bool = False,
     use_p8c_evaluator: bool = False,
+    experiment_profile: str = "touchdown",
+    evaluator: str = "auto",
 ) -> Path:
-    """根据实验模式选择 P6B、P8A 或 P8C 离线评测器。"""
+    """根据方法、场景和 profile 自动选择 P4/P5B/P6B/P8A/P8C evaluator。"""
 
-    if p8c3_touchdown or use_p8c_evaluator:
+    explicit = {
+        "p4": "evaluate_p4_bag.py",
+        "p5b": "evaluate_p5b_bag.py",
+        "p6b": "evaluate_p6b_touchdown.py",
+        "p8a": "evaluate_p8a_heave_touchdown.py",
+        "p8c": "evaluate_p8c_tilted_deck.py",
+    }
+    if evaluator != "auto":
+        if evaluator not in explicit:
+            raise ValueError(f"unsupported evaluator route: {evaluator}")
+        filename = explicit[evaluator]
+    elif p8c3_touchdown or use_p8c_evaluator:
         filename = "evaluate_p8c_tilted_deck.py"
+    elif experiment_profile == "safe-altitude":
+        filename = "evaluate_p4_bag.py"
+    elif experiment_profile in {"safe-descent", "rehearsal"}:
+        filename = "evaluate_p5b_bag.py"
     elif scenario.startswith("heave_h"):
         filename = "evaluate_p8a_heave_touchdown.py"
     else:
@@ -509,7 +615,14 @@ def _execute_evaluator(
         if not isinstance(evaluation, dict):
             raise ValueError("evaluation root is not an object")
         atomic_write_json(json_path, evaluation)
-        evaluation = read_evaluation_json(json_path)
+        evaluation = read_evaluation_json(
+            json_path,
+            require_touchdown_field=(
+                "touchdown" in label or label in {
+                    "evaluate_p6b_touchdown", "evaluate_p8a_heave_touchdown"
+                }
+            ),
+        )
     except (json.JSONDecodeError, ValueError) as error:
         return None, str(error)
     return evaluation, None
@@ -526,22 +639,23 @@ def run_evaluator(
     p8c3_touchdown: bool = False,
     experiment_profile: str = "touchdown",
     terminal_stabilization_mode: str = "disabled",
+    evaluator_route: str = "auto",
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str | None]:
     """运行主评测；static/constant02 触地同时执行旧 P6B 回归。"""
 
     use_p8c_evaluator = bool(
-        p8c3_touchdown
-        or terminal_stabilization_mode != "disabled"
-        or experiment_profile in {"safe-altitude", "safe-descent", "rehearsal"}
+        p8c3_touchdown or terminal_stabilization_mode != "disabled"
     )
     evaluator = evaluator_path_for_scenario(
         workspace_dir,
         scenario,
         p8c3_touchdown=p8c3_touchdown,
         use_p8c_evaluator=use_p8c_evaluator,
+        experiment_profile=experiment_profile,
+        evaluator=evaluator_route,
     )
     base_command = [sys.executable, str(evaluator), str(bag_path)]
-    if use_p8c_evaluator:
+    if evaluator.name == "evaluate_p8c_tilted_deck.py":
         base_command.extend(["--scenario", scenario, "--seed", str(seed)])
         if experiment_profile in {"safe-descent", "rehearsal"}:
             base_command.append("--p8c2-safe-descent")
@@ -568,8 +682,14 @@ def run_evaluator(
         return evaluation, None, error
 
     legacy_evaluation: dict[str, Any] | None = None
-    if experiment_profile == "touchdown" and scenario in {"static", "constant02"}:
-        legacy = evaluator_path_for_scenario(workspace_dir, scenario)
+    if (
+        experiment_profile == "touchdown"
+        and scenario in {"static", "constant02"}
+        and evaluator.name != "evaluate_p6b_touchdown.py"
+    ):
+        legacy = evaluator_path_for_scenario(
+            workspace_dir, scenario, experiment_profile="touchdown", evaluator="p6b"
+        )
         legacy_command = [sys.executable, str(legacy), str(bag_path)]
         if scenario == "constant02":
             legacy_command.append("--require-moving-deck")
@@ -590,16 +710,54 @@ def evaluators_passed(
     legacy_evaluation: dict[str, Any] | None,
     *,
     experiment_profile: str = "touchdown",
+    scenario: str = "static",
 ) -> bool:
-    """主评测与可选旧基线评测必须同时通过。"""
+    """主 evaluator 与可选 legacy evaluator 必须同时通过冻结门。"""
 
     if evaluation is None:
         return False
-    main_passed = (
-        evaluation.get("positive_touchdown_passed") is True
-        if experiment_profile == "touchdown"
-        else evaluation.get("final_result") == "PASS"
-    )
+    if "positive_touchdown_passed" in evaluation:
+        main_passed = evaluation.get("positive_touchdown_passed") is True
+    elif "final_result" in evaluation:
+        main_passed = evaluation.get("final_result") == "PASS"
+    elif "horizontal_position_rmse_m" in evaluation:
+        # Frozen safe-altitude gates are deliberately looser than historical
+        # nominal results and are not used to authorize touchdown.
+        limits = {
+            "static": (0.10, 0.25),
+            "constant02": (0.15, 0.30),
+            "constant": (0.20, 0.45),
+            "sinusoidal": (0.50, 0.80),
+            "heave_h1": (0.20, 0.45),
+            "heave_h2": (0.25, 0.55),
+        }
+        rmse_limit, max_limit = limits.get(scenario, (0.20, 0.45))
+        try:
+            rmse_value = float(evaluation["horizontal_position_rmse_m"])
+            max_value = float(evaluation["maximum_horizontal_error_m"])
+        except (KeyError, TypeError, ValueError):
+            main_passed = False
+        else:
+            main_passed = bool(
+                math.isfinite(rmse_value)
+                and math.isfinite(max_value)
+                and rmse_value <= rmse_limit
+                and max_value <= max_limit
+                and int(evaluation.get("gnss_recovery_count", 0)) == 0
+                and int(evaluation.get("mpc_non_solved_status_count", 0)) == 0
+                and int(evaluation.get("mpc_deadline_miss_count", 0)) == 0
+            )
+    elif "test_height_hold_reached" in evaluation:
+        main_passed = bool(
+            evaluation.get("test_height_hold_reached") is True
+            and not evaluation.get("forbidden_states_seen")
+            and int(evaluation.get("nav_land_command_count", 0)) == 0
+            and int(evaluation.get("disarm_command_count", 0)) == 0
+            and int(evaluation.get("reference_decreases_with_closed_window_count", 0)) == 0
+            and float(evaluation.get("maximum_target_z_step_m", float("inf"))) <= 0.15
+        )
+    else:
+        main_passed = False
     return bool(
         main_passed
         and (
@@ -615,10 +773,46 @@ def run_episode(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("seed must fit in uint32")
     if args.episode_timeout <= 0.0 or args.startup_timeout <= 0.0:
         raise ValueError("timeouts must be positive")
+    method_was_explicit = hasattr(args, "method")
+    method = str(getattr(args, "method", "B0")).upper()
+    if method not in SUPPORTED_METHODS:
+        raise ValueError(f"unsupported method: {method}")
     experiment_profile = str(getattr(args, "experiment_profile", "touchdown"))
     terminal_stabilization_mode = str(
         getattr(args, "terminal_stabilization_mode", "disabled")
     )
+    evaluator_route = str(getattr(args, "evaluator", "auto"))
+    if evaluator_route not in SUPPORTED_EVALUATORS:
+        raise ValueError(f"unsupported evaluator route: {evaluator_route}")
+    success_bag_policy = str(
+        getattr(args, "success_bag_policy", "lightweight")
+    )
+    failure_bag_policy = str(
+        getattr(args, "failure_bag_policy", "diagnostic")
+    )
+    if success_bag_policy not in SUPPORTED_BAG_POLICIES:
+        raise ValueError("unsupported success bag policy")
+    if failure_bag_policy not in SUPPORTED_BAG_POLICIES:
+        raise ValueError("unsupported failure bag policy")
+    prediction_horizon_s = float(getattr(args, "prediction_horizon", 0.10))
+    velocity_feedforward_gain = float(getattr(args, "velocity_ff_gain", 1.0))
+    vertical_ff_enabled = bool(getattr(args, "vertical_ff_enabled", True))
+    vertical_ff_gain = float(getattr(args, "vertical_ff_gain", 1.0))
+    vertical_ff_max = float(getattr(args, "vertical_ff_max", 0.60))
+    finite_parameters = (
+        prediction_horizon_s,
+        velocity_feedforward_gain,
+        vertical_ff_gain,
+        vertical_ff_max,
+    )
+    if not all(math.isfinite(value) for value in finite_parameters):
+        raise ValueError("method parameters must be finite")
+    if not 0.0 <= prediction_horizon_s <= 0.50:
+        raise ValueError("prediction horizon must be within [0, 0.50]")
+    if not 0.0 <= velocity_feedforward_gain <= 5.0:
+        raise ValueError("velocity feedforward gain must be within [0, 5]")
+    if not 0.0 <= vertical_ff_gain <= 3.0 or not 0.0 < vertical_ff_max <= 2.0:
+        raise ValueError("vertical feedforward parameters are out of range")
     if experiment_profile not in EXPERIMENT_PROFILES:
         raise ValueError(f"unsupported experiment profile: {experiment_profile}")
     if terminal_stabilization_mode not in TERMINAL_STABILIZATION_MODES:
@@ -663,9 +857,14 @@ def run_episode(args: argparse.Namespace) -> dict[str, Any]:
         experiment_profile, args.touchdown_hold
     )
 
-    batch_id = args.batch_id or make_batch_id("p7_single")
+    batch_id = args.batch_id or make_batch_id("p9_single")
     episode_id = args.episode_id or make_episode_id(
-        batch_id, args.scenario, 1, args.seed
+        batch_id,
+        args.scenario,
+        1,
+        args.seed,
+        method=method if method_was_explicit else None,
+        profile=experiment_profile if method_was_explicit else None,
     )
     output_root = args.output_directory.expanduser().resolve()
     episode_dir = output_root / episode_id
@@ -675,6 +874,32 @@ def run_episode(args: argparse.Namespace) -> dict[str, Any]:
     )
     if tracking_mode not in TRACKING_MODES:
         raise ValueError(f"unsupported tracking mode: {tracking_mode}")
+    if method_was_explicit:
+        if not combination_is_applicable(method, args.scenario, experiment_profile):
+            raise ValueError(
+                f"method/scenario/profile is not safety-authorized: "
+                f"{method}/{args.scenario}/{experiment_profile}"
+            )
+        expected_tracking = (
+            "RELATIVE_MPC" if method in {"B3", "B4"}
+            else "PREDICTED_POSITION_VELOCITY_FF"
+        )
+        if tracking_mode != expected_tracking:
+            raise ValueError(f"{method} requires tracking mode {expected_tracking}")
+        if method == "B1" and not math.isclose(prediction_horizon_s, 0.0):
+            raise ValueError("B1 requires prediction horizon 0.0")
+        if method != "B1" and not math.isclose(prediction_horizon_s, 0.10):
+            raise ValueError(f"{method} requires prediction horizon 0.10")
+        if method == "B2" and not math.isclose(velocity_feedforward_gain, 0.0):
+            raise ValueError("B2 requires velocity feedforward gain 0.0")
+        if method != "B2" and not math.isclose(velocity_feedforward_gain, 1.0):
+            raise ValueError(f"{method} requires velocity feedforward gain 1.0")
+        if method == "B4" and not vertical_ff_enabled:
+            raise ValueError("B4 requires validated vertical feedforward")
+        if method == "B5" and terminal_stabilization_mode == "disabled":
+            raise ValueError("B5 requires staged terminal stabilization")
+        if method != "B5" and terminal_stabilization_mode != "disabled":
+            raise ValueError("terminal stabilization is only authorized for B5")
     start_command = build_start_command(
         workspace_dir,
         args.scenario,
@@ -685,6 +910,11 @@ def run_episode(args: argparse.Namespace) -> dict[str, Any]:
         tracking_mode,
         experiment_profile,
         terminal_stabilization_mode,
+        prediction_horizon_s,
+        velocity_feedforward_gain,
+        vertical_ff_enabled,
+        vertical_ff_gain,
+        vertical_ff_max,
     )
     if args.dry_run:
         result = {
@@ -692,9 +922,17 @@ def run_episode(args: argparse.Namespace) -> dict[str, Any]:
             "batch_id": batch_id,
             "episode_id": episode_id,
             "episode_directory": str(episode_dir),
+            "method": method,
             "scenario": args.scenario,
             "seed": args.seed,
             "command": start_command,
+            "tracking_mode": tracking_mode,
+            "prediction_horizon_s": prediction_horizon_s,
+            "velocity_feedforward_gain": velocity_feedforward_gain,
+            "vertical_velocity_feedforward_enabled": vertical_ff_enabled,
+            "vertical_velocity_feedforward_gain": vertical_ff_gain,
+            "vertical_velocity_feedforward_max_mps": vertical_ff_max,
+            "evaluator": evaluator_route,
             "p8c3_touchdown": p8c3_touchdown,
             "experiment_profile": experiment_profile,
             "terminal_stabilization_mode": terminal_stabilization_mode,
@@ -729,7 +967,9 @@ def run_episode(args: argparse.Namespace) -> dict[str, Any]:
     manifest: dict[str, Any] = {
         "episode_id": episode_id,
         "batch_id": batch_id,
+        "method": method,
         "scenario": args.scenario,
+        "profile": experiment_profile,
         "seed": args.seed,
         "git_commit": git_commit,
         "dirty_worktree": dirty_worktree,
@@ -738,6 +978,14 @@ def run_episode(args: argparse.Namespace) -> dict[str, Any]:
         "duration_s": None,
         "camera_model": args.camera_model,
         "tracking_mode": tracking_mode,
+        "prediction_horizon_s": prediction_horizon_s,
+        "velocity_feedforward_gain": velocity_feedforward_gain,
+        "vertical_velocity_feedforward_enabled": vertical_ff_enabled,
+        "vertical_velocity_feedforward_gain": vertical_ff_gain,
+        "vertical_velocity_feedforward_max_mps": vertical_ff_max,
+        "evaluator": evaluator_route,
+        "success_bag_policy": success_bag_policy,
+        "failure_bag_policy": failure_bag_policy,
         "record_camera_debug": args.record_camera_debug,
         "p8c3_touchdown": p8c3_touchdown,
         "experiment_profile": experiment_profile,
@@ -769,12 +1017,22 @@ def run_episode(args: argparse.Namespace) -> dict[str, Any]:
     (episode_dir / "run_metadata.txt").write_text(
         "\n".join(
             (
+                f"method={method}",
                 f"scenario={args.scenario}",
+                f"profile={experiment_profile}",
                 f"seed={args.seed}",
                 f"git_commit={git_commit}",
                 f"git_dirty={str(dirty_worktree).lower()}",
                 f"camera_model={args.camera_model}",
                 f"tracking_mode={tracking_mode}",
+                f"prediction_horizon_s={prediction_horizon_s}",
+                f"velocity_feedforward_gain={velocity_feedforward_gain}",
+                f"vertical_velocity_feedforward_enabled={str(vertical_ff_enabled).lower()}",
+                f"vertical_velocity_feedforward_gain={vertical_ff_gain}",
+                f"vertical_velocity_feedforward_max_mps={vertical_ff_max}",
+                f"evaluator={evaluator_route}",
+                f"success_bag_policy={success_bag_policy}",
+                f"failure_bag_policy={failure_bag_policy}",
                 f"p8c3_touchdown={str(p8c3_touchdown).lower()}",
                 f"experiment_profile={experiment_profile}",
                 f"terminal_stabilization_mode={terminal_stabilization_mode}",
@@ -798,6 +1056,13 @@ def run_episode(args: argparse.Namespace) -> dict[str, Any]:
         tracking_mode,
         experiment_profile,
         terminal_stabilization_mode,
+        method=method,
+        prediction_horizon_s=prediction_horizon_s,
+        velocity_feedforward_gain=velocity_feedforward_gain,
+        vertical_velocity_feedforward_enabled=vertical_ff_enabled,
+        vertical_velocity_feedforward_gain=vertical_ff_gain,
+        vertical_velocity_feedforward_max_mps=vertical_ff_max,
+        evaluator=evaluator_route,
     )
 
     preexisting = stale_processes()
@@ -935,6 +1200,7 @@ def run_episode(args: argparse.Namespace) -> dict[str, Any]:
                 p8c3_touchdown=p8c3_touchdown,
                 experiment_profile=experiment_profile,
                 terminal_stabilization_mode=terminal_stabilization_mode,
+                evaluator_route=evaluator_route,
             )
             if evaluation is not None:
                 manifest["evaluation_path"] = str(episode_dir / "evaluation.json")
@@ -949,14 +1215,17 @@ def run_episode(args: argparse.Namespace) -> dict[str, Any]:
             evaluation,
             legacy_evaluation,
             experiment_profile=experiment_profile,
+            scenario=args.scenario,
         )
         success = bool(event == "NONE" and evaluator_passed and cleanup_ok)
         log_text = (episode_dir / "run.log").read_text(
             encoding="utf-8", errors="replace"
         )
         classification_event = event
-        if event == "NONE" and (evaluation_error or not evaluator_passed):
+        if event == "NONE" and evaluation_error:
             classification_event = "EVALUATION_ERROR"
+        elif event == "NONE" and not evaluator_passed:
+            classification_event = "SAFETY_GATE_FAILURE"
         failure_reason = classify_failure(
             success=success,
             event=classification_event,
