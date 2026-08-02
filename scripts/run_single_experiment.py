@@ -635,6 +635,21 @@ def evaluator_path_for_scenario(
     return workspace_dir / "scripts" / filename
 
 
+def parse_evaluator_json_output(output: str) -> dict[str, Any]:
+    """Extract the final JSON object when ROS storage logs prefix stdout."""
+
+    decoder = json.JSONDecoder()
+    positions = [index for index, character in enumerate(output) if character == "{"]
+    for index in reversed(positions):
+        try:
+            value, _ = decoder.raw_decode(output[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            return value
+    raise ValueError("evaluator output does not contain a JSON object")
+
+
 def _execute_evaluator(
     command: list[str],
     *,
@@ -657,9 +672,7 @@ def _execute_evaluator(
     if json_result.returncode not in (0, 2):
         return None, json_result.stderr.strip() or f"{label} failed"
     try:
-        evaluation = json.loads(json_result.stdout)
-        if not isinstance(evaluation, dict):
-            raise ValueError("evaluation root is not an object")
+        evaluation = parse_evaluator_json_output(json_result.stdout)
         atomic_write_json(json_path, evaluation)
         evaluation = read_evaluation_json(
             json_path,
@@ -669,7 +682,7 @@ def _execute_evaluator(
                 }
             ),
         )
-    except (json.JSONDecodeError, ValueError) as error:
+    except ValueError as error:
         return None, str(error)
     return evaluation, None
 
@@ -715,7 +728,7 @@ def run_evaluator(
                     terminal_stabilization_mode,
                 ]
             )
-    elif scenario == "constant02":
+    elif scenario == "constant02" and evaluator.name == "evaluate_p6b_touchdown.py":
         base_command.append("--require-moving-deck")
     evaluation, error = _execute_evaluator(
         base_command,

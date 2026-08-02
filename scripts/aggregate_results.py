@@ -7,6 +7,7 @@ import argparse
 import collections
 import json
 import math
+import re
 import sys
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -61,6 +62,10 @@ GROUP_CSV_FIELDS = (
     "min",
     "max",
 )
+ARCHIVED_EPISODE_PATTERN = re.compile(
+    r"_(?:failed|superseded|interrupted)_attempt\d+$"
+)
+
 EPISODE_BASE_FIELDS = (
     "episode_id",
     "batch_id",
@@ -97,6 +102,8 @@ def collect_records(batch_dir: Path) -> tuple[list[dict[str, Any]], list[dict[st
     if not batch_dir.is_dir():
         raise ValueError(f"batch directory does not exist: {batch_dir}")
     for episode_dir in sorted(path for path in batch_dir.iterdir() if path.is_dir()):
+        if ARCHIVED_EPISODE_PATTERN.search(episode_dir.name):
+            continue
         manifest_path = episode_dir / "manifest.json"
         if not manifest_path.is_file():
             continue

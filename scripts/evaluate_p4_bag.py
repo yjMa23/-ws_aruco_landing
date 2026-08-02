@@ -35,6 +35,9 @@ MPC_OBJECTIVE_TOPIC = "/landing/relative_mpc/objective"
 MPC_FALLBACK_COUNT_TOPIC = "/landing/relative_mpc/fallback_count"
 MPC_FIRST_CONTROL_TOPIC = "/landing/relative_mpc/first_control"
 MPC_ACTIVE_CONSTRAINTS_TOPIC = "/landing/relative_mpc/active_constraints"
+VEHICLE_COMMAND_TOPIC = "/fmu/in/vehicle_command"
+NAV_LAND_COMMAND = 21
+ARM_DISARM_COMMAND = 400
 
 REQUIRED_TOPICS = {
     STATE_TOPIC,
@@ -54,6 +57,7 @@ OPTIONAL_TOPICS = {
     MPC_FALLBACK_COUNT_TOPIC,
     MPC_FIRST_CONTROL_TOPIC,
     MPC_ACTIVE_CONSTRAINTS_TOPIC,
+    VEHICLE_COMMAND_TOPIC,
 }
 
 WGS84_SEMI_MAJOR_AXIS_M = 6378137.0
@@ -340,6 +344,8 @@ def evaluate(args: argparse.Namespace) -> dict[str, float | int | str]:
     mpc_fallback_count_samples: list[TimedVector] = []
     mpc_first_control_samples: list[TimedVector] = []
     mpc_active_constraint_samples: list[TimedVector] = []
+    nav_land_command_count = 0
+    disarm_command_count = 0
     final_bag_time_s = 0.0
 
     while reader.has_next():
@@ -413,6 +419,12 @@ def evaluate(args: argparse.Namespace) -> dict[str, float | int | str]:
             value = float(message.data)
             if math.isfinite(value) and value >= 0.0:
                 mpc_active_constraint_samples.append(TimedVector(time_s, (value,)))
+        elif topic == VEHICLE_COMMAND_TOPIC:
+            command = int(message.command)
+            if command == NAV_LAND_COMMAND:
+                nav_land_command_count += 1
+            elif command == ARM_DISARM_COMMAND and float(message.param1) < 0.5:
+                disarm_command_count += 1
 
     track_times = [time_s for time_s, state in state_samples if state == TRACK_STATE]
     if not track_times:
@@ -552,6 +564,8 @@ def evaluate(args: argparse.Namespace) -> dict[str, float | int | str]:
         "position_sample_count": len(horizontal_errors),
         "relative_velocity_sample_count": len(relative_speed_errors),
         "prediction_sample_count": len(prediction_errors),
+        "nav_land_command_count": nav_land_command_count,
+        "disarm_command_count": disarm_command_count,
     }
 
     stable_gains = [
@@ -731,6 +745,10 @@ def print_human_readable(result: dict[str, float | int | str]) -> None:
         "Maximum absolute roll / pitch: "
         f"{result['maximum_absolute_roll_deg']:.3f} deg / "
         f"{result['maximum_absolute_pitch_deg']:.3f} deg"
+    )
+    print(
+        "NAV_LAND / Disarm commands: "
+        f"{result['nav_land_command_count']} / {result['disarm_command_count']}"
     )
     if "effective_relative_velocity_gain_min" in result:
         print(

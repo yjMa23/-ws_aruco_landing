@@ -21,6 +21,7 @@ import aggregate_results  # noqa: E402
 import evaluate_p4_bag  # noqa: E402
 import evaluate_p6b_touchdown  # noqa: E402
 import mavlink_gcs_heartbeat  # noqa: E402
+import reevaluate_experiment  # noqa: E402
 import run_batch_experiments  # noqa: E402
 import run_single_experiment  # noqa: E402
 from p7_experiment_utils import (  # noqa: E402
@@ -857,6 +858,27 @@ class P7ExperimentTests(unittest.TestCase):
             "evaluate_p8c_tilted_deck.py",
         )
 
+    def test_p4_safe_altitude_evaluator_does_not_receive_p6b_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with mock.patch.object(
+                run_single_experiment,
+                "_execute_evaluator",
+                return_value=({"horizontal_position_rmse_m": 0.1}, None),
+            ) as execute:
+                run_single_experiment.run_evaluator(
+                    WORKSPACE_DIR,
+                    "constant02",
+                    1,
+                    root / "bag",
+                    root,
+                    mock.mock_open()(),
+                    experiment_profile="safe-altitude",
+                )
+            command = execute.call_args.args[0]
+            self.assertIn("evaluate_p4_bag.py", command[1])
+            self.assertNotIn("--require-moving-deck", command)
+
     def test_p9_start_command_includes_method_parameters(self) -> None:
         command = run_single_experiment.build_start_command(
             WORKSPACE_DIR,
@@ -977,6 +999,39 @@ class P7ExperimentTests(unittest.TestCase):
             self.assertTrue((batch_dir / "P9_RESULTS_SUMMARY.md").is_file())
             self.assertEqual(summary["safety"]["nav_land_count"], 0)
 
+    def test_aggregate_ignores_archived_episode_attempts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            batch_dir = Path(directory)
+            active = batch_dir / "episode-1"
+            archived = batch_dir / "episode-1_failed_attempt01"
+            for episode_dir, success in ((active, True), (archived, False)):
+                episode_dir.mkdir()
+                evaluation_path = episode_dir / "evaluation.json"
+                evaluation_path.write_text(
+                    json.dumps({"positive_touchdown_passed": success}),
+                    encoding="utf-8",
+                )
+                (episode_dir / "manifest.json").write_text(
+                    json.dumps(
+                        {
+                            "episode_id": episode_dir.name,
+                            "method": "B0",
+                            "scenario": "static",
+                            "profile": "touchdown",
+                            "seed": 1,
+                            "completed": True,
+                            "success": success,
+                            "failure_reason": "NONE" if success else "STARTUP_FAILURE",
+                            "evaluation_path": str(evaluation_path),
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+            records, issues = aggregate_results.collect_records(batch_dir)
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0]["manifest"]["episode_id"], "episode-1")
+            self.assertEqual(issues, [])
+
     def test_metric_alias_and_null_handling(self) -> None:
         self.assertEqual(
             metric_value({"horizontal_position_rmse_m": 0.25}, "horizontal_error_rmse_m"),
@@ -988,6 +1043,67 @@ class P7ExperimentTests(unittest.TestCase):
         self.assertEqual(summary["count"], 2)
         self.assertEqual(summary["min"], 1.0)
         self.assertEqual(summary["max"], 3.0)
+
+    def test_reevaluation_refreshes_parent_batch_counts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            batch_dir = Path(directory)
+            episodes = []
+            for index, success in enumerate((True, False), start=1):
+                episode_id = f"episode-{index}"
+                episodes.append({"episode_id": episode_id})
+                episode_dir = batch_dir / episode_id
+                episode_dir.mkdir()
+                (episode_dir / "manifest.json").write_text(
+                    json.dumps(
+                        {
+                            "completed": True,
+                            "success": success,
+                            "failure_reason": "NONE" if success else "SAFETY_GATE_FAILURE",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+            (batch_dir / "batch_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "planned_episodes": 2,
+                        "episodes": episodes,
+                        "completed": False,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            reevaluate_experiment.refresh_parent_batch_manifest(batch_dir / "episode-1")
+            refreshed = json.loads(
+                (batch_dir / "batch_manifest.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(refreshed["completed_episodes"], 2)
+            self.assertEqual(refreshed["successful_episodes"], 1)
+            self.assertEqual(refreshed["failed_episodes"], 1)
+            self.assertTrue(refreshed["completed"])
+
+    def test_reevaluation_archives_previous_assessment_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            episode_dir = Path(directory)
+            for name in ("evaluation.json", "evaluation.txt"):
+                (episode_dir / name).write_text(name, encoding="utf-8")
+            archive_dir = reevaluate_experiment.archive_evaluation_files(episode_dir)
+            self.assertIsNotNone(archive_dir)
+            assert archive_dir is not None
+            self.assertTrue((archive_dir / "evaluation.json").is_file())
+            self.assertTrue((archive_dir / "evaluation.txt").is_file())
+            self.assertFalse((episode_dir / "evaluation.json").exists())
+            self.assertEqual(
+                reevaluate_experiment.archive_evaluation_files(episode_dir), None
+            )
+
+    def test_evaluator_json_parser_accepts_ros_log_prefix(self) -> None:
+        parsed = run_single_experiment.parse_evaluator_json_output(
+            "[INFO] opened bag\n{\"horizontal_position_rmse_m\": 0.1}\n"
+        )
+        self.assertEqual(parsed["horizontal_position_rmse_m"], 0.1)
+        with self.assertRaises(ValueError):
+            run_single_experiment.parse_evaluator_json_output("[INFO] no json")
 
     def test_stale_process_pid_parser_ignores_invalid_and_duplicates(self) -> None:
         self.assertEqual(
