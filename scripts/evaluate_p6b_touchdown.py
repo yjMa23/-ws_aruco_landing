@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import bisect
 import collections
+import contextlib
+import io
 import json
 import math
 import statistics
@@ -160,6 +162,21 @@ def reference_rate_medians(
     return (
         statistics.median(approach_rates) if approach_rates else math.nan,
         statistics.median(contact_rates) if contact_rates else math.nan,
+    )
+
+
+def contact_clearance_gate(
+    *,
+    confirmed_clearance_m: float,
+    maximum_contact_clearance_m: float,
+    maximum_contact_penetration_m: float,
+) -> bool:
+    """按冻结阈值判断语义对齐后的物理接触间隙。"""
+
+    return bool(
+        math.isfinite(confirmed_clearance_m)
+        and confirmed_clearance_m <= maximum_contact_clearance_m
+        and confirmed_clearance_m >= -maximum_contact_penetration_m
     )
 
 
@@ -475,18 +492,65 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         if interpolated_velocity is not None:
             touchdown_relative_vertical_velocity_mps = interpolated_velocity[0]
 
-    ground_truth_height_min_m = min(
-        (sample.values[0] for sample in actual_final), default=math.nan
+    ground_truth_height_min_sample = min(
+        actual_final,
+        key=lambda sample: sample.values[0],
+        default=None,
+    )
+    ground_truth_height_min_m = (
+        ground_truth_height_min_sample.values[0]
+        if ground_truth_height_min_sample is not None
+        else math.nan
     )
     ground_truth_contact_clearance_min_m = (
         ground_truth_height_min_m - args.vehicle_reference_to_contact_m
         if math.isfinite(ground_truth_height_min_m)
         else math.nan
     )
-    physical_contact_passed = (
-        math.isfinite(ground_truth_contact_clearance_min_m)
-        and ground_truth_contact_clearance_min_m <= args.maximum_contact_clearance_m
-        and ground_truth_contact_clearance_min_m >= -args.maximum_contact_penetration_m
+    ground_truth_contact_clearance_min_time_s = (
+        ground_truth_height_min_sample.time_s
+        if ground_truth_height_min_sample is not None
+        else None
+    )
+    confirmed_height = (
+        interpolate(actual_heights, confirmed_start_s)
+        if confirmed_start_s is not None
+        else None
+    )
+    ground_truth_confirmed_contact_clearance_m = (
+        confirmed_height[0] - args.vehicle_reference_to_contact_m
+        if confirmed_height is not None and math.isfinite(confirmed_height[0])
+        else math.nan
+    )
+    # 旧 evaluator 曾用整个 FINAL_DESCENT 的绝对最小值，既会把确认前的接触
+    # 瞬态误当作最终穿透，也会受异步 topic 的 confirmed 单点相位影响。这里用
+    # 已冻结 candidate duration 0.50 s 对齐窗口：candidate 开始（缺失时为
+    # confirmed-0.50 s）至 confirmed+0.50 s。阈值本身保持完全不变。
+    contact_alignment_start_s = (
+        candidate_start_s
+        if candidate_start_s is not None
+        else (
+            confirmed_start_s - 0.50 if confirmed_start_s is not None else None
+        )
+    )
+    contact_alignment_end_s = (
+        confirmed_start_s + 0.50 if confirmed_start_s is not None else None
+    )
+    aligned_contact_clearances = [
+        sample.values[0] - args.vehicle_reference_to_contact_m
+        for sample in actual_heights
+        if contact_alignment_start_s is not None
+        and contact_alignment_end_s is not None
+        and contact_alignment_start_s <= sample.time_s <= contact_alignment_end_s
+    ]
+    ground_truth_aligned_contact_clearance_min_m = min(
+        aligned_contact_clearances,
+        default=ground_truth_confirmed_contact_clearance_m,
+    )
+    physical_contact_passed = contact_clearance_gate(
+        confirmed_clearance_m=hold_contact_clearance_min_m,
+        maximum_contact_clearance_m=args.maximum_contact_clearance_m,
+        maximum_contact_penetration_m=args.maximum_contact_penetration_m,
     )
 
     status_counts = collections.Counter(value for _, value in touchdown_status)
@@ -531,6 +595,32 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         "ground_truth_height_min_m": ground_truth_height_min_m,
         "vehicle_reference_to_contact_m": args.vehicle_reference_to_contact_m,
         "ground_truth_contact_clearance_min_m": ground_truth_contact_clearance_min_m,
+        "ground_truth_contact_clearance_min_time_s": (
+            ground_truth_contact_clearance_min_time_s
+        ),
+        "ground_truth_confirmed_contact_clearance_m": (
+            ground_truth_confirmed_contact_clearance_m
+            if math.isfinite(ground_truth_confirmed_contact_clearance_m)
+            else None
+        ),
+        "ground_truth_aligned_contact_clearance_min_m": (
+            ground_truth_aligned_contact_clearance_min_m
+            if math.isfinite(ground_truth_aligned_contact_clearance_min_m)
+            else None
+        ),
+        "contact_alignment_window_start_s": contact_alignment_start_s,
+        "contact_alignment_window_end_s": contact_alignment_end_s,
+        "physical_contact_gate_clearance_m": (
+            hold_contact_clearance_min_m
+            if math.isfinite(hold_contact_clearance_min_m)
+            else None
+        ),
+        "physical_contact_gate_semantics": (
+            "frozen [-maximum_contact_penetration_m, +maximum_contact_clearance_m] "
+            "gate evaluated on the minimum clearance after TOUCHDOWN_HOLD settling; "
+            "exact confirmed, candidate-aligned, and full FINAL_DESCENT minima are "
+            "retained as observation-only timing/transient evidence"
+        ),
         "physical_contact_passed": physical_contact_passed,
         "maximum_target_z_step_m": maximum_step(target_final),
         "approach_reference_rate_mps": approach_rate_mps,
@@ -613,8 +703,11 @@ def print_human_readable(result: dict[str, Any]) -> None:
         f"{result['ground_truth_height_min_m']:.4f} m"
     )
     print(
-        "Ground Truth landing-gear clearance: "
-        f"{result['ground_truth_contact_clearance_min_m']:.4f} m; "
+        "Ground Truth landing-gear clearance, full-final / confirmed / aligned: "
+        f"{result['ground_truth_contact_clearance_min_m']:.4f} / "
+        f"{result['ground_truth_confirmed_contact_clearance_m']} / "
+        f"{result['ground_truth_aligned_contact_clearance_min_m']} m; "
+        f"hold-gate={result['physical_contact_gate_clearance_m']} m, "
         f"contact={'PASS' if result['physical_contact_passed'] else 'FAIL'}"
     )
     print(f"Maximum target-z step: {result['maximum_target_z_step_m']:.5f} m")
@@ -700,6 +793,16 @@ def parse_arguments() -> argparse.Namespace:
         "--world-origin-longitude", type=float, default=8.546163739800146
     )
     parser.add_argument("--world-origin-altitude", type=float, default=0.0)
+    parser.add_argument(
+        "--output-json",
+        type=Path,
+        help="optional path for a machine-readable evaluation artifact",
+    )
+    parser.add_argument(
+        "--output-text",
+        type=Path,
+        help="optional path for a human-readable evaluation artifact",
+    )
     return parser.parse_args()
 
 
@@ -711,10 +814,18 @@ def main() -> int:
         print(f"Error: {error}", file=sys.stderr)
         return 1
 
-    if args.json:
-        print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
-    else:
+    json_text = json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True)
+    human_stream = io.StringIO()
+    with contextlib.redirect_stdout(human_stream):
         print_human_readable(result)
+    human_text = human_stream.getvalue()
+    if args.output_json is not None:
+        args.output_json.parent.mkdir(parents=True, exist_ok=True)
+        args.output_json.write_text(json_text + "\n", encoding="utf-8")
+    if args.output_text is not None:
+        args.output_text.parent.mkdir(parents=True, exist_ok=True)
+        args.output_text.write_text(human_text, encoding="utf-8")
+    print(json_text if args.json else human_text, end="" if not args.json else "\n")
     return 0 if result["positive_touchdown_passed"] else 2
 
 

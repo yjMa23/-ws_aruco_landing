@@ -36,6 +36,8 @@ struct TouchdownHoldParameters
 {
   /** 世界系 NED 垂直目标允许的最大变化率，单位 m/s。 */
   double max_target_rate_mps{0.60};
+  /** 可选相对高度预压参考的最大变化率，单位 m/s。 */
+  double max_reference_preload_rate_mps{0.05};
   /** 从静止保持进入甲板随动所需的垂直速度，单位 m/s。 */
   double motion_enter_speed_mps{0.04};
   /** 从甲板随动退出到静止保持的垂直速度，单位 m/s。 */
@@ -57,6 +59,8 @@ struct TouchdownHoldInput
   double deck_z_ned_m{0.0};
   /** 甲板 PX4 local NED 垂直速度，单位 m/s，Down 为正。 */
   double deck_vertical_velocity_ned_mps{0.0};
+  /** 可选的甲板相对高度预压目标；为空时保持触地确认时的原参考。 */
+  std::optional<double> relative_height_target_m;
 };
 
 /**

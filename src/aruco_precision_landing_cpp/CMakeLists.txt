@@ -32,12 +32,14 @@ add_library(
   src/vehicle_pose_history.cpp
   src/landing_window.cpp
   src/deck_attitude_estimator.cpp
+  src/deck_plane_geometry.cpp
   src/relative_descent_controller.cpp
   src/vertical_state_estimator.cpp
   src/touchdown_detector.cpp
   src/final_descent_controller.cpp
   src/touchdown_hold_controller.cpp
   src/relative_mpc_controller.cpp
+  src/terminal_contact_stabilization.cpp
 )
 target_compile_features(aruco_landing_math PUBLIC cxx_std_17)
 target_include_directories(
@@ -169,6 +171,12 @@ if(BUILD_TESTING)
   target_link_libraries(deck_attitude_estimator_test aruco_landing_math)
 
   ament_add_gtest(
+    deck_plane_geometry_test
+    test/deck_plane_geometry_test.cpp
+  )
+  target_link_libraries(deck_plane_geometry_test aruco_landing_math)
+
+  ament_add_gtest(
     relative_descent_controller_test
     test/relative_descent_controller_test.cpp
   )
@@ -204,6 +212,12 @@ if(BUILD_TESTING)
   )
   target_link_libraries(relative_mpc_controller_test aruco_landing_math)
 
+  ament_add_gtest(
+    terminal_contact_stabilization_test
+    test/terminal_contact_stabilization_test.cpp
+  )
+  target_link_libraries(terminal_contact_stabilization_test aruco_landing_math)
+
   add_test(
     NAME p7_experiment_tests
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_p7_experiments.py
@@ -219,6 +233,15 @@ if(BUILD_TESTING)
   )
   set_tests_properties(
     p8a_heave_touchdown_tests
+    PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../..
+  )
+
+  add_test(
+    NAME p8c_tilted_deck_tests
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_p8c_tilted_deck.py
+  )
+  set_tests_properties(
+    p8c_tilted_deck_tests
     PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../..
   )
 endif()

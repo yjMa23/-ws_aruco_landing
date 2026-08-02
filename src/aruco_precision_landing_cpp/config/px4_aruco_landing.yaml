@@ -71,11 +71,14 @@ px4_aruco_landing_node:
     # Offboard 位置环将参考压到甲板内部后，若机体在近地持续停滞，则视为物理接触候选。
     touchdown_detector.terminal_contact_max_height_m: 0.24
     touchdown_detector.terminal_contact_min_reference_error_m: 0.10
+    touchdown_detector.terminal_contact_max_geometry_gap_m: 0.03
     touchdown_detector.terminal_contact_max_vertical_speed_mps: 0.05
     touchdown_detector.candidate_required_duration_s: 0.50
 
     # P8A 触地确认后锁存甲板相对高度；估计失效时保持最后安全世界系目标。
     touchdown_hold.max_target_rate_mps: 0.60
+    # P8C-4 可选预压参考独立限速；未提供目标时旧路径完全不变。
+    touchdown_hold.max_reference_preload_rate_mps: 0.05
     # 静止甲板估计噪声实测峰值约 0.030 m/s；H1 理论峰值约 0.0628 m/s。
     # 使用迟滞只在可辨识升沉时随动，避免静止甲板噪声导致离板。
     touchdown_hold.motion_enter_speed_mps: 0.04
@@ -136,6 +139,64 @@ px4_aruco_landing_node:
 
     deck_attitude.filter_gain: 0.20
     deck_attitude.minimum_upward_normal_component: 0.50
+
+    # P8C-0 仅发布 shadow 几何，禁止接入控制、状态机、窗口、触地或 hold。
+    deck_plane_geometry.enabled: true
+    # 独立 shadow 法向滤波；不得替代上方 production deck_attitude 或进入 landing window。
+    deck_plane_geometry.normal_filter_gain: 0.08
+    deck_plane_geometry.shadow_only: true
+    deck_plane_geometry.minimum_normal_norm: 0.000001
+    deck_plane_geometry.minimum_upward_component: 0.50
+    # 来自 PX4 x500_base/model.sdf 两条滑橇碰撞盒最低中心线端点，FRD，单位 m。
+    # 该近似忽略 7.5 mm 半宽支持面、柔性和接触求解压入。
+    deck_plane_geometry.contact_points_body_frd_m: [
+      -0.125, -0.132, 0.227,
+       0.125, -0.132, 0.227,
+      -0.125,  0.132, 0.227,
+       0.125,  0.132, 0.227]
+    # ID0/1/2/3 visual 平面高于甲板碰撞顶面的名义距离。
+    deck_plane_geometry.marker_plane_offsets_m: [0.001, 0.002, 0.003, 0.004]
+    deck_plane_geometry.apply_marker_plane_offset: true
+
+    # P8C-4：默认关闭且仅 shadow。场景名只用于启动白名单，法向只能来自视觉估计。
+    terminal_contact_stabilization.enabled: false
+    terminal_contact_stabilization.shadow_only: true
+    terminal_contact_stabilization.rehearsal_enabled: false
+    terminal_contact_stabilization.scenario: none
+    # 固定 +2° 目标；2.5° 为冻结命令上限，g*tan(2°)≈0.3425 m/s²。
+    terminal_contact_stabilization.maximum_target_tilt_deg: 2.5
+    terminal_contact_stabilization.normal_freshness_timeout_s: 0.20
+    terminal_contact_stabilization.short_loss_hold_s: 0.10
+    terminal_contact_stabilization.marker_switch_jump_gate_deg: 1.0
+    terminal_contact_stabilization.tilt_slew_rate_degps: 4.0
+    terminal_contact_stabilization.acceleration_bias_limit_mps2: 0.45
+    terminal_contact_stabilization.acceleration_bias_slew_rate_mps3: 0.80
+    terminal_contact_stabilization.activation_duration_s: 0.50
+    terminal_contact_stabilization.deactivation_duration_s: 0.30
+    # 不扩大 P8B 已冻结总水平 acceleration 上限。
+    terminal_contact_stabilization.total_acceleration_limit_mps2: 1.50
+    terminal_contact_stabilization.rehearsal_max_duration_s: 1.0
+    # 确认触地后将相对高度参考缓慢压到 0.20 m，重新加载滑橇而非继续悬停卸载。
+    terminal_contact_stabilization.preload_relative_height_m: 0.20
+    # candidate/HOLD 中渐入向下加速度前馈，降低旋翼承重并提高滑橇法向载荷。
+    terminal_contact_stabilization.preload_acceleration_mps2: 1.0
+    terminal_contact_stabilization.preload_acceleration_slew_mps3: 1.0
+    terminal_contact_stabilization.compliance.enabled: true
+    terminal_contact_stabilization.compliance.horizontal_deadband_m: 0.015
+    # 控制让步上限独立冻结为 0.04 m，不复用 evaluator 的 0.10 m 滑移门。
+    terminal_contact_stabilization.compliance.maximum_allowance_m: 0.040
+    terminal_contact_stabilization.compliance.maximum_target_rate_mps: 0.10
+    terminal_contact_stabilization.compliance.maximum_anchor_correction_rate_mps: 0.05
+    terminal_contact_stabilization.compliance.deck_velocity_deadband_mps: 0.035
+    terminal_contact_stabilization.compliance.relative_velocity_damping_s: 0.12
+    terminal_contact_stabilization.compliance.maximum_damping_offset_m: 0.020
+    terminal_contact_stabilization.attitude_safety.enabled: true
+    # 保护门低于 evaluator 10° 硬失败门；触发 recovery 的实验仍判 FAIL。
+    terminal_contact_stabilization.attitude_safety.trigger_deg: 6.0
+    terminal_contact_stabilization.attitude_safety.clear_deg: 4.0
+    terminal_contact_stabilization.attitude_safety.angular_rate_trigger_degps: 45.0
+    terminal_contact_stabilization.attitude_safety.required_duration_s: 0.20
+    terminal_contact_stabilization.attitude_safety.clear_duration_s: 0.30
 
     landing_window.enter_horizontal_error_m: 0.15
     landing_window.exit_horizontal_error_m: 0.25

@@ -20,7 +20,7 @@
 → 丢失恢复、安全中止和批量评测
 ```
 
-本文档是传统基线的阶段执行计划。当前 `P0`～`P8B` 已完成代码、测试和真实 PX4 SITL 验收：P7-lite 真实 3+3 冒烟为 6/6 PASS；P8A 升沉触地 H1/H2 均为 3/3 PASS；P8B 水平相对 MPC 完成固定依赖、生产实现、P4.7 安全回退和严格顺序验收，安全高度 15/15、下降 6/6、真实触地 6/6 PASS。下一阶段为 `P8C 倾斜甲板研究与几何建模 → P9 统一评测`，详见 `docs/plans/P8_ADVANCED_LANDING_ROADMAP.md`。
+本文档是传统基线的阶段执行计划。当前 `P0`～`P8C fixed T1` 已完成代码、测试和真实 PX4 SITL 验收：P7-lite 真实 3+3 冒烟为 6/6 PASS；P8A 升沉触地 H1/H2 均为 3/3 PASS；P8B 水平相对 MPC 完成固定依赖、生产实现、P4.7 安全回退和严格顺序验收，安全高度 15/15、下降 6/6、真实触地 6/6 PASS。P8C-3 水平机体失败证据完整保留，P8C-4 终端接触稳定化在固定正 `+2° roll/pitch` 完成 shadow 安全高度 6/6、shadow 安全下降 6/6、active rehearsal 6/6、真实触地 6/6 和旧路径回归 9/9；全工作区 `340 tests, 0 failures, 0 skipped`。当前下一阶段为 `P9 统一批量评测、消融和论文实验`，详见 `docs/plans/P8_ADVANCED_LANDING_ROADMAP.md`。
 
 ---
 
@@ -51,6 +51,11 @@
 | `P7-lite` 批量评测基线 | 已冻结 | 单轮、批量、resume、失败分类和聚合；真实 3+3 冒烟 6/6 PASS |
 | `P8A` 升沉甲板触地 | VALIDATION PASS | H1/H2 各 3/3，真实接触与 10 秒相对甲板保持通过 |
 | `P8B` 水平相对 MPC | VALIDATION PASS | 4 状态 MPC、约束、warm start、完整 P4.7 回退和终端 handoff；三类验收共 27/27 PASS |
+| `P8C-1` 固定倾角安全高度 | VALIDATION PASS | ±2° 四方向 12/12、static 1/1、共享路径回归 3/3；完整法向最差 RMSE/P95 `0.702°/1.353°` |
+| `P8C-2` 固定正倾角安全下降 | SAFE DESCENT PASS | +2° roll/pitch 3+3、static/constant02 2/2；最差水平 RMSE/max `0.020931/0.068704 m`，最低真实滑橇间隙 `0.210051 m` |
+| `P8C-3` 水平机体触地诊断 | FAILURE EVIDENCE PRESERVED | seed2 滑移硬门失败及姿态发散、离板、恢复证据完整归档，未放宽阈值、未删失败轮 |
+| `P8C-4` 终端接触稳定化 | VALIDATION PASS | Offboard position 模式内的法向整形、锚点顺应、切向阻尼和受限预压；shadow 12/12、rehearsal 6/6、fixed T1 touchdown 6/6、旧路径 9/9 |
+| `P8C fixed T1` | VALIDATION PASS | `P8C-4 VALIDATION PASS / P8C T1 VALIDATION PASS / P8C-3 DESIGN GATE CLOSED` |
 
 ### 2.2 当前已有 ROS 2 包
 
@@ -97,8 +102,8 @@ src/moving_deck_sim
 
 - P8A 已完成升沉甲板最终下降、真实接触、相对垂直速度语义和接触后相对保持，H1 3/3、H2 3/3 PASS。
 - P8B 已完成综述、计划、固定 OSQP/OsqpEigen 依赖、4 状态水平相对 MPC、约束、warm start、完整 P4.7 fallback、终端安全 handoff、诊断、`271` 项全工作区测试和严格顺序真实 SITL；安全高度 15/15、下降 6/6、最终代码真实触地 6/6 PASS，状态为 `VALIDATION PASS`。
-- P8C 固定倾斜及低频 roll/pitch 甲板降落尚未完成调研、几何建模、计划、实现和验收。
-- P9 统一批量评测、消融和论文实验尚未开始；P7 20+20 配置保留并延后到该阶段。
+- P8C fixed T1 已完成：P8C-3 失败证据保留，P8C-4 终端接触稳定化与固定正 `+2° roll/pitch` 真实触地验收通过，设计门关闭。该结论不能外推到负倾角、动态 roll/pitch 或 combined。
+- P9 统一批量评测、消融和论文实验为当前下一阶段；P7 static/constant02 20+20 配置保留并在该阶段执行。
 - 没有触地后的 Land/Disarm 授权和最终恢复策略；当前继续保持 `NAV_LAND / Disarm = 0 / 0`。
 
 ### 2.5 2026-07-29 P7 第一版状态
@@ -1641,9 +1646,20 @@ P8B 综述、统一模型、候选方案、固定求解器、执行计划、生�
 
 ## P8C：固定倾斜及低频 roll/pitch 甲板降落
 
-P8B 通过后，先新增 `docs/research/P8C_TILTED_DECK_LANDING_REVIEW.md`，推导甲板平面、法向、点到平面距离、法向相对速度、平面内相对运动、姿态误差和接触后保持目标，再新增独立执行计划。
+P8C 已完成综述、独立计划、P8C-0～P8C-2，以及由 P8C-3 失败证据触发的 P8C-4 终端接触稳定化。当前代码包含纯数学甲板平面/X500 四滑橇几何、独立视觉法向、T1 主轴约束、在线滑橇近接触证据、状态化接触锚点、锚点中心顺应、相对高度与向下加速度预压、HOLD 法向锁存和姿态安全保护。最终 fixed T1 active touchdown 为 roll `3/3`、pitch `3/3`，旧路径回归 `9/9`，全工作区 `340 tests, 0 failures, 0 skipped`。状态为：
 
-第一版从 T1 固定 2° 且 UAV 保持水平开始。只有 T1 暴露单侧冲击、滑移、倾覆风险、触地证据不稳定或 hold 失败时，才单独调研和计划甲板法向姿态对齐。T1 未通过，不进入动态 roll/pitch；combined 最后处理。
+```text
+P8C RESEARCH PASS
+P8C PLAN PASS
+P8C-0 IMPLEMENTATION PASS
+P8C-1 VALIDATION PASS
+P8C-2 SAFE DESCENT PASS
+P8C-4 VALIDATION PASS
+P8C T1 VALIDATION PASS
+P8C-3 DESIGN GATE CLOSED
+```
+
+P8C-3 水平机体失败 Bag 和设计门文档继续保留，作为 P8C-4 设计依据。负倾角与动态 roll/pitch/combined final descent 仍关闭，后续必须建立新的独立阶段和验收计划，不能直接沿用 T1 结论。
 
 ## P9：统一批量评测、消融和论文实验
 
@@ -1657,7 +1673,7 @@ B1：关闭额外预测
 B2：关闭速度前馈
 B3：完整水平相对 MPC
 B4：MPC + 升沉处理
-B5：若已实现，MPC + 法向姿态对齐
+B5：固定正 T1 场景下的当前终端接触稳定化方案（Offboard position 模式内法向整形、接触顺应与受限预压；不是 PX4 attitude setpoint 姿态对齐）
 ```
 
 统一输出 `overall`、`by_scenario`、`by_method` 和 failure breakdown，并保留失败轮完整诊断与成功轮轻量 Bag。
@@ -1905,21 +1921,17 @@ grep -R "/simulation/deck/ground_truth" \
 
 ## 15. 当前下一项任务
 
-`P0`～`P8B` 已完成真实验收，P7-lite 真实 3+3 冒烟已冻结。P8B 验收见 `docs/validation/P8B_RELATIVE_MPC_VALIDATION.md`。下一项任务限定为：
+`P0`～`P8C T1` 已完成当前传统基线的真实验收，P7-lite 真实 3+3 冒烟已冻结。P8C-3 的失败诊断触发了独立 P8C-4 研究、TDD、实现和分级验证，最终状态为：
 
 ```text
-P8C：固定倾斜及低频 roll/pitch 甲板降落调研
+P8C-4 VALIDATION PASS
+P8C T1 VALIDATION PASS
+P8C-3 DESIGN GATE CLOSED
 ```
 
-具体顺序：
+最终 roll/pitch active touchdown `6/6 PASS`，static/constant02/H1/H2/RELATIVE_MPC 回归 `9/9 PASS`，全工作区 `340 tests, 0 failures, 0 skipped`。原 P8C-3 seed2 滑移、灾难性姿态发散、离板和恢复证据仍完整保留，没有删除或被成功轮覆盖。
 
-1. 创建 `docs/research/P8C_TILTED_DECK_LANDING_REVIEW.md`；
-2. 定义甲板平面、法向、起落架点到平面距离和法向相对速度；
-3. 比较 UAV 保持水平、终端有限法向对齐和全程法向跟随；
-4. 明确固定 2° T1 场景、Ground Truth 评测边界和触地/滑移风险指标；
-5. 达到 `P8C RESEARCH PASS` 后保存独立执行计划；
-6. 未完成综述和计划前不得修改倾斜甲板终端控制生产代码；
-7. 全程保持 `NAV_LAND / Disarm = 0 / 0`，Ground Truth 仅用于 evaluator。
+下一项工程工作应进入 P9 统一批量评测、消融和论文实验；负倾角、动态 `rollpitch/combined` 和更复杂船舶姿态运动需另建阶段，不得把 fixed T1 结论直接外推。
 
 ---
 

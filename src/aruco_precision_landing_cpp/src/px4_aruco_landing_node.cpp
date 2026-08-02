@@ -9,6 +9,7 @@
 #include <cmath>
 #include <functional>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -205,6 +206,11 @@ Px4ArucoLandingNode::Px4ArucoLandingNode()
   deck_attitude_estimator_ =
     std::make_unique<DeckAttitudeEstimator>(attitude_parameters);
 
+  DeckAttitudeEstimatorParameters shadow_attitude_parameters = attitude_parameters;
+  shadow_attitude_parameters.filter_gain = deck_plane_geometry_normal_filter_gain_;
+  deck_plane_shadow_attitude_estimator_ =
+    std::make_unique<DeckAttitudeEstimator>(shadow_attitude_parameters);
+
   LandingWindowParameters landing_window_parameters;
   landing_window_parameters.enter_horizontal_error_m =
     landing_window_enter_horizontal_error_m_;
@@ -255,6 +261,8 @@ Px4ArucoLandingNode::Px4ArucoLandingNode()
     touchdown_terminal_contact_max_height_m_;
   touchdown_parameters.terminal_contact_min_reference_error_m =
     touchdown_terminal_contact_min_reference_error_m_;
+  touchdown_parameters.terminal_contact_max_geometry_gap_m =
+    touchdown_terminal_contact_max_geometry_gap_m_;
   touchdown_parameters.terminal_contact_max_vertical_speed_mps =
     touchdown_terminal_contact_max_vertical_speed_mps_;
   touchdown_parameters.terminal_contact_px4_status_timeout_s =
@@ -280,12 +288,67 @@ Px4ArucoLandingNode::Px4ArucoLandingNode()
 
   TouchdownHoldParameters touchdown_hold_parameters;
   touchdown_hold_parameters.max_target_rate_mps = touchdown_hold_max_target_rate_mps_;
+  touchdown_hold_parameters.max_reference_preload_rate_mps =
+    touchdown_hold_max_reference_preload_rate_mps_;
   touchdown_hold_parameters.motion_enter_speed_mps =
     touchdown_hold_motion_enter_speed_mps_;
   touchdown_hold_parameters.motion_exit_speed_mps =
     touchdown_hold_motion_exit_speed_mps_;
   touchdown_hold_controller_ =
     std::make_unique<TouchdownHoldController>(touchdown_hold_parameters);
+
+  TerminalDeckNormalParameters terminal_normal_parameters;
+  terminal_normal_parameters.maximum_target_tilt_rad =
+    terminal_contact_maximum_target_tilt_deg_ * kDegreesToRadians;
+  terminal_normal_parameters.normal_freshness_timeout_s =
+    terminal_contact_normal_freshness_timeout_s_;
+  terminal_normal_parameters.short_loss_hold_s = terminal_contact_short_loss_hold_s_;
+  terminal_normal_parameters.marker_switch_jump_gate_rad =
+    terminal_contact_marker_switch_jump_gate_deg_ * kDegreesToRadians;
+  terminal_normal_parameters.tilt_slew_rate_radps =
+    terminal_contact_tilt_slew_rate_degps_ * kDegreesToRadians;
+  terminal_normal_parameters.acceleration_bias_limit_mps2 =
+    terminal_contact_acceleration_bias_limit_mps2_;
+  terminal_normal_parameters.acceleration_bias_slew_rate_mps3 =
+    terminal_contact_acceleration_bias_slew_rate_mps3_;
+  terminal_normal_parameters.activation_duration_s =
+    terminal_contact_activation_duration_s_;
+  terminal_normal_parameters.deactivation_duration_s =
+    terminal_contact_deactivation_duration_s_;
+  terminal_normal_stabilizer_ =
+    std::make_unique<TerminalDeckNormalStabilizer>(terminal_normal_parameters);
+
+  TerminalContactComplianceParameters terminal_compliance_parameters;
+  terminal_compliance_parameters.horizontal_deadband_m =
+    terminal_contact_compliance_deadband_m_;
+  terminal_compliance_parameters.maximum_allowance_m =
+    terminal_contact_compliance_maximum_allowance_m_;
+  terminal_compliance_parameters.maximum_target_rate_mps =
+    terminal_contact_compliance_target_rate_mps_;
+  terminal_compliance_parameters.maximum_anchor_correction_rate_mps =
+    terminal_contact_compliance_anchor_correction_rate_mps_;
+  terminal_compliance_parameters.deck_velocity_deadband_mps =
+    terminal_contact_compliance_deck_velocity_deadband_mps_;
+  terminal_compliance_parameters.relative_velocity_damping_s =
+    terminal_contact_compliance_velocity_damping_s_;
+  terminal_compliance_parameters.maximum_damping_offset_m =
+    terminal_contact_compliance_maximum_damping_offset_m_;
+  terminal_compliance_controller_ =
+    std::make_unique<TerminalContactComplianceController>(terminal_compliance_parameters);
+
+  TerminalAttitudeSafetyParameters terminal_safety_parameters;
+  terminal_safety_parameters.attitude_trigger_rad =
+    terminal_contact_attitude_trigger_deg_ * kDegreesToRadians;
+  terminal_safety_parameters.attitude_clear_rad =
+    terminal_contact_attitude_clear_deg_ * kDegreesToRadians;
+  terminal_safety_parameters.angular_rate_trigger_radps =
+    terminal_contact_angular_rate_trigger_degps_ * kDegreesToRadians;
+  terminal_safety_parameters.required_duration_s =
+    terminal_contact_safety_required_duration_s_;
+  terminal_safety_parameters.clear_duration_s =
+    terminal_contact_safety_clear_duration_s_;
+  terminal_attitude_safety_monitor_ =
+    std::make_unique<TerminalAttitudeSafetyMonitor>(terminal_safety_parameters);
 
   body_camera_pose_.translation = Eigen::Vector3d{
     camera_translation_frd_m_[0],
@@ -416,6 +479,8 @@ void Px4ArucoLandingNode::declare_and_load_parameters()
     "touchdown_detector.terminal_contact_max_height_m", 0.24);
   touchdown_terminal_contact_min_reference_error_m_ = declare_parameter<double>(
     "touchdown_detector.terminal_contact_min_reference_error_m", 0.10);
+  touchdown_terminal_contact_max_geometry_gap_m_ = declare_parameter<double>(
+    "touchdown_detector.terminal_contact_max_geometry_gap_m", 0.03);
   touchdown_terminal_contact_max_vertical_speed_mps_ = declare_parameter<double>(
     "touchdown_detector.terminal_contact_max_vertical_speed_mps", 0.05);
   touchdown_terminal_contact_px4_status_timeout_s_ = declare_parameter<double>(
@@ -424,6 +489,8 @@ void Px4ArucoLandingNode::declare_and_load_parameters()
     "touchdown_detector.candidate_required_duration_s", 0.50);
   touchdown_hold_max_target_rate_mps_ = declare_parameter<double>(
     "touchdown_hold.max_target_rate_mps", 0.60);
+  touchdown_hold_max_reference_preload_rate_mps_ = declare_parameter<double>(
+    "touchdown_hold.max_reference_preload_rate_mps", 0.05);
   touchdown_hold_motion_enter_speed_mps_ = declare_parameter<double>(
     "touchdown_hold.motion_enter_speed_mps", 0.04);
   touchdown_hold_motion_exit_speed_mps_ = declare_parameter<double>(
@@ -526,6 +593,94 @@ void Px4ArucoLandingNode::declare_and_load_parameters()
     "deck_attitude.filter_gain", 0.20);
   deck_attitude_minimum_upward_normal_component_ = declare_parameter<double>(
     "deck_attitude.minimum_upward_normal_component", 0.50);
+  deck_plane_geometry_enabled_ = declare_parameter<bool>(
+    "deck_plane_geometry.enabled", true);
+  deck_plane_geometry_normal_filter_gain_ = declare_parameter<double>(
+    "deck_plane_geometry.normal_filter_gain", 0.08);
+  deck_plane_geometry_shadow_only_ = declare_parameter<bool>(
+    "deck_plane_geometry.shadow_only", true);
+  deck_plane_geometry_minimum_normal_norm_ = declare_parameter<double>(
+    "deck_plane_geometry.minimum_normal_norm", 1.0e-6);
+  deck_plane_geometry_minimum_upward_component_ = declare_parameter<double>(
+    "deck_plane_geometry.minimum_upward_component", 0.50);
+  deck_plane_geometry_apply_marker_plane_offset_ = declare_parameter<bool>(
+    "deck_plane_geometry.apply_marker_plane_offset", true);
+  deck_plane_geometry_contact_points_body_frd_m_ = to_array<12>(
+    declare_parameter<std::vector<double>>(
+      "deck_plane_geometry.contact_points_body_frd_m",
+      {-0.125, -0.132, 0.227,
+        0.125, -0.132, 0.227,
+       -0.125,  0.132, 0.227,
+        0.125,  0.132, 0.227}),
+    "deck_plane_geometry.contact_points_body_frd_m");
+  deck_plane_geometry_marker_plane_offsets_m_ = to_array<4>(
+    declare_parameter<std::vector<double>>(
+      "deck_plane_geometry.marker_plane_offsets_m", {0.001, 0.002, 0.003, 0.004}),
+    "deck_plane_geometry.marker_plane_offsets_m");
+  terminal_contact_stabilization_enabled_ = declare_parameter<bool>(
+    "terminal_contact_stabilization.enabled", false);
+  terminal_contact_stabilization_shadow_only_ = declare_parameter<bool>(
+    "terminal_contact_stabilization.shadow_only", true);
+  terminal_contact_stabilization_rehearsal_enabled_ = declare_parameter<bool>(
+    "terminal_contact_stabilization.rehearsal_enabled", false);
+  terminal_contact_stabilization_scenario_ = declare_parameter<std::string>(
+    "terminal_contact_stabilization.scenario", "none");
+  terminal_contact_maximum_target_tilt_deg_ = declare_parameter<double>(
+    "terminal_contact_stabilization.maximum_target_tilt_deg", 2.5);
+  terminal_contact_normal_freshness_timeout_s_ = declare_parameter<double>(
+    "terminal_contact_stabilization.normal_freshness_timeout_s", 0.20);
+  terminal_contact_short_loss_hold_s_ = declare_parameter<double>(
+    "terminal_contact_stabilization.short_loss_hold_s", 0.10);
+  terminal_contact_marker_switch_jump_gate_deg_ = declare_parameter<double>(
+    "terminal_contact_stabilization.marker_switch_jump_gate_deg", 1.0);
+  terminal_contact_tilt_slew_rate_degps_ = declare_parameter<double>(
+    "terminal_contact_stabilization.tilt_slew_rate_degps", 4.0);
+  terminal_contact_acceleration_bias_limit_mps2_ = declare_parameter<double>(
+    "terminal_contact_stabilization.acceleration_bias_limit_mps2", 0.45);
+  terminal_contact_acceleration_bias_slew_rate_mps3_ = declare_parameter<double>(
+    "terminal_contact_stabilization.acceleration_bias_slew_rate_mps3", 0.80);
+  terminal_contact_activation_duration_s_ = declare_parameter<double>(
+    "terminal_contact_stabilization.activation_duration_s", 0.50);
+  terminal_contact_deactivation_duration_s_ = declare_parameter<double>(
+    "terminal_contact_stabilization.deactivation_duration_s", 0.30);
+  terminal_contact_total_acceleration_limit_mps2_ = declare_parameter<double>(
+    "terminal_contact_stabilization.total_acceleration_limit_mps2", 1.50);
+  terminal_contact_rehearsal_max_duration_s_ = declare_parameter<double>(
+    "terminal_contact_stabilization.rehearsal_max_duration_s", 1.0);
+  terminal_contact_preload_relative_height_m_ = declare_parameter<double>(
+    "terminal_contact_stabilization.preload_relative_height_m", 0.20);
+  terminal_contact_preload_acceleration_mps2_ = declare_parameter<double>(
+    "terminal_contact_stabilization.preload_acceleration_mps2", 1.0);
+  terminal_contact_preload_acceleration_slew_mps3_ = declare_parameter<double>(
+    "terminal_contact_stabilization.preload_acceleration_slew_mps3", 1.0);
+  terminal_contact_compliance_enabled_ = declare_parameter<bool>(
+    "terminal_contact_stabilization.compliance.enabled", true);
+  terminal_contact_compliance_deadband_m_ = declare_parameter<double>(
+    "terminal_contact_stabilization.compliance.horizontal_deadband_m", 0.015);
+  terminal_contact_compliance_maximum_allowance_m_ = declare_parameter<double>(
+    "terminal_contact_stabilization.compliance.maximum_allowance_m", 0.040);
+  terminal_contact_compliance_target_rate_mps_ = declare_parameter<double>(
+    "terminal_contact_stabilization.compliance.maximum_target_rate_mps", 0.10);
+  terminal_contact_compliance_anchor_correction_rate_mps_ = declare_parameter<double>(
+    "terminal_contact_stabilization.compliance.maximum_anchor_correction_rate_mps", 0.05);
+  terminal_contact_compliance_deck_velocity_deadband_mps_ = declare_parameter<double>(
+    "terminal_contact_stabilization.compliance.deck_velocity_deadband_mps", 0.035);
+  terminal_contact_compliance_velocity_damping_s_ = declare_parameter<double>(
+    "terminal_contact_stabilization.compliance.relative_velocity_damping_s", 0.12);
+  terminal_contact_compliance_maximum_damping_offset_m_ = declare_parameter<double>(
+    "terminal_contact_stabilization.compliance.maximum_damping_offset_m", 0.020);
+  terminal_contact_attitude_safety_enabled_ = declare_parameter<bool>(
+    "terminal_contact_stabilization.attitude_safety.enabled", true);
+  terminal_contact_attitude_trigger_deg_ = declare_parameter<double>(
+    "terminal_contact_stabilization.attitude_safety.trigger_deg", 6.0);
+  terminal_contact_attitude_clear_deg_ = declare_parameter<double>(
+    "terminal_contact_stabilization.attitude_safety.clear_deg", 4.0);
+  terminal_contact_angular_rate_trigger_degps_ = declare_parameter<double>(
+    "terminal_contact_stabilization.attitude_safety.angular_rate_trigger_degps", 45.0);
+  terminal_contact_safety_required_duration_s_ = declare_parameter<double>(
+    "terminal_contact_stabilization.attitude_safety.required_duration_s", 0.20);
+  terminal_contact_safety_clear_duration_s_ = declare_parameter<double>(
+    "terminal_contact_stabilization.attitude_safety.clear_duration_s", 0.30);
   landing_window_enter_horizontal_error_m_ = declare_parameter<double>(
     "landing_window.enter_horizontal_error_m", 0.15);
   landing_window_exit_horizontal_error_m_ = declare_parameter<double>(
@@ -789,6 +944,153 @@ void Px4ArucoLandingNode::validate_parameters() const
     deck_attitude_minimum_upward_normal_component_;
   static_cast<void>(DeckAttitudeEstimator(attitude_parameters));
 
+  DeckAttitudeEstimatorParameters shadow_attitude_parameters = attitude_parameters;
+  shadow_attitude_parameters.filter_gain = deck_plane_geometry_normal_filter_gain_;
+  static_cast<void>(DeckAttitudeEstimator(shadow_attitude_parameters));
+
+  if (!deck_plane_geometry_shadow_only_) {
+    throw std::invalid_argument(
+            "deck_plane_geometry.shadow_only must remain true during P8C-0");
+  }
+  DeckPlaneGeometryInput geometry_validation_input;
+  for (std::size_t index = 0; index < geometry_validation_input.contact_points_body_frd_m.size();
+    ++index)
+  {
+    geometry_validation_input.contact_points_body_frd_m[index] = Eigen::Vector3d{
+      deck_plane_geometry_contact_points_body_frd_m_[3 * index],
+      deck_plane_geometry_contact_points_body_frd_m_[3 * index + 1],
+      deck_plane_geometry_contact_points_body_frd_m_[3 * index + 2]};
+  }
+  const auto geometry_validation = DeckPlaneGeometry::compute(
+    geometry_validation_input,
+    {deck_plane_geometry_minimum_normal_norm_,
+      deck_plane_geometry_minimum_upward_component_});
+  if (!geometry_validation.valid) {
+    throw std::invalid_argument(
+            "Invalid deck_plane_geometry parameters: " + geometry_validation.failure_reason);
+  }
+  for (double marker_plane_offset_m : deck_plane_geometry_marker_plane_offsets_m_) {
+    if (!std::isfinite(marker_plane_offset_m) || marker_plane_offset_m < 0.0) {
+      throw std::invalid_argument(
+              "deck_plane_geometry.marker_plane_offsets_m must be finite and non-negative");
+    }
+  }
+
+  TerminalDeckNormalParameters terminal_normal_parameters;
+  terminal_normal_parameters.maximum_target_tilt_rad =
+    terminal_contact_maximum_target_tilt_deg_ * kDegreesToRadians;
+  terminal_normal_parameters.normal_freshness_timeout_s =
+    terminal_contact_normal_freshness_timeout_s_;
+  terminal_normal_parameters.short_loss_hold_s = terminal_contact_short_loss_hold_s_;
+  terminal_normal_parameters.marker_switch_jump_gate_rad =
+    terminal_contact_marker_switch_jump_gate_deg_ * kDegreesToRadians;
+  terminal_normal_parameters.tilt_slew_rate_radps =
+    terminal_contact_tilt_slew_rate_degps_ * kDegreesToRadians;
+  terminal_normal_parameters.acceleration_bias_limit_mps2 =
+    terminal_contact_acceleration_bias_limit_mps2_;
+  terminal_normal_parameters.acceleration_bias_slew_rate_mps3 =
+    terminal_contact_acceleration_bias_slew_rate_mps3_;
+  terminal_normal_parameters.activation_duration_s =
+    terminal_contact_activation_duration_s_;
+  terminal_normal_parameters.deactivation_duration_s =
+    terminal_contact_deactivation_duration_s_;
+  static_cast<void>(TerminalDeckNormalStabilizer(terminal_normal_parameters));
+
+  TerminalContactComplianceParameters terminal_compliance_parameters;
+  terminal_compliance_parameters.horizontal_deadband_m =
+    terminal_contact_compliance_deadband_m_;
+  terminal_compliance_parameters.maximum_allowance_m =
+    terminal_contact_compliance_maximum_allowance_m_;
+  terminal_compliance_parameters.maximum_target_rate_mps =
+    terminal_contact_compliance_target_rate_mps_;
+  terminal_compliance_parameters.maximum_anchor_correction_rate_mps =
+    terminal_contact_compliance_anchor_correction_rate_mps_;
+  terminal_compliance_parameters.deck_velocity_deadband_mps =
+    terminal_contact_compliance_deck_velocity_deadband_mps_;
+  terminal_compliance_parameters.relative_velocity_damping_s =
+    terminal_contact_compliance_velocity_damping_s_;
+  terminal_compliance_parameters.maximum_damping_offset_m =
+    terminal_contact_compliance_maximum_damping_offset_m_;
+  static_cast<void>(TerminalContactComplianceController(terminal_compliance_parameters));
+
+  TerminalAttitudeSafetyParameters terminal_safety_parameters;
+  terminal_safety_parameters.attitude_trigger_rad =
+    terminal_contact_attitude_trigger_deg_ * kDegreesToRadians;
+  terminal_safety_parameters.attitude_clear_rad =
+    terminal_contact_attitude_clear_deg_ * kDegreesToRadians;
+  terminal_safety_parameters.angular_rate_trigger_radps =
+    terminal_contact_angular_rate_trigger_degps_ * kDegreesToRadians;
+  terminal_safety_parameters.required_duration_s =
+    terminal_contact_safety_required_duration_s_;
+  terminal_safety_parameters.clear_duration_s =
+    terminal_contact_safety_clear_duration_s_;
+  static_cast<void>(TerminalAttitudeSafetyMonitor(terminal_safety_parameters));
+  require_positive(
+    "terminal_contact_stabilization.total_acceleration_limit_mps2",
+    terminal_contact_total_acceleration_limit_mps2_);
+  require_positive(
+    "terminal_contact_stabilization.rehearsal_max_duration_s",
+    terminal_contact_rehearsal_max_duration_s_);
+  require_positive(
+    "terminal_contact_stabilization.preload_relative_height_m",
+    terminal_contact_preload_relative_height_m_);
+  require_positive(
+    "terminal_contact_stabilization.preload_acceleration_mps2",
+    terminal_contact_preload_acceleration_mps2_);
+  require_positive(
+    "terminal_contact_stabilization.preload_acceleration_slew_mps3",
+    terminal_contact_preload_acceleration_slew_mps3_);
+  if (terminal_contact_preload_relative_height_m_ >
+    touchdown_terminal_contact_max_height_m_)
+  {
+    throw std::invalid_argument(
+            "terminal contact preload height must not exceed the terminal contact height gate");
+  }
+  const bool positive_fixed_tilt =
+    terminal_contact_stabilization_scenario_ == "tilt_roll_pos_2deg" ||
+    terminal_contact_stabilization_scenario_ == "tilt_pitch_pos_2deg";
+  if (terminal_contact_stabilization_enabled_ && !positive_fixed_tilt) {
+    throw std::invalid_argument(
+            "terminal_contact_stabilization is only allowed for fixed positive +2 degree roll/pitch scenarios");
+  }
+  if (terminal_contact_stabilization_shadow_only_ &&
+    terminal_contact_stabilization_rehearsal_enabled_)
+  {
+    throw std::invalid_argument(
+            "terminal rehearsal cannot run with shadow_only=true");
+  }
+  if (terminal_contact_stabilization_enabled_ &&
+    relative_descent_enabled_ &&
+    std::abs(descent_minimum_test_height_m_ - 0.50) > 1.0e-9)
+  {
+    throw std::invalid_argument(
+            "terminal contact stabilization relative descent requires exactly 0.50 m test height");
+  }
+  if (terminal_contact_stabilization_rehearsal_enabled_) {
+    if (!relative_descent_enabled_ ||
+      std::abs(descent_minimum_test_height_m_ - 0.50) > 1.0e-9)
+    {
+      throw std::invalid_argument(
+              "terminal rehearsal requires relative descent and exactly 0.50 m test height");
+    }
+    if (!terminal_contact_stabilization_enabled_ ||
+      terminal_contact_stabilization_shadow_only_ || final_descent_enabled_)
+    {
+      throw std::invalid_argument(
+              "terminal rehearsal requires active output, explicit enable, and final descent disabled");
+    }
+  } else if (terminal_contact_stabilization_enabled_ &&
+    !terminal_contact_stabilization_shadow_only_)
+  {
+    if (!relative_descent_enabled_ ||
+      std::abs(descent_minimum_test_height_m_ - 0.50) > 1.0e-9 ||
+      !final_descent_enabled_)
+    {
+      throw std::invalid_argument(
+              "active terminal contact stabilization requires relative descent, exactly 0.50 m, and final descent");
+    }
+  }
+
   LandingWindowParameters landing_window_parameters;
   landing_window_parameters.enter_horizontal_error_m =
     landing_window_enter_horizontal_error_m_;
@@ -854,6 +1156,8 @@ void Px4ArucoLandingNode::validate_parameters() const
     touchdown_terminal_contact_max_height_m_;
   touchdown_parameters.terminal_contact_min_reference_error_m =
     touchdown_terminal_contact_min_reference_error_m_;
+  touchdown_parameters.terminal_contact_max_geometry_gap_m =
+    touchdown_terminal_contact_max_geometry_gap_m_;
   touchdown_parameters.terminal_contact_max_vertical_speed_mps =
     touchdown_terminal_contact_max_vertical_speed_mps_;
   touchdown_parameters.terminal_contact_px4_status_timeout_s =
@@ -864,6 +1168,8 @@ void Px4ArucoLandingNode::validate_parameters() const
 
   TouchdownHoldParameters touchdown_hold_parameters;
   touchdown_hold_parameters.max_target_rate_mps = touchdown_hold_max_target_rate_mps_;
+  touchdown_hold_parameters.max_reference_preload_rate_mps =
+    touchdown_hold_max_reference_preload_rate_mps_;
   touchdown_hold_parameters.motion_enter_speed_mps =
     touchdown_hold_motion_enter_speed_mps_;
   touchdown_hold_parameters.motion_exit_speed_mps =
@@ -1131,6 +1437,99 @@ void Px4ArucoLandingNode::create_ros_interfaces()
     create_publisher<geometry_msgs::msg::Vector3Stamped>(
     "/landing/estimated_deck_attitude",
     rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  deck_plane_upward_normal_pub_ =
+    create_publisher<geometry_msgs::msg::Vector3Stamped>(
+    "/landing/deck_plane/upward_normal_ned",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  deck_plane_body_clearance_pub_ = create_publisher<std_msgs::msg::Float64>(
+    "/landing/deck_plane/body_clearance",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  deck_plane_skid_clearances_pub_ =
+    create_publisher<std_msgs::msg::Float64MultiArray>(
+    "/landing/deck_plane/skid_clearances",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  deck_plane_minimum_skid_clearance_pub_ = create_publisher<std_msgs::msg::Float64>(
+    "/landing/deck_plane/minimum_skid_clearance",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  deck_plane_maximum_skid_clearance_pub_ = create_publisher<std_msgs::msg::Float64>(
+    "/landing/deck_plane/maximum_skid_clearance",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  deck_plane_clearance_spread_pub_ = create_publisher<std_msgs::msg::Float64>(
+    "/landing/deck_plane/clearance_spread",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  deck_plane_first_contact_point_index_pub_ = create_publisher<std_msgs::msg::Int32>(
+    "/landing/deck_plane/first_contact_point_index",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  deck_plane_normal_relative_velocity_pub_ = create_publisher<std_msgs::msg::Float64>(
+    "/landing/deck_plane/normal_relative_velocity",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  deck_plane_skid_normal_relative_velocities_pub_ =
+    create_publisher<std_msgs::msg::Float64MultiArray>(
+    "/landing/deck_plane/skid_normal_relative_velocities",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  deck_plane_tangential_position_error_pub_ =
+    create_publisher<geometry_msgs::msg::Vector3Stamped>(
+    "/landing/deck_plane/tangential_position_error",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  deck_plane_tangential_relative_velocity_pub_ =
+    create_publisher<geometry_msgs::msg::Vector3Stamped>(
+    "/landing/deck_plane/tangential_relative_velocity",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  deck_plane_status_pub_ = create_publisher<std_msgs::msg::String>(
+    "/landing/deck_plane/status",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  deck_normal_rate_pub_ = create_publisher<std_msgs::msg::Float64>(
+    "/landing/deck_plane/normal_rate_degps",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  marker_switch_normal_jump_pub_ = create_publisher<std_msgs::msg::Float64>(
+    "/landing/deck_plane/marker_switch_normal_jump_deg",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  marker_normals_by_id_pub_ = create_publisher<std_msgs::msg::Float64MultiArray>(
+    "/landing/deck_plane/marker_normals_by_id",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  marker_normal_valid_mask_pub_ = create_publisher<std_msgs::msg::UInt32>(
+    "/landing/deck_plane/marker_normal_valid_mask",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  terminal_stabilization_enabled_pub_ = create_publisher<std_msgs::msg::Bool>(
+    "/landing/terminal_stabilization/enabled",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  terminal_stabilization_mode_pub_ = create_publisher<std_msgs::msg::String>(
+    "/landing/terminal_stabilization/mode",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  terminal_stabilization_reason_pub_ = create_publisher<std_msgs::msg::String>(
+    "/landing/terminal_stabilization/reason",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  terminal_desired_normal_pub_ = create_publisher<geometry_msgs::msg::Vector3Stamped>(
+    "/landing/terminal_stabilization/desired_normal",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  terminal_desired_roll_pitch_pub_ =
+    create_publisher<geometry_msgs::msg::Vector3Stamped>(
+    "/landing/terminal_stabilization/desired_roll_pitch",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  terminal_actual_roll_pitch_pub_ =
+    create_publisher<geometry_msgs::msg::Vector3Stamped>(
+    "/landing/terminal_stabilization/actual_roll_pitch",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  terminal_attitude_error_pub_ = create_publisher<geometry_msgs::msg::Vector3Stamped>(
+    "/landing/terminal_stabilization/attitude_error",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  terminal_acceleration_bias_pub_ =
+    create_publisher<geometry_msgs::msg::Vector3Stamped>(
+    "/landing/terminal_stabilization/acceleration_bias_ned",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  terminal_combined_acceleration_ff_pub_ =
+    create_publisher<geometry_msgs::msg::Vector3Stamped>(
+    "/landing/terminal_stabilization/combined_acceleration_ff_ned",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  terminal_contact_anchor_pub_ = create_publisher<geometry_msgs::msg::Vector3Stamped>(
+    "/landing/terminal_stabilization/contact_anchor",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  terminal_compliant_target_pub_ = create_publisher<geometry_msgs::msg::Vector3Stamped>(
+    "/landing/terminal_stabilization/compliant_target",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  terminal_divergence_status_pub_ = create_publisher<std_msgs::msg::String>(
+    "/landing/terminal_stabilization/divergence_status",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
   landing_window_open_pub_ = create_publisher<std_msgs::msg::Bool>(
     "/landing/window_open",
     rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
@@ -1345,8 +1744,15 @@ void Px4ArucoLandingNode::aruco_pose_callback(
     raw_relative_height_m_ =
       marker_pose_ned.translation.z() - sample_body_pose->translation.z();
     raw_relative_height_valid_ = std::isfinite(raw_relative_height_m_);
+    deck_plane_geometry_sample_body_pose_ = *sample_body_pose;
+    deck_plane_geometry_sample_deck_position_ned_m_ = marker_pose_ned.translation;
+    deck_plane_geometry_sample_marker_id_ =
+      have_aruco_id_ && aruco_id_ >= 0 && aruco_id_ < 4 ? aruco_id_ : -1;
+    last_deck_plane_geometry_sample_time_ = receipt_time;
+    have_deck_plane_geometry_sample_ = true;
   } else {
     raw_relative_height_valid_ = false;
+    have_deck_plane_geometry_sample_ = false;
   }
 
   marker_pose_ned_.header.stamp = receipt_time;
@@ -1534,10 +1940,17 @@ void Px4ArucoLandingNode::control_timer_callback()
   relative_descent_debug_valid_ = false;
   final_descent_debug_valid_ = false;
   touchdown_hold_debug_valid_ = false;
+  terminal_stabilization_debug_valid_ = false;
+  terminal_stabilization_applied_ = false;
+  terminal_combined_acceleration_valid_ = false;
+  terminal_base_acceleration_ff_xy_.setZero();
+  terminal_combined_acceleration_ff_xy_.setZero();
   publish_offboard_control_mode();
   run_state_machine(now, dt);
   update_touchdown_detection(now);
   publish_trajectory_setpoint();
+  // P8C-0 shadow 几何在控制输出发布后计算，结果不会进入本周期或后续控制输入。
+  update_deck_plane_geometry_shadow(now);
   publish_landing_state();
   publish_target_pose();
   publish_deck_gnss_pose(now);
@@ -1550,6 +1963,9 @@ void Px4ArucoLandingNode::control_timer_callback()
   publish_effective_relative_velocity_gain();
   publish_estimated_deck_acceleration(now);
   publish_estimated_deck_attitude();
+  publish_deck_plane_geometry_shadow(now);
+  publish_deck_normal_calibration_debug();
+  publish_terminal_stabilization_debug(now);
   publish_landing_window_debug();
   publish_relative_descent_debug();
   publish_vertical_state(now);
@@ -1837,6 +2253,44 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
           visual_guidance_->loss_state(visual_valid, now.seconds());
 
         if (loss_state == VisualLossState::kLongLoss) {
+          const bool confirmed_touchdown_hold =
+            state_ == LandingState::TOUCHDOWN_HOLD &&
+            touchdown_result_valid_ && touchdown_result_.confirmed_latched;
+          if (confirmed_touchdown_hold) {
+            // 已确认接触后禁止因近距遮挡重新起飞。继续发布锁存的水平目标、
+            // P8C-4 预压垂直目标和最后有效法向；不使用陈旧视觉更新顺应锚点。
+            double vertical_target_z = target_valid_ ?
+              target_z_ : static_cast<double>(local_position_.z);
+            const auto touchdown_hold_output = update_touchdown_hold(now, dt);
+            if (touchdown_hold_output.has_value()) {
+              vertical_target_z = touchdown_hold_output->vertical_target_z_ned_m;
+            }
+            Eigen::Vector2d horizontal_target_xy = target_valid_ ?
+              Eigen::Vector2d{target_x_, target_y_} :
+              Eigen::Vector2d{local_position_.x, local_position_.y};
+            std::optional<Eigen::Vector2d> uav_velocity_xy;
+            if (local_position_.v_xy_valid &&
+              std::isfinite(local_position_.vx) &&
+              std::isfinite(local_position_.vy))
+            {
+              uav_velocity_xy = Eigen::Vector2d{local_position_.vx, local_position_.vy};
+            }
+            if (!update_terminal_contact_stabilization(
+                now, dt, std::nullopt, uav_velocity_xy, horizontal_target_xy))
+            {
+              transition_to(
+                LandingState::RECOVER_CLIMB,
+                "P8C-4 terminal attitude safety monitor requested recovery");
+              break;
+            }
+            set_target(
+              horizontal_target_xy.x(), horizontal_target_xy.y(),
+              vertical_target_z, current_yaw_);
+            RCLCPP_WARN_THROTTLE(
+              get_logger(), *get_clock(), 5000,
+              "Touchdown hold visual loss: holding latched contact targets");
+            break;
+          }
           transition_to(
             LandingState::RECOVER_TO_GNSS,
             "visual pose was lost for the long timeout during visual guidance");
@@ -1963,7 +2417,12 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
           }
         } else if (final_descent_state) {
           final_descent_output = update_final_descent(estimate, visual_valid, dt);
-          if (state_ == LandingState::TOUCHDOWN_HOLD) {
+          const bool p8c4_preload_state =
+            terminal_contact_stabilization_enabled_ &&
+            !terminal_contact_stabilization_shadow_only_ &&
+            (state_ == LandingState::TOUCHDOWN_CANDIDATE_HOLD ||
+            state_ == LandingState::TOUCHDOWN_HOLD);
+          if (state_ == LandingState::TOUCHDOWN_HOLD || p8c4_preload_state) {
             touchdown_hold_output = update_touchdown_hold(now, dt);
             if (touchdown_hold_output.has_value()) {
               vertical_target_z = touchdown_hold_output->vertical_target_z_ned_m;
@@ -2084,9 +2543,18 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
           }
         }
 
+        Eigen::Vector2d horizontal_target_xy = horizontal_command->position_target_xy;
+        if (!update_terminal_contact_stabilization(
+            now, dt, estimate, uav_velocity_xy, horizontal_target_xy))
+        {
+          transition_to(
+            LandingState::RECOVER_CLIMB,
+            "P8C-4 terminal attitude safety monitor requested recovery");
+          break;
+        }
         set_target(
-          horizontal_command->position_target_xy.x(),
-          horizontal_command->position_target_xy.y(),
+          horizontal_target_xy.x(),
+          horizontal_target_xy.y(),
           vertical_target_z,
           current_yaw_);
         // Nominal RELATIVE_MPC uses pure deck-velocity feedforward plus bounded acceleration.
@@ -2399,6 +2867,22 @@ void Px4ArucoLandingNode::transition_to(
     touchdown_hold_controller_->reset();
     touchdown_hold_debug_valid_ = false;
   }
+  const bool terminal_safe_reset =
+    new_state == LandingState::RECOVER_CLIMB ||
+    new_state == LandingState::RECOVER_TO_GNSS ||
+    new_state == LandingState::ABORT ||
+    new_state == LandingState::DONE;
+  if (terminal_safe_reset) {
+    terminal_normal_stabilizer_->reset();
+    terminal_compliance_controller_->reset();
+    terminal_attitude_safety_monitor_->reset();
+    terminal_rehearsal_elapsed_s_ = 0.0;
+    terminal_stabilization_applied_ = false;
+    terminal_combined_acceleration_valid_ = false;
+    terminal_base_acceleration_ff_xy_.setZero();
+    terminal_combined_acceleration_ff_xy_.setZero();
+    clear_velocity_feedforward();
+  }
 
   switch (state_) {
     case LandingState::OFFBOARD_PRE_STREAM:
@@ -2428,6 +2912,10 @@ void Px4ArucoLandingNode::transition_to(
       vertical_state_measurement_valid_ = false;
       raw_relative_height_valid_ = false;
       have_estimated_deck_attitude_ = false;
+      have_shadow_deck_attitude_ = false;
+      have_previous_deck_normal_ = false;
+      previous_deck_normal_marker_id_ = -1;
+      marker_normal_valid_mask_ = 0U;
       visual_guidance_->reset();
       target_state_estimator_->reset();
       vertical_state_estimator_->reset();
@@ -2438,6 +2926,7 @@ void Px4ArucoLandingNode::transition_to(
       touchdown_hold_controller_->reset();
       touchdown_hold_debug_valid_ = false;
       deck_attitude_estimator_->reset();
+      deck_plane_shadow_attitude_estimator_->reset();
       landing_window_->reset();
       landing_window_result_valid_ = false;
       set_target(
@@ -2466,6 +2955,10 @@ void Px4ArucoLandingNode::transition_to(
       vertical_state_measurement_valid_ = false;
       raw_relative_height_valid_ = false;
       have_estimated_deck_attitude_ = false;
+      have_shadow_deck_attitude_ = false;
+      have_previous_deck_normal_ = false;
+      previous_deck_normal_marker_id_ = -1;
+      marker_normal_valid_mask_ = 0U;
       visual_guidance_->reset();
       target_state_estimator_->reset();
       vertical_state_estimator_->reset();
@@ -2476,6 +2969,7 @@ void Px4ArucoLandingNode::transition_to(
       touchdown_hold_controller_->reset();
       touchdown_hold_debug_valid_ = false;
       deck_attitude_estimator_->reset();
+      deck_plane_shadow_attitude_estimator_->reset();
       landing_window_->reset();
       landing_window_result_valid_ = false;
       set_target(
@@ -2542,8 +3036,13 @@ void Px4ArucoLandingNode::transition_to(
       break;
 
     case LandingState::TOUCHDOWN_HOLD:
-      touchdown_hold_controller_->reset();
-      touchdown_hold_debug_valid_ = false;
+      if (!(terminal_contact_stabilization_enabled_ &&
+        !terminal_contact_stabilization_shadow_only_ &&
+        previous_state == LandingState::TOUCHDOWN_CANDIDATE_HOLD))
+      {
+        touchdown_hold_controller_->reset();
+        touchdown_hold_debug_valid_ = false;
+      }
       clear_velocity_feedforward();
       break;
 
@@ -2559,10 +3058,15 @@ void Px4ArucoLandingNode::transition_to(
       vertical_state_measurement_valid_ = false;
       raw_relative_height_valid_ = false;
       have_estimated_deck_attitude_ = false;
+      have_shadow_deck_attitude_ = false;
+      have_previous_deck_normal_ = false;
+      previous_deck_normal_marker_id_ = -1;
+      marker_normal_valid_mask_ = 0U;
       visual_guidance_->reset();
       target_state_estimator_->reset();
       vertical_state_estimator_->reset();
       deck_attitude_estimator_->reset();
+      deck_plane_shadow_attitude_estimator_->reset();
       landing_window_->reset();
       landing_window_result_valid_ = false;
       set_target(
@@ -2601,9 +3105,14 @@ void Px4ArucoLandingNode::transition_to(
       vertical_state_measurement_valid_ = false;
       raw_relative_height_valid_ = false;
       have_estimated_deck_attitude_ = false;
+      have_shadow_deck_attitude_ = false;
+      have_previous_deck_normal_ = false;
+      previous_deck_normal_marker_id_ = -1;
+      marker_normal_valid_mask_ = 0U;
       target_state_estimator_->reset();
       vertical_state_estimator_->reset();
       deck_attitude_estimator_->reset();
+      deck_plane_shadow_attitude_estimator_->reset();
       landing_window_->reset();
       landing_window_result_valid_ = false;
       set_target(
@@ -2780,17 +3289,148 @@ void Px4ArucoLandingNode::update_estimated_deck_attitude(
   const rclcpp::Time & sample_time)
 {
   const auto estimate = deck_attitude_estimator_->update(marker_to_ned_rotation);
-  if (!estimate.has_value()) {
+  const auto shadow_estimate =
+    deck_plane_shadow_attitude_estimator_->update(marker_to_ned_rotation);
+  if (!estimate.has_value() || !shadow_estimate.has_value()) {
     have_estimated_deck_attitude_ = false;
+    have_shadow_deck_attitude_ = false;
+    deck_normal_rate_valid_ = false;
+    marker_switch_normal_jump_valid_ = false;
     RCLCPP_WARN_THROTTLE(
       get_logger(), *get_clock(), 5000,
       "Rejected Marker attitude because its upward normal is invalid or flipped");
     return;
   }
 
+  deck_normal_rate_valid_ = false;
+  // Marker 切换是低频离散事件，而视觉回调可能快于 20 Hz 诊断发布。
+  // 不在普通同-ID 样本上清除此标志；由发布函数在成功发布后消费，避免
+  // 合法跳变证据在两个控制周期之间丢失。
+  const int32_t current_marker_id =
+    have_aruco_id_ && aruco_id_ >= 0 && aruco_id_ < 4 ? aruco_id_ : -1;
+  if (have_previous_deck_normal_) {
+    const double normal_dot = std::clamp(
+      previous_deck_normal_ned_.dot(shadow_estimate->upward_normal_ned), -1.0, 1.0);
+    const double normal_jump_deg = std::acos(normal_dot) / kDegreesToRadians;
+    const double dt_s = (sample_time - previous_deck_normal_time_).seconds();
+    if (std::isfinite(normal_jump_deg) && std::isfinite(dt_s) && dt_s > 0.0) {
+      deck_normal_rate_degps_ = normal_jump_deg / dt_s;
+      deck_normal_rate_valid_ = std::isfinite(deck_normal_rate_degps_);
+    }
+    if (current_marker_id >= 0 && previous_deck_normal_marker_id_ >= 0 &&
+      current_marker_id != previous_deck_normal_marker_id_)
+    {
+      marker_switch_normal_jump_deg_ = normal_jump_deg;
+      marker_switch_normal_jump_valid_ = std::isfinite(marker_switch_normal_jump_deg_);
+    }
+  }
+
+  if (current_marker_id >= 0) {
+    marker_normal_ned_by_id_[static_cast<std::size_t>(current_marker_id)] =
+      shadow_estimate->upward_normal_ned;
+    marker_normal_valid_mask_ |= (1U << static_cast<std::uint32_t>(current_marker_id));
+  }
+
+  previous_deck_normal_ned_ = shadow_estimate->upward_normal_ned;
+  previous_deck_normal_time_ = sample_time;
+  previous_deck_normal_marker_id_ = current_marker_id;
+  have_previous_deck_normal_ = true;
   estimated_deck_attitude_ = *estimate;
+  shadow_deck_attitude_ = *shadow_estimate;
   last_estimated_deck_attitude_time_ = sample_time;
   have_estimated_deck_attitude_ = true;
+  have_shadow_deck_attitude_ = true;
+}
+
+void Px4ArucoLandingNode::update_deck_plane_geometry_shadow(const rclcpp::Time & now)
+{
+  deck_plane_geometry_result_ = DeckPlaneGeometryResult{};
+  if (!deck_plane_geometry_enabled_) {
+    deck_plane_geometry_status_ = "DISABLED";
+    return;
+  }
+  if (!deck_plane_geometry_shadow_only_) {
+    deck_plane_geometry_status_ = "INVALID: shadow_only safety gate is false";
+    return;
+  }
+  if (!have_deck_plane_geometry_sample_ || !have_shadow_deck_attitude_) {
+    deck_plane_geometry_status_ = "INVALID: synchronized visual pose or deck normal unavailable";
+    return;
+  }
+
+  const double sample_age_s = (now - last_deck_plane_geometry_sample_time_).seconds();
+  if (!std::isfinite(sample_age_s) || sample_age_s < 0.0 ||
+    sample_age_s > estimator_output_timeout_s_)
+  {
+    deck_plane_geometry_status_ = "INVALID: synchronized visual geometry sample is stale";
+    return;
+  }
+
+  DeckPlaneGeometryInput input;
+  input.uav_reference_position_ned_m = deck_plane_geometry_sample_body_pose_.translation;
+  input.body_frd_to_ned = deck_plane_geometry_sample_body_pose_.rotation;
+  input.upward_normal_ned = shadow_deck_attitude_.upward_normal_ned;
+  input.deck_reference_position_ned_m = deck_plane_geometry_sample_deck_position_ned_m_;
+
+  double applied_marker_plane_offset_m = 0.0;
+  if (deck_plane_geometry_apply_marker_plane_offset_) {
+    if (deck_plane_geometry_sample_marker_id_ < 0 ||
+      deck_plane_geometry_sample_marker_id_ >= 4)
+    {
+      deck_plane_geometry_status_ =
+        "INVALID: sampled active Marker ID required for collision-plane offset correction";
+      return;
+    }
+    applied_marker_plane_offset_m = deck_plane_geometry_marker_plane_offsets_m_[
+      static_cast<std::size_t>(deck_plane_geometry_sample_marker_id_)];
+    input.deck_reference_position_ned_m -=
+      applied_marker_plane_offset_m * input.upward_normal_ned;
+  }
+
+  for (std::size_t index = 0; index < input.contact_points_body_frd_m.size(); ++index) {
+    input.contact_points_body_frd_m[index] = Eigen::Vector3d{
+      deck_plane_geometry_contact_points_body_frd_m_[3 * index],
+      deck_plane_geometry_contact_points_body_frd_m_[3 * index + 1],
+      deck_plane_geometry_contact_points_body_frd_m_[3 * index + 2]};
+  }
+
+  if (local_position_.v_xy_valid && local_position_.v_z_valid &&
+    std::isfinite(local_position_.vx) && std::isfinite(local_position_.vy) &&
+    std::isfinite(local_position_.vz))
+  {
+    input.uav_linear_velocity_ned_mps = Eigen::Vector3d{
+      local_position_.vx, local_position_.vy, local_position_.vz};
+  }
+
+  const auto deck_estimate = target_state_estimator_->estimate();
+  if (deck_estimate.has_value() && deck_estimate->velocity_ned.allFinite()) {
+    input.deck_linear_velocity_ned_mps = deck_estimate->velocity_ned;
+  }
+
+  const Eigen::Vector3d uav_angular_velocity_body_frd{
+    vehicle_odometry_.angular_velocity[0],
+    vehicle_odometry_.angular_velocity[1],
+    vehicle_odometry_.angular_velocity[2]};
+  if (uav_angular_velocity_body_frd.allFinite()) {
+    input.uav_angular_velocity_body_frd_radps = uav_angular_velocity_body_frd;
+  }
+  // P8C-0 不在线估计甲板角速度，也不以零值冒充；端点动态速度因此显式无效。
+
+  deck_plane_geometry_result_ = DeckPlaneGeometry::compute(
+    input,
+    {deck_plane_geometry_minimum_normal_norm_,
+      deck_plane_geometry_minimum_upward_component_});
+  if (!deck_plane_geometry_result_.valid) {
+    deck_plane_geometry_status_ =
+      "INVALID: " + deck_plane_geometry_result_.failure_reason;
+    return;
+  }
+
+  std::ostringstream status;
+  status << "OK_SHADOW marker_id=" << deck_plane_geometry_sample_marker_id_
+         << " marker_plane_offset_m=" << applied_marker_plane_offset_m
+         << " velocity=" << deck_plane_geometry_result_.output.velocity_status;
+  deck_plane_geometry_status_ = status.str();
 }
 
 void Px4ArucoLandingNode::update_landing_window(
@@ -3002,6 +3642,13 @@ std::optional<TouchdownHoldOutput> Px4ArucoLandingNode::update_touchdown_hold(
   input.uav_z_ned_m = std::isfinite(local_position_.z) ?
     static_cast<double>(local_position_.z) :
     std::numeric_limits<double>::quiet_NaN();
+  if (terminal_contact_stabilization_enabled_ &&
+    !terminal_contact_stabilization_shadow_only_ &&
+    (state_ == LandingState::TOUCHDOWN_CANDIDATE_HOLD ||
+    state_ == LandingState::TOUCHDOWN_HOLD))
+  {
+    input.relative_height_target_m = terminal_contact_preload_relative_height_m_;
+  }
 
   // 接触前保留额外预测时域；触地保持只补偿观测年龄，避免甲板 z 前视造成压板。
   const auto vertical_state = predicted_vertical_state(now, false);
@@ -3077,13 +3724,24 @@ void Px4ArucoLandingNode::update_touchdown_detection(const rclcpp::Time & now)
     state_ == LandingState::TOUCHDOWN_CANDIDATE_HOLD ||
     state_ == LandingState::TOUCHDOWN_HOLD) &&
     final_descent_output_.relative_height_reference_m <=
-    final_descent_terminal_entry_height_m_;
+    final_descent_contact_slowdown_height_m_;
   input.terminal_command_complete =
     input.terminal_descent_active &&
     final_descent_output_.relative_height_reference_m <=
     final_descent_minimum_command_height_m_ + 1.0e-6;
   input.relative_height_reference_m = final_descent_controller_->initialized() ?
     final_descent_output_.relative_height_reference_m :
+    std::numeric_limits<double>::quiet_NaN();
+  // 仅 active、非 shadow 的 P8C-4 可将在线视觉甲板平面几何用于提前冻结下降；
+  // 默认、shadow、rehearsal 和 legacy 场景保持原触地语义。该结果来自上一控制周期，
+  // 仍受本周期 visual_fresh 与运动兼容门约束，不读取 Ground Truth。
+  input.terminal_contact_geometry_valid =
+    terminal_contact_stabilization_enabled_ &&
+    !terminal_contact_stabilization_shadow_only_ &&
+    deck_plane_geometry_result_.valid &&
+    std::isfinite(deck_plane_geometry_result_.output.minimum_contact_gap_m);
+  input.minimum_skid_clearance_m = input.terminal_contact_geometry_valid ?
+    deck_plane_geometry_result_.output.minimum_contact_gap_m :
     std::numeric_limits<double>::quiet_NaN();
   input.relative_horizontal_speed_valid =
     deck_estimate.has_value() &&
@@ -3115,6 +3773,207 @@ void Px4ArucoLandingNode::update_touchdown_detection(const rclcpp::Time & now)
 
   touchdown_result_ = touchdown_detector_->update(input);
   touchdown_result_valid_ = true;
+}
+
+TerminalStabilizationPhase Px4ArucoLandingNode::terminal_stabilization_phase() const
+{
+  const bool explicit_rehearsal =
+    terminal_contact_stabilization_rehearsal_enabled_ &&
+    state_ == LandingState::TEST_HEIGHT_HOLD;
+  const bool shadow_rehearsal =
+    terminal_contact_stabilization_enabled_ &&
+    terminal_contact_stabilization_shadow_only_ &&
+    (state_ == LandingState::TRACK_TARGET ||
+    state_ == LandingState::WAIT_LANDING_WINDOW ||
+    state_ == LandingState::DESCEND ||
+    state_ == LandingState::TEST_HEIGHT_HOLD);
+  if (explicit_rehearsal || shadow_rehearsal) {
+    return TerminalStabilizationPhase::kRehearsal;
+  }
+  switch (state_) {
+    case LandingState::FINAL_DESCENT:
+      return TerminalStabilizationPhase::kFinalDescent;
+    case LandingState::TOUCHDOWN_CANDIDATE_HOLD:
+      return TerminalStabilizationPhase::kTouchdownCandidateHold;
+    case LandingState::TOUCHDOWN_HOLD:
+      return TerminalStabilizationPhase::kTouchdownHold;
+    case LandingState::RECOVER_CLIMB:
+    case LandingState::RECOVER_TO_GNSS:
+    case LandingState::ABORT:
+      return TerminalStabilizationPhase::kRecovery;
+    default:
+      return TerminalStabilizationPhase::kInactive;
+  }
+}
+
+bool Px4ArucoLandingNode::update_terminal_contact_stabilization(
+  const rclcpp::Time & now,
+  double dt,
+  const std::optional<TargetStateEstimate> & estimate,
+  const std::optional<Eigen::Vector2d> & uav_velocity_xy,
+  Eigen::Vector2d & horizontal_target_xy)
+{
+  terminal_stabilization_debug_valid_ = true;
+  terminal_base_acceleration_ff_xy_ = horizontal_acceleration_feedforward_valid_ ?
+    Eigen::Vector2d{
+    horizontal_acceleration_feedforward_north_mps2_,
+    horizontal_acceleration_feedforward_east_mps2_} : Eigen::Vector2d::Zero();
+  terminal_combined_acceleration_ff_xy_ = terminal_base_acceleration_ff_xy_;
+  terminal_combined_acceleration_valid_ = horizontal_acceleration_feedforward_valid_;
+
+  const TerminalStabilizationPhase phase = terminal_stabilization_phase();
+  const bool shadow_rehearsal =
+    terminal_contact_stabilization_shadow_only_ &&
+    phase == TerminalStabilizationPhase::kRehearsal;
+  if (phase == TerminalStabilizationPhase::kRehearsal && !shadow_rehearsal) {
+    terminal_rehearsal_elapsed_s_ += dt;
+  } else if (phase != TerminalStabilizationPhase::kRehearsal) {
+    terminal_rehearsal_elapsed_s_ = 0.0;
+  }
+  const bool rehearsal_authorized =
+    shadow_rehearsal ||
+    (terminal_contact_stabilization_rehearsal_enabled_ &&
+    terminal_rehearsal_elapsed_s_ <= terminal_contact_rehearsal_max_duration_s_);
+
+  const bool geometry_proximity_candidate =
+    phase == TerminalStabilizationPhase::kTouchdownCandidateHold &&
+    touchdown_result_valid_ &&
+    (touchdown_result_.evidence_mask &
+    touchdown_evidence_mask(TouchdownEvidence::kTerminalGeometryProximity)) != 0U;
+  const bool normal_phase_authorized =
+    TerminalDeckNormalStabilizer::phase_height_authorized(
+      phase, relative_height_m_, final_descent_terminal_entry_height_m_,
+      geometry_proximity_candidate);
+  TerminalDeckNormalInput normal_input;
+  normal_input.now_s = now.seconds();
+  normal_input.dt_s = dt;
+  normal_input.phase = normal_phase_authorized ?
+    phase : TerminalStabilizationPhase::kInactive;
+  normal_input.production_enabled = terminal_contact_stabilization_enabled_;
+  normal_input.rehearsal_enabled = rehearsal_authorized;
+  normal_input.normal_age_s = have_deck_plane_geometry_sample_ ?
+    (now - last_deck_plane_geometry_sample_time_).seconds() :
+    std::numeric_limits<double>::infinity();
+  normal_input.normal_valid =
+    have_shadow_deck_attitude_ && have_deck_plane_geometry_sample_ &&
+    std::isfinite(normal_input.normal_age_s) && normal_input.normal_age_s >= 0.0;
+  normal_input.marker_switched = marker_switch_normal_jump_valid_;
+  normal_input.marker_switch_jump_rad =
+    marker_switch_normal_jump_deg_ * kDegreesToRadians;
+  if (terminal_contact_stabilization_scenario_ == "tilt_roll_pos_2deg") {
+    normal_input.alignment_axis = TerminalAlignmentAxis::kRollOnly;
+  } else if (terminal_contact_stabilization_scenario_ == "tilt_pitch_pos_2deg") {
+    normal_input.alignment_axis = TerminalAlignmentAxis::kPitchOnly;
+  }
+  normal_input.latch_last_valid_normal =
+    phase == TerminalStabilizationPhase::kTouchdownHold &&
+    terminal_contact_stabilization_enabled_ &&
+    !terminal_contact_stabilization_shadow_only_;
+  normal_input.upward_normal_ned = normal_input.normal_valid ?
+    shadow_deck_attitude_.upward_normal_ned : Eigen::Vector3d{0.0, 0.0, -1.0};
+  normal_input.yaw_ned_rad = current_yaw_;
+  terminal_normal_output_ = terminal_normal_stabilizer_->update(normal_input);
+  if (terminal_normal_output_.fallback_active) {
+    ++terminal_fallback_count_;
+  }
+
+  const bool compute_terminal_output =
+    terminal_contact_stabilization_enabled_ && normal_phase_authorized &&
+    (phase != TerminalStabilizationPhase::kRehearsal || rehearsal_authorized);
+  const bool apply_output =
+    compute_terminal_output && !terminal_contact_stabilization_shadow_only_;
+  if (compute_terminal_output) {
+    terminal_combined_acceleration_ff_xy_ =
+      terminal_base_acceleration_ff_xy_ +
+      terminal_normal_output_.acceleration_bias_ned_mps2;
+    const double combined_norm = terminal_combined_acceleration_ff_xy_.norm();
+    if (combined_norm > terminal_contact_total_acceleration_limit_mps2_) {
+      terminal_combined_acceleration_ff_xy_ *=
+        terminal_contact_total_acceleration_limit_mps2_ / combined_norm;
+    }
+    terminal_combined_acceleration_valid_ = true;
+    if (apply_output) {
+      set_horizontal_acceleration_feedforward(
+        terminal_combined_acceleration_ff_xy_.x(),
+        terminal_combined_acceleration_ff_xy_.y());
+      terminal_stabilization_applied_ = true;
+    }
+  }
+
+  const bool vertical_preload_authorized =
+    apply_output &&
+    (phase == TerminalStabilizationPhase::kTouchdownCandidateHold ||
+    phase == TerminalStabilizationPhase::kTouchdownHold);
+  const double vertical_preload_target_mps2 = vertical_preload_authorized ?
+    terminal_contact_preload_acceleration_mps2_ : 0.0;
+  const double vertical_preload_max_step_mps2 =
+    terminal_contact_preload_acceleration_slew_mps3_ * dt;
+  terminal_vertical_preload_acceleration_mps2_ += std::clamp(
+    vertical_preload_target_mps2 - terminal_vertical_preload_acceleration_mps2_,
+    -vertical_preload_max_step_mps2,
+    vertical_preload_max_step_mps2);
+  if (terminal_vertical_preload_acceleration_mps2_ > 1.0e-9) {
+    set_vertical_acceleration_feedforward(
+      terminal_vertical_preload_acceleration_mps2_);
+  }
+
+  TerminalContactComplianceInput compliance_input;
+  compliance_input.dt_s = dt;
+  compliance_input.phase = phase;
+  compliance_input.enabled =
+    apply_output && terminal_contact_compliance_enabled_ &&
+    phase == TerminalStabilizationPhase::kTouchdownHold;
+  compliance_input.nominal_target_xy_m = horizontal_target_xy;
+  compliance_input.uav_position_xy_m =
+    Eigen::Vector2d{local_position_.x, local_position_.y};
+  compliance_input.uav_velocity_xy_mps =
+    uav_velocity_xy.value_or(Eigen::Vector2d::Zero());
+  compliance_input.deck_state_valid =
+    estimate.has_value() && estimate->position_ned.allFinite() &&
+    estimate->velocity_ned.allFinite() && uav_velocity_xy.has_value();
+  if (compliance_input.deck_state_valid) {
+    compliance_input.deck_position_xy_m = estimate->position_ned.head<2>();
+    compliance_input.deck_velocity_xy_mps = estimate->velocity_ned.head<2>();
+  }
+  terminal_compliance_output_ = terminal_compliance_controller_->update(compliance_input);
+  if (terminal_compliance_output_.active && terminal_compliance_output_.valid) {
+    horizontal_target_xy = terminal_compliance_output_.compliant_target_xy_m;
+  }
+
+  TerminalAttitudeSafetyInput safety_input;
+  safety_input.dt_s = dt;
+  safety_input.phase = phase;
+  safety_input.enabled =
+    apply_output && terminal_contact_attitude_safety_enabled_;
+  safety_input.attitude_valid =
+    have_vehicle_odometry_ && quaternion_is_valid(vehicle_odometry_.q.data());
+  if (safety_input.attitude_valid) {
+    const Eigen::Vector2d actual_roll_pitch =
+      quaternion_to_roll_pitch(vehicle_odometry_.q.data());
+    safety_input.roll_rad = actual_roll_pitch.x();
+    safety_input.pitch_rad = actual_roll_pitch.y();
+    safety_input.angular_velocity_body_radps = Eigen::Vector3d{
+      vehicle_odometry_.angular_velocity[0],
+      vehicle_odometry_.angular_velocity[1],
+      vehicle_odometry_.angular_velocity[2]};
+  }
+  terminal_attitude_safety_output_ =
+    terminal_attitude_safety_monitor_->update(safety_input);
+  if (terminal_attitude_safety_output_.recovery_requested) {
+    ++terminal_divergence_protection_count_;
+    terminal_normal_stabilizer_->reset();
+    terminal_compliance_controller_->reset();
+    terminal_attitude_safety_monitor_->reset();
+    horizontal_acceleration_feedforward_valid_ = false;
+    horizontal_acceleration_feedforward_north_mps2_ = 0.0;
+    horizontal_acceleration_feedforward_east_mps2_ = 0.0;
+    vertical_acceleration_feedforward_valid_ = false;
+    vertical_acceleration_feedforward_down_mps2_ = 0.0;
+    terminal_vertical_preload_acceleration_mps2_ = 0.0;
+    terminal_stabilization_applied_ = false;
+    return false;
+  }
+  return true;
 }
 
 void Px4ArucoLandingNode::set_target(double x, double y, double z, double yaw)
@@ -3152,6 +4011,13 @@ void Px4ArucoLandingNode::set_horizontal_acceleration_feedforward(
     std::isfinite(horizontal_acceleration_feedforward_east_mps2_);
 }
 
+void Px4ArucoLandingNode::set_vertical_acceleration_feedforward(double down_mps2)
+{
+  vertical_acceleration_feedforward_down_mps2_ = down_mps2;
+  vertical_acceleration_feedforward_valid_ =
+    std::isfinite(vertical_acceleration_feedforward_down_mps2_);
+}
+
 void Px4ArucoLandingNode::set_vertical_velocity_feedforward(double down_mps)
 {
   vertical_velocity_feedforward_down_mps_ = down_mps;
@@ -3185,6 +4051,8 @@ void Px4ArucoLandingNode::clear_velocity_feedforward()
   horizontal_acceleration_feedforward_north_mps2_ = 0.0;
   horizontal_acceleration_feedforward_east_mps2_ = 0.0;
   horizontal_acceleration_feedforward_valid_ = false;
+  vertical_acceleration_feedforward_down_mps2_ = 0.0;
+  vertical_acceleration_feedforward_valid_ = false;
   vertical_velocity_feedforward_down_mps_ = 0.0;
   vertical_velocity_feedforward_valid_ = false;
   effective_relative_velocity_gain_ = 0.0;
@@ -3233,7 +4101,8 @@ void Px4ArucoLandingNode::publish_trajectory_setpoint()
     static_cast<float>(horizontal_acceleration_feedforward_north_mps2_) : nan,
     horizontal_acceleration_feedforward_valid_ ?
     static_cast<float>(horizontal_acceleration_feedforward_east_mps2_) : nan,
-    nan} :
+    vertical_acceleration_feedforward_valid_ ?
+    static_cast<float>(vertical_acceleration_feedforward_down_mps2_) : nan} :
   std::array<float, 3>{nan, nan, nan};
   msg.jerk = {nan, nan, nan};
   msg.yaw = target_valid_ ? static_cast<float>(target_yaw_) : nan;
@@ -3568,6 +4437,188 @@ void Px4ArucoLandingNode::publish_estimated_deck_attitude()
   msg.vector.y = estimated_deck_attitude_.pitch_rad;
   msg.vector.z = estimated_deck_attitude_.tilt_rad;
   estimated_deck_attitude_pub_->publish(msg);
+}
+
+void Px4ArucoLandingNode::publish_deck_plane_geometry_shadow(const rclcpp::Time & now)
+{
+  std_msgs::msg::String status_msg;
+  status_msg.data = deck_plane_geometry_status_;
+  deck_plane_status_pub_->publish(status_msg);
+
+  if (!deck_plane_geometry_result_.valid) {
+    return;
+  }
+  const auto & output = deck_plane_geometry_result_.output;
+
+  geometry_msgs::msg::Vector3Stamped normal_msg;
+  normal_msg.header.stamp = now;
+  normal_msg.header.frame_id = target_pose_frame_id_;
+  normal_msg.vector.x = output.upward_normal_ned.x();
+  normal_msg.vector.y = output.upward_normal_ned.y();
+  normal_msg.vector.z = output.upward_normal_ned.z();
+  deck_plane_upward_normal_pub_->publish(normal_msg);
+
+  std_msgs::msg::Float64 scalar_msg;
+  scalar_msg.data = output.body_normal_gap_m;
+  deck_plane_body_clearance_pub_->publish(scalar_msg);
+
+  std_msgs::msg::Float64MultiArray skid_clearance_msg;
+  skid_clearance_msg.data.assign(
+    output.contact_gaps_m.begin(), output.contact_gaps_m.end());
+  deck_plane_skid_clearances_pub_->publish(skid_clearance_msg);
+
+  scalar_msg.data = output.minimum_contact_gap_m;
+  deck_plane_minimum_skid_clearance_pub_->publish(scalar_msg);
+  scalar_msg.data = output.maximum_contact_gap_m;
+  deck_plane_maximum_skid_clearance_pub_->publish(scalar_msg);
+  scalar_msg.data = output.contact_gap_spread_m;
+  deck_plane_clearance_spread_pub_->publish(scalar_msg);
+
+  std_msgs::msg::Int32 contact_index_msg;
+  contact_index_msg.data = static_cast<int32_t>(output.first_contact_index);
+  deck_plane_first_contact_point_index_pub_->publish(contact_index_msg);
+
+  if (output.body_normal_relative_velocity_mps.has_value()) {
+    scalar_msg.data = *output.body_normal_relative_velocity_mps;
+    deck_plane_normal_relative_velocity_pub_->publish(scalar_msg);
+  }
+
+  bool all_contact_velocities_valid = true;
+  std_msgs::msg::Float64MultiArray contact_velocity_msg;
+  contact_velocity_msg.data.reserve(output.contact_normal_relative_velocity_mps.size());
+  for (const auto & velocity : output.contact_normal_relative_velocity_mps) {
+    if (!velocity.has_value()) {
+      all_contact_velocities_valid = false;
+      break;
+    }
+    contact_velocity_msg.data.push_back(*velocity);
+  }
+  if (all_contact_velocities_valid) {
+    deck_plane_skid_normal_relative_velocities_pub_->publish(contact_velocity_msg);
+  }
+
+  geometry_msgs::msg::Vector3Stamped vector_msg;
+  vector_msg.header.stamp = now;
+  vector_msg.header.frame_id = target_pose_frame_id_;
+  vector_msg.vector.x = output.tangential_position_error_ned_m.x();
+  vector_msg.vector.y = output.tangential_position_error_ned_m.y();
+  vector_msg.vector.z = output.tangential_position_error_ned_m.z();
+  deck_plane_tangential_position_error_pub_->publish(vector_msg);
+
+  if (output.tangential_relative_velocity_ned_mps.has_value()) {
+    vector_msg.vector.x = output.tangential_relative_velocity_ned_mps->x();
+    vector_msg.vector.y = output.tangential_relative_velocity_ned_mps->y();
+    vector_msg.vector.z = output.tangential_relative_velocity_ned_mps->z();
+    deck_plane_tangential_relative_velocity_pub_->publish(vector_msg);
+  }
+}
+
+void Px4ArucoLandingNode::publish_deck_normal_calibration_debug()
+{
+  if (deck_normal_rate_valid_) {
+    std_msgs::msg::Float64 rate_msg;
+    rate_msg.data = deck_normal_rate_degps_;
+    deck_normal_rate_pub_->publish(rate_msg);
+  }
+  if (marker_switch_normal_jump_valid_) {
+    std_msgs::msg::Float64 jump_msg;
+    jump_msg.data = marker_switch_normal_jump_deg_;
+    marker_switch_normal_jump_pub_->publish(jump_msg);
+    marker_switch_normal_jump_valid_ = false;
+  }
+
+  std_msgs::msg::Float64MultiArray normals_msg;
+  normals_msg.data.reserve(12);
+  for (const auto & normal : marker_normal_ned_by_id_) {
+    normals_msg.data.push_back(normal.x());
+    normals_msg.data.push_back(normal.y());
+    normals_msg.data.push_back(normal.z());
+  }
+  marker_normals_by_id_pub_->publish(normals_msg);
+
+  std_msgs::msg::UInt32 valid_mask_msg;
+  valid_mask_msg.data = marker_normal_valid_mask_;
+  marker_normal_valid_mask_pub_->publish(valid_mask_msg);
+}
+
+void Px4ArucoLandingNode::publish_terminal_stabilization_debug(
+  const rclcpp::Time & now)
+{
+  std_msgs::msg::Bool enabled_msg;
+  enabled_msg.data = terminal_stabilization_applied_;
+  terminal_stabilization_enabled_pub_->publish(enabled_msg);
+
+  std_msgs::msg::String mode_msg;
+  mode_msg.data = terminal_stabilization_debug_valid_ ?
+    terminal_normal_output_.mode : "DISABLED";
+  terminal_stabilization_mode_pub_->publish(mode_msg);
+
+  std_msgs::msg::String reason_msg;
+  reason_msg.data = terminal_stabilization_debug_valid_ ?
+    terminal_normal_output_.reason : "outside_visual_control_path";
+  terminal_stabilization_reason_pub_->publish(reason_msg);
+
+  std_msgs::msg::String divergence_msg;
+  divergence_msg.data = terminal_attitude_safety_output_.reason;
+  terminal_divergence_status_pub_->publish(divergence_msg);
+
+  if (!terminal_stabilization_debug_valid_) {
+    return;
+  }
+
+  geometry_msgs::msg::Vector3Stamped vector_msg;
+  vector_msg.header.stamp = now;
+  vector_msg.header.frame_id = target_pose_frame_id_;
+  if (terminal_normal_output_.valid || terminal_normal_output_.enabled) {
+    vector_msg.vector.x = terminal_normal_output_.desired_upward_normal_ned.x();
+    vector_msg.vector.y = terminal_normal_output_.desired_upward_normal_ned.y();
+    vector_msg.vector.z = terminal_normal_output_.desired_upward_normal_ned.z();
+    terminal_desired_normal_pub_->publish(vector_msg);
+
+    vector_msg.vector.x = terminal_normal_output_.desired_roll_pitch_rad.x();
+    vector_msg.vector.y = terminal_normal_output_.desired_roll_pitch_rad.y();
+    vector_msg.vector.z = 0.0;
+    terminal_desired_roll_pitch_pub_->publish(vector_msg);
+
+    vector_msg.vector.x = terminal_normal_output_.acceleration_bias_ned_mps2.x();
+    vector_msg.vector.y = terminal_normal_output_.acceleration_bias_ned_mps2.y();
+    vector_msg.vector.z = 0.0;
+    terminal_acceleration_bias_pub_->publish(vector_msg);
+  }
+
+  if (terminal_combined_acceleration_valid_) {
+    vector_msg.vector.x = terminal_combined_acceleration_ff_xy_.x();
+    vector_msg.vector.y = terminal_combined_acceleration_ff_xy_.y();
+    vector_msg.vector.z = 0.0;
+    terminal_combined_acceleration_ff_pub_->publish(vector_msg);
+  }
+
+  if (have_vehicle_odometry_ && quaternion_is_valid(vehicle_odometry_.q.data())) {
+    const Eigen::Vector2d actual = quaternion_to_roll_pitch(vehicle_odometry_.q.data());
+    vector_msg.vector.x = actual.x();
+    vector_msg.vector.y = actual.y();
+    vector_msg.vector.z = 0.0;
+    terminal_actual_roll_pitch_pub_->publish(vector_msg);
+
+    if (terminal_normal_output_.valid || terminal_normal_output_.enabled) {
+      vector_msg.vector.x = terminal_normal_output_.desired_roll_pitch_rad.x() - actual.x();
+      vector_msg.vector.y = terminal_normal_output_.desired_roll_pitch_rad.y() - actual.y();
+      vector_msg.vector.z = 0.0;
+      terminal_attitude_error_pub_->publish(vector_msg);
+    }
+  }
+
+  if (terminal_compliance_output_.active && terminal_compliance_output_.valid) {
+    vector_msg.vector.x = terminal_compliance_output_.contact_anchor_xy_m.x();
+    vector_msg.vector.y = terminal_compliance_output_.contact_anchor_xy_m.y();
+    vector_msg.vector.z = 0.0;
+    terminal_contact_anchor_pub_->publish(vector_msg);
+
+    vector_msg.vector.x = terminal_compliance_output_.compliant_target_xy_m.x();
+    vector_msg.vector.y = terminal_compliance_output_.compliant_target_xy_m.y();
+    vector_msg.vector.z = 0.0;
+    terminal_compliant_target_pub_->publish(vector_msg);
+  }
 }
 
 void Px4ArucoLandingNode::publish_landing_window_debug()
@@ -3998,6 +5049,25 @@ double Px4ArucoLandingNode::quaternion_to_yaw(const float q[4])
   return std::atan2(
     2.0 * (w * z + x * y),
     1.0 - 2.0 * (y * y + z * z));
+}
+
+Eigen::Vector2d Px4ArucoLandingNode::quaternion_to_roll_pitch(const float q[4])
+{
+  const double norm = std::sqrt(
+    static_cast<double>(q[0]) * q[0] +
+    static_cast<double>(q[1]) * q[1] +
+    static_cast<double>(q[2]) * q[2] +
+    static_cast<double>(q[3]) * q[3]);
+  const double w = q[0] / norm;
+  const double x = q[1] / norm;
+  const double y = q[2] / norm;
+  const double z = q[3] / norm;
+  const double roll = std::atan2(
+    2.0 * (w * x + y * z),
+    1.0 - 2.0 * (x * x + y * y));
+  const double pitch = std::asin(std::clamp(
+    2.0 * (w * y - z * x), -1.0, 1.0));
+  return {roll, pitch};
 }
 
 bool Px4ArucoLandingNode::quaternion_is_valid(const float q[4])

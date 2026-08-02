@@ -8,10 +8,15 @@ Usage: ./scripts/start_sitl.sh [options]
 
 Options:
   --scenario static|constant02|constant|sinusoidal|heave|heave_h1|heave_h2|heave_h3|rollpitch|combined
+             |tilt_roll_pos_2deg|tilt_roll_neg_2deg|tilt_pitch_pos_2deg|tilt_pitch_neg_2deg
                                          Deck scenario (default: static)
                                          constant02 = 0.2 m/s, constant = 0.4 m/s
                                          heave_h1/h2/h3 = P8A graded profiles
+                                         negative tilt_*_2deg = P8C-1 safe-altitude shadow only
+                                         positive tilt_*_2deg = P8C-1 safe altitude, P8C-2 0.50 m safe descent,
+                                         or P8C-3 0.50 m relative + final-descent touchdown
   --headless                             Run Gazebo without GUI
+  --dry-run                              Validate arguments and safety gates without starting processes
   --record                               Record evaluation and ArUco diagnostics topics
   --record-camera-debug                  Record a bag and additionally include raw camera topics
   --bag-output PATH                      Write rosbag to this exact directory (implies --record)
@@ -40,13 +45,19 @@ Options:
   --descent-medium-rate RATE             P5B middle-altitude rate (default: 0.30)
   --descent-slow-rate RATE               P5B pre-final rate (default: 0.12)
   --landing-window-min-height HEIGHT     Minimum valid estimated height (default: 0.08)
-  --enable-final-descent                 Enable P6B on static or horizontal-motion decks
+  --enable-final-descent                 Enable P6B/P8A, or P8C-3 on positive fixed +2° profiles
   --final-descent-approach-rate RATE     0.50 m to slowdown-height rate (default: 0.12)
   --final-descent-contact-rate RATE      Near-contact rate (default: 0.03)
   --final-descent-rate RATE              Alias for --final-descent-contact-rate
   --final-descent-slowdown-height HEIGHT Switch to contact rate here (default: 0.25)
   --final-descent-terminal-height HEIGHT Begin safe terminal touchdown here (default: 0.20)
   --final-descent-min-height HEIGHT      Physical-contact command clamp (default: 0.05)
+  --terminal-contact-stabilization-shadow
+                                         P8C-4 diagnostics only; no control output
+  --terminal-contact-stabilization-rehearsal
+                                         P8C-4 bounded active rehearsal at 0.50 m; no contact
+  --enable-terminal-contact-stabilization
+                                         P8C-4 active terminal output for positive +2° touchdown
   -h, --help                             Show this help
 
 Environment:
@@ -63,6 +74,7 @@ die() {
 
 scenario="static"
 headless="false"
+dry_run="false"
 record="false"
 record_camera_debug="false"
 bag_output=""
@@ -96,6 +108,10 @@ final_descent_contact_slowdown_height_m="0.25"
 final_descent_terminal_entry_height_m="0.20"
 final_descent_minimum_command_height_m="0.05"
 final_descent_max_reference_tracking_error_m="0.20"
+terminal_contact_stabilization_mode="disabled"
+terminal_contact_stabilization_enabled="false"
+terminal_contact_stabilization_shadow_only="true"
+terminal_contact_stabilization_rehearsal_enabled="false"
 tuning_override="false"
 
 while (($#)); do
@@ -107,6 +123,10 @@ while (($#)); do
       ;;
     --headless)
       headless="true"
+      shift
+      ;;
+    --dry-run)
+      dry_run="true"
       shift
       ;;
     --record)
@@ -298,6 +318,33 @@ while (($#)); do
       tuning_override="true"
       shift 2
       ;;
+    --terminal-contact-stabilization-shadow)
+      [[ "$terminal_contact_stabilization_mode" == "disabled" ]] ||
+        die "terminal contact stabilization mode flags are mutually exclusive"
+      terminal_contact_stabilization_mode="shadow"
+      terminal_contact_stabilization_enabled="true"
+      terminal_contact_stabilization_shadow_only="true"
+      terminal_contact_stabilization_rehearsal_enabled="false"
+      shift
+      ;;
+    --terminal-contact-stabilization-rehearsal)
+      [[ "$terminal_contact_stabilization_mode" == "disabled" ]] ||
+        die "terminal contact stabilization mode flags are mutually exclusive"
+      terminal_contact_stabilization_mode="rehearsal"
+      terminal_contact_stabilization_enabled="true"
+      terminal_contact_stabilization_shadow_only="false"
+      terminal_contact_stabilization_rehearsal_enabled="true"
+      shift
+      ;;
+    --enable-terminal-contact-stabilization)
+      [[ "$terminal_contact_stabilization_mode" == "disabled" ]] ||
+        die "terminal contact stabilization mode flags are mutually exclusive"
+      terminal_contact_stabilization_mode="active"
+      terminal_contact_stabilization_enabled="true"
+      terminal_contact_stabilization_shadow_only="false"
+      terminal_contact_stabilization_rehearsal_enabled="false"
+      shift
+      ;;
     -h | --help)
       usage
       exit 0
@@ -319,8 +366,82 @@ case "$scenario" in
   heave_h3) scenario_config="heave_h3.yaml" ;;
   rollpitch) scenario_config="roll_pitch.yaml" ;;
   combined) scenario_config="combined.yaml" ;;
-  *) die "invalid scenario '$scenario' (expected static, constant02, constant, sinusoidal, heave, heave_h1, heave_h2, heave_h3, rollpitch, or combined)" ;;
+  tilt_roll_pos_2deg) scenario_config="tilt_roll_pos_2deg.yaml" ;;
+  tilt_roll_neg_2deg) scenario_config="tilt_roll_neg_2deg.yaml" ;;
+  tilt_pitch_pos_2deg) scenario_config="tilt_pitch_pos_2deg.yaml" ;;
+  tilt_pitch_neg_2deg) scenario_config="tilt_pitch_neg_2deg.yaml" ;;
+  *) die "invalid scenario '$scenario' (expected static, constant02, constant, sinusoidal, heave, heave_h1, heave_h2, heave_h3, rollpitch, combined, or a P8C fixed tilt_*_2deg profile)" ;;
 esac
+
+p8c_gate_profile="not_p8c"
+case "$scenario" in
+  tilt_roll_pos_2deg | tilt_pitch_pos_2deg)
+    if [[ "$final_descent_enabled" == "true" ]]; then
+      [[ "$relative_descent_enabled" == "true" ]] ||
+        die "P8C-3 positive fixed-tilt touchdown requires --enable-relative-descent"
+      awk -v value="$descent_minimum_test_height_m" \
+        'BEGIN {exit !(value == 0.50)}' ||
+        die "P8C-3 positive fixed-tilt touchdown requires exactly 0.50 m test height"
+      p8c_gate_profile="P8C-3 positive fixed-tilt touchdown"
+    elif [[ "$relative_descent_enabled" == "true" ]]; then
+      awk -v value="$descent_minimum_test_height_m" \
+        'BEGIN {exit !(value == 0.50)}' ||
+        die "P8C-2 positive fixed-tilt safe descent requires exactly 0.50 m test height"
+      p8c_gate_profile="P8C-2 positive fixed-tilt safe descent"
+    else
+      p8c_gate_profile="P8C-1 fixed-tilt safe altitude"
+    fi
+    ;;
+  tilt_roll_neg_2deg | tilt_pitch_neg_2deg)
+    if [[ "$final_descent_enabled" == "true" ]]; then
+      die "P8C-3 fixed-tilt final descent and real contact are not open"
+    fi
+    if [[ "$relative_descent_enabled" == "true" ]]; then
+      die "P8C-1 negative fixed-tilt profiles remain safe-altitude shadow only"
+    fi
+    p8c_gate_profile="P8C-1 fixed-tilt safe altitude"
+    ;;
+esac
+
+if [[ "$terminal_contact_stabilization_enabled" == "true" ]]; then
+  case "$scenario" in
+    tilt_roll_pos_2deg | tilt_pitch_pos_2deg) ;;
+    *)
+      die "P8C-4 terminal contact stabilization is restricted to positive fixed +2 degree roll/pitch scenarios"
+      ;;
+  esac
+
+  case "$terminal_contact_stabilization_mode" in
+    shadow)
+      [[ "$final_descent_enabled" == "false" ]] ||
+        die "P8C-4 shadow validation requires final descent disabled"
+      if [[ "$relative_descent_enabled" == "true" ]]; then
+        awk -v value="$descent_minimum_test_height_m" \
+          'BEGIN {exit !(value == 0.50)}' ||
+          die "P8C-4 shadow safe descent requires exactly 0.50 m test height"
+      fi
+      ;;
+    rehearsal)
+      [[ "$relative_descent_enabled" == "true" ]] ||
+        die "P8C-4 rehearsal requires relative descent"
+      awk -v value="$descent_minimum_test_height_m" \
+        'BEGIN {exit !(value == 0.50)}' ||
+        die "P8C-4 rehearsal requires exactly 0.50 m test height"
+      [[ "$final_descent_enabled" == "false" ]] ||
+        die "P8C-4 rehearsal requires final descent disabled"
+      ;;
+    active)
+      [[ "$relative_descent_enabled" == "true" ]] ||
+        die "P8C-4 active touchdown requires relative descent"
+      awk -v value="$descent_minimum_test_height_m" \
+        'BEGIN {exit !(value == 0.50)}' ||
+        die "P8C-4 active touchdown requires exactly 0.50 m test height"
+      [[ "$final_descent_enabled" == "true" ]] ||
+        die "P8C-4 active touchdown requires final descent"
+      ;;
+    *) die "invalid terminal contact stabilization mode" ;;
+  esac
+fi
 
 case "$camera_model_profile" in
   px4-default | close-range) ;;
@@ -431,8 +552,8 @@ if [[ "$final_descent_enabled" == "true" ]]; then
   [[ "$relative_descent_enabled" == "true" ]] ||
     die "--enable-final-descent requires --enable-relative-descent"
   case "$scenario" in
-    static | constant02 | constant | sinusoidal | heave_h1 | heave_h2 | heave_h3) ;;
-    *) die "--enable-final-descent currently supports static, horizontal-motion, and P8A heave profiles only" ;;
+    static | constant02 | constant | sinusoidal | heave_h1 | heave_h2 | heave_h3 | tilt_roll_pos_2deg | tilt_pitch_pos_2deg) ;;
+    *) die "--enable-final-descent currently supports static, horizontal-motion, and P8A heave profiles only, plus P8C-3 positive fixed +2 degree profiles" ;;
   esac
   awk -v value="$descent_minimum_test_height_m" \
     'BEGIN {exit !(value == 0.50)}' ||
@@ -441,6 +562,22 @@ if [[ "$final_descent_enabled" == "true" ]]; then
     -v terminal="$final_descent_terminal_entry_height_m" \
     'BEGIN {exit !(window_min < terminal)}' ||
     die "final descent requires landing-window minimum height below terminal-entry height"
+fi
+
+if [[ "$dry_run" == "true" ]]; then
+  echo "DRY_RUN validation passed"
+  echo "scenario=$scenario"
+  echo "relative_descent_enabled=$relative_descent_enabled"
+  echo "descent_minimum_test_height_m=$descent_minimum_test_height_m"
+  echo "final_descent_enabled=$final_descent_enabled"
+  echo "terminal_contact_stabilization_mode=$terminal_contact_stabilization_mode"
+  echo "terminal_contact_stabilization_enabled=$terminal_contact_stabilization_enabled"
+  echo "terminal_contact_stabilization_shadow_only=$terminal_contact_stabilization_shadow_only"
+  echo "terminal_contact_stabilization_rehearsal_enabled=$terminal_contact_stabilization_rehearsal_enabled"
+  if [[ "$p8c_gate_profile" != "not_p8c" ]]; then
+    echo "P8C_GATE=$p8c_gate_profile"
+  fi
+  exit 0
 fi
 
 sanitize_number() {
@@ -474,7 +611,7 @@ source "$workspace_setup"
 source "$px4_gz_env"
 set -u
 
-for command in ros2 python3 MicroXRCEAgent make setsid pgrep tail grep awk realpath; do
+for command in ros2 python3 MicroXRCEAgent make setsid pgrep ps tail grep awk realpath; do
   command -v "$command" >/dev/null || die "required command not found: $command"
 done
 
@@ -515,10 +652,27 @@ echo "Camera near clip: $camera_near_clip m"
 echo "Gazebo model priority: ${GZ_SIM_RESOURCE_PATH%%:*}"
 [[ "$headless" == "true" ]] || echo "Gazebo Qt platform: $QT_QPA_PLATFORM"
 
-stale_pattern='MicroXRCEAgent|(^|/)px4( |$)|gz sim|moving_deck_controller|deck_gnss_simulator|parameter_bridge.*world/aruco|aruco_detector_node|px4_aruco_landing_node'
-if pgrep -f "$stale_pattern" >/dev/null; then
+stale_pattern='MicroXRCEAgent|(^|/)px4( |$)|gz sim|moving_deck_controller|deck_gnss_simulator|parameter_bridge|aruco_detector_node|px4_aruco_landing_node|mavlink_gcs_heartbeat.py'
+# Automated runners often mention process names in their own command line. Exclude
+# this script and its complete ancestor chain so only independent stale SITL
+# processes block startup.
+ancestor_pids=" $$ "
+ancestor_pid="$PPID"
+while [[ "$ancestor_pid" =~ ^[0-9]+$ ]] && ((ancestor_pid > 1)); do
+  ancestor_pids+="$ancestor_pid "
+  ancestor_pid="$(ps -o ppid= -p "$ancestor_pid" | awk '{print $1}')"
+done
+stale_processes="$(
+  { pgrep -af "$stale_pattern" || true; } | while read -r process_pid process_command; do
+    case "$ancestor_pids" in
+      *" $process_pid "*) ;;
+      *) printf '%s %s\n' "$process_pid" "$process_command" ;;
+    esac
+  done
+)"
+if [[ -n "$stale_processes" ]]; then
   echo "Error: existing SITL processes detected; stop them before starting a new run:" >&2
-  pgrep -af "$stale_pattern" >&2
+  printf '%s\n' "$stale_processes" >&2
   exit 1
 fi
 
@@ -589,8 +743,17 @@ start_px4() {
   child_pids+=("$!")
 }
 
+heartbeat_script="$script_dir/mavlink_gcs_heartbeat.py"
+[[ -f "$heartbeat_script" ]] || die "local GCS heartbeat script not found: $heartbeat_script"
+python3 -c 'import pymavlink' >/dev/null 2>&1 ||
+  die "pymavlink is required for unattended PX4 SITL GCS heartbeat"
+
 start_process "MicroXRCEAgent" MicroXRCEAgent udp4 -p 8888
 start_px4
+# PX4 keeps NAV_DLL_ACT active in SITL. Own a local, non-controlling MAV_TYPE_GCS
+# heartbeat so automated runs do not depend on an accidentally running QGroundControl.
+start_process "local GCS heartbeat" python3 "$heartbeat_script" \
+  --host 127.0.0.1 --port 18570 --rate-hz 1.0
 start_process "moving deck ($scenario)" ros2 launch \
   moving_deck_sim moving_deck_sim.launch.py \
   "config_file:=$scenario_path" \
@@ -632,10 +795,29 @@ fi
 
 if [[ "$record" == "true" ]]; then
   bag_prefix="p4_${scenario}"
+  case "$scenario" in
+    tilt_roll_pos_2deg | tilt_roll_neg_2deg | tilt_pitch_pos_2deg | tilt_pitch_neg_2deg)
+      bag_prefix="p8c1_${scenario}_safe_altitude"
+      ;;
+  esac
   if [[ "$relative_descent_enabled" == "true" ]]; then
-    bag_prefix="p5b_${scenario}_descent"
+    case "$scenario" in
+      tilt_roll_pos_2deg | tilt_pitch_pos_2deg)
+        bag_prefix="p8c2_${scenario}_safe_descent"
+        ;;
+      *)
+        bag_prefix="p5b_${scenario}_descent"
+        ;;
+    esac
     if [[ "$final_descent_enabled" == "true" ]]; then
-      bag_prefix="p6b_${scenario}_final_descent"
+      case "$scenario" in
+        tilt_roll_pos_2deg | tilt_pitch_pos_2deg)
+          bag_prefix="p8c3_${scenario}_touchdown"
+          ;;
+        *)
+          bag_prefix="p6b_${scenario}_final_descent"
+          ;;
+      esac
     fi
     if [[ "$vertical_velocity_feedforward_enabled" == "true" ]]; then
       bag_prefix+="_zff$(sanitize_number "$vertical_velocity_feedforward_gain")"
@@ -723,6 +905,34 @@ if [[ "$record" == "true" ]]; then
     /landing/effective_relative_velocity_gain
     /landing/estimated_deck_acceleration
     /landing/estimated_deck_attitude
+    /landing/deck_plane/upward_normal_ned
+    /landing/deck_plane/body_clearance
+    /landing/deck_plane/skid_clearances
+    /landing/deck_plane/minimum_skid_clearance
+    /landing/deck_plane/maximum_skid_clearance
+    /landing/deck_plane/clearance_spread
+    /landing/deck_plane/first_contact_point_index
+    /landing/deck_plane/normal_relative_velocity
+    /landing/deck_plane/skid_normal_relative_velocities
+    /landing/deck_plane/tangential_position_error
+    /landing/deck_plane/tangential_relative_velocity
+    /landing/deck_plane/status
+    /landing/deck_plane/normal_rate_degps
+    /landing/deck_plane/marker_switch_normal_jump_deg
+    /landing/deck_plane/marker_normals_by_id
+    /landing/deck_plane/marker_normal_valid_mask
+    /landing/terminal_stabilization/enabled
+    /landing/terminal_stabilization/mode
+    /landing/terminal_stabilization/reason
+    /landing/terminal_stabilization/desired_normal
+    /landing/terminal_stabilization/desired_roll_pitch
+    /landing/terminal_stabilization/actual_roll_pitch
+    /landing/terminal_stabilization/attitude_error
+    /landing/terminal_stabilization/acceleration_bias_ned
+    /landing/terminal_stabilization/combined_acceleration_ff_ned
+    /landing/terminal_stabilization/contact_anchor
+    /landing/terminal_stabilization/compliant_target
+    /landing/terminal_stabilization/divergence_status
     /landing/window_open
     /landing/window_reject_reasons
     /landing/window_satisfied_duration
@@ -783,7 +993,11 @@ start_process "landing controller" ros2 launch \
   "descent_fast_rate_mps:=$descent_fast_rate_mps" \
   "descent_medium_rate_mps:=$descent_medium_rate_mps" \
   "descent_slow_rate_mps:=$descent_slow_rate_mps" \
-  "landing_window_minimum_relative_height_m:=$landing_window_minimum_relative_height_m"
+  "landing_window_minimum_relative_height_m:=$landing_window_minimum_relative_height_m" \
+  "terminal_contact_stabilization_enabled:=$terminal_contact_stabilization_enabled" \
+  "terminal_contact_stabilization_shadow_only:=$terminal_contact_stabilization_shadow_only" \
+  "terminal_contact_stabilization_rehearsal_enabled:=$terminal_contact_stabilization_rehearsal_enabled" \
+  "terminal_contact_stabilization_scenario:=$scenario"
 
 echo "SITL is running. Press Ctrl-C to stop all processes."
 set +e

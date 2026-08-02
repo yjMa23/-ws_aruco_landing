@@ -215,6 +215,26 @@ def generate_launch_description():
                 description="Minimum valid estimated relative height for landing-window evaluation.",
             ),
             DeclareLaunchArgument(
+                "terminal_contact_stabilization_enabled",
+                default_value="false",
+                description="Explicitly enable P8C-4 terminal contact stabilization.",
+            ),
+            DeclareLaunchArgument(
+                "terminal_contact_stabilization_shadow_only",
+                default_value="true",
+                description="Compute P8C-4 diagnostics without applying terminal output.",
+            ),
+            DeclareLaunchArgument(
+                "terminal_contact_stabilization_rehearsal_enabled",
+                default_value="false",
+                description="Enable bounded SITL-only active rehearsal at TEST_HEIGHT_HOLD.",
+            ),
+            DeclareLaunchArgument(
+                "terminal_contact_stabilization_scenario",
+                default_value="none",
+                description="Safety-whitelist scenario name; never used as a normal measurement.",
+            ),
+            DeclareLaunchArgument(
                 "vehicle_status_topic",
                 default_value="/fmu/out/vehicle_status_v4",
                 description="PX4 VehicleStatus output topic.",
@@ -412,6 +432,30 @@ def generate_launch_description():
                                 "landing_window_minimum_relative_height_m"
                             ),
                             value_type=float,
+                        ),
+                        "terminal_contact_stabilization.enabled": ParameterValue(
+                            LaunchConfiguration(
+                                "terminal_contact_stabilization_enabled"
+                            ),
+                            value_type=bool,
+                        ),
+                        "terminal_contact_stabilization.shadow_only": ParameterValue(
+                            LaunchConfiguration(
+                                "terminal_contact_stabilization_shadow_only"
+                            ),
+                            value_type=bool,
+                        ),
+                        "terminal_contact_stabilization.rehearsal_enabled": ParameterValue(
+                            LaunchConfiguration(
+                                "terminal_contact_stabilization_rehearsal_enabled"
+                            ),
+                            value_type=bool,
+                        ),
+                        "terminal_contact_stabilization.scenario": ParameterValue(
+                            LaunchConfiguration(
+                                "terminal_contact_stabilization_scenario"
+                            ),
+                            value_type=str,
                         ),
                     },
                 ],

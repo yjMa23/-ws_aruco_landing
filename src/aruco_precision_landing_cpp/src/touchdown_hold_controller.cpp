@@ -15,10 +15,12 @@ TouchdownHoldController::TouchdownHoldController(
 : parameters_(parameters)
 {
   if (!std::isfinite(parameters_.max_target_rate_mps) ||
-    parameters_.max_target_rate_mps <= 0.0)
+    parameters_.max_target_rate_mps <= 0.0 ||
+    !std::isfinite(parameters_.max_reference_preload_rate_mps) ||
+    parameters_.max_reference_preload_rate_mps <= 0.0)
   {
     throw std::invalid_argument(
-            "touchdown hold max_target_rate_mps must be finite and positive");
+            "touchdown hold target rates must be finite and positive");
   }
   if (!std::isfinite(parameters_.motion_enter_speed_mps) ||
     !std::isfinite(parameters_.motion_exit_speed_mps) ||
@@ -36,7 +38,10 @@ std::optional<TouchdownHoldOutput> TouchdownHoldController::update(
   const TouchdownHoldInput & input)
 {
   if (!std::isfinite(input.dt_s) || input.dt_s <= 0.0 ||
-    !std::isfinite(input.uav_z_ned_m))
+    !std::isfinite(input.uav_z_ned_m) ||
+    (input.relative_height_target_m.has_value() &&
+    (!std::isfinite(*input.relative_height_target_m) ||
+    *input.relative_height_target_m < 0.0)))
   {
     return std::nullopt;
   }
@@ -79,18 +84,28 @@ std::optional<TouchdownHoldOutput> TouchdownHoldController::update(
     } else if (absolute_deck_speed_mps >= parameters_.motion_enter_speed_mps) {
       deck_motion_active_ = true;
     }
+  }
 
-    if (deck_motion_active_) {
-      const double desired_target_z_ned_m =
-        input.deck_z_ned_m - relative_height_reference_m_;
-      if (!std::isfinite(desired_target_z_ned_m)) {
-        return std::nullopt;
-      }
-      const double maximum_step_m = parameters_.max_target_rate_mps * input.dt_s;
-      const double target_error_m = desired_target_z_ned_m - vertical_target_z_ned_m_;
-      vertical_target_z_ned_m_ += std::clamp(
-        target_error_m, -maximum_step_m, maximum_step_m);
+  const bool preload_active = input.relative_height_target_m.has_value();
+  if (preload_active) {
+    const double maximum_reference_step_m =
+      parameters_.max_reference_preload_rate_mps * input.dt_s;
+    const double reference_error_m =
+      *input.relative_height_target_m - relative_height_reference_m_;
+    relative_height_reference_m_ += std::clamp(
+      reference_error_m, -maximum_reference_step_m, maximum_reference_step_m);
+  }
+
+  if (deck_motion_active_ || preload_active) {
+    const double desired_target_z_ned_m =
+      input.deck_z_ned_m - relative_height_reference_m_;
+    if (!std::isfinite(desired_target_z_ned_m)) {
+      return std::nullopt;
     }
+    const double maximum_step_m = parameters_.max_target_rate_mps * input.dt_s;
+    const double target_error_m = desired_target_z_ned_m - vertical_target_z_ned_m_;
+    vertical_target_z_ned_m_ += std::clamp(
+      target_error_m, -maximum_step_m, maximum_step_m);
   }
 
   if (!deck_motion_active_) {

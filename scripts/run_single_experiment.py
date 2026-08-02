@@ -33,13 +33,29 @@ from p7_experiment_utils import (
 
 STALE_PATTERN = (
     r"MicroXRCEAgent|(^|/)px4( |$)|gz sim|moving_deck_controller|"
-    r"deck_gnss_simulator|parameter_bridge.*world/aruco|aruco_detector_node|"
-    r"px4_aruco_landing_node"
+    r"deck_gnss_simulator|parameter_bridge|aruco_detector_node|"
+    r"px4_aruco_landing_node|mavlink_gcs_heartbeat.py"
 )
 TRACKING_MODES = (
     "PREDICTED_POSITION_VELOCITY_FF",
     "RELATIVE_MPC",
 )
+EXPERIMENT_PROFILES = (
+    "touchdown",
+    "safe-altitude",
+    "safe-descent",
+    "rehearsal",
+)
+TERMINAL_STABILIZATION_MODES = (
+    "disabled",
+    "shadow",
+    "rehearsal",
+    "active",
+)
+POST_HOLD_RECORDING_MARGIN_S = 1.0
+SAFE_ALTITUDE_RECORDING_DURATION_S = 10.0
+SAFE_DESCENT_RECORDING_DURATION_S = 9.0
+REHEARSAL_RECORDING_DURATION_S = 10.0
 
 KNOWN_STATES = {
     "INIT",
@@ -64,6 +80,33 @@ KNOWN_STATES = {
 }
 
 
+def required_hold_recording_duration_s(required_hold_s: float) -> float:
+    """在硬门所需 hold 之后额外录制停机隔离余量。"""
+
+    if required_hold_s < 0.0:
+        raise ValueError("required hold duration must be non-negative")
+    return required_hold_s + POST_HOLD_RECORDING_MARGIN_S
+
+
+def completion_requirement(
+    experiment_profile: str, touchdown_hold_s: float
+) -> tuple[frozenset[str], float]:
+    """返回无人值守 profile 的完成状态集合和连续录制时长。"""
+
+    if experiment_profile == "touchdown":
+        return (
+            frozenset({"TOUCHDOWN_HOLD"}),
+            required_hold_recording_duration_s(touchdown_hold_s),
+        )
+    if experiment_profile == "safe-altitude":
+        return frozenset({"WAIT_LANDING_WINDOW"}), SAFE_ALTITUDE_RECORDING_DURATION_S
+    if experiment_profile == "safe-descent":
+        return frozenset({"TEST_HEIGHT_HOLD"}), SAFE_DESCENT_RECORDING_DURATION_S
+    if experiment_profile == "rehearsal":
+        return frozenset({"TEST_HEIGHT_HOLD"}), REHEARSAL_RECORDING_DURATION_S
+    raise ValueError(f"unsupported experiment profile: {experiment_profile}")
+
+
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run one P7/P8A touchdown SITL episode."
@@ -84,7 +127,40 @@ def parse_arguments() -> argparse.Namespace:
         choices=TRACKING_MODES,
         default="PREDICTED_POSITION_VELOCITY_FF",
     )
+    parser.add_argument(
+        "--experiment-profile",
+        choices=EXPERIMENT_PROFILES,
+        default="touchdown",
+        help="state-driven completion profile for staged P8C-4 validation",
+    )
+    parser.add_argument(
+        "--terminal-stabilization-mode",
+        choices=TERMINAL_STABILIZATION_MODES,
+        default="disabled",
+        help="P8C-4 terminal stabilization mode represented by this episode",
+    )
     parser.add_argument("--record-camera-debug", action="store_true")
+    parser.add_argument(
+        "--p8c3-touchdown",
+        action="store_true",
+        help=(
+            "run the strict P8C-3 evaluator; valid for static, constant02, and "
+            "positive fixed +2 degree tilt profiles"
+        ),
+    )
+    parser.add_argument(
+        "--retry-existing-failure",
+        action="store_true",
+        help="archive a completed failed episode directory and retry with the requested ID",
+    )
+    parser.add_argument(
+        "--rerun-after-code-change",
+        action="store_true",
+        help=(
+            "archive any completed prior attempt as superseded evidence, then rerun "
+            "the same final episode ID after an implementation change"
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
         "--workspace-dir",
@@ -114,6 +190,53 @@ def git_state(workspace_dir: Path) -> tuple[str, bool]:
     return commit, dirty
 
 
+def archive_completed_episode(
+    episode_dir: Path,
+    *,
+    require_failure: bool,
+) -> Path:
+    """归档已完成轮次，保留 Bag、评测和日志后允许同一最终 ID 重跑。"""
+
+    manifest_path = episode_dir / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(
+            f"cannot retry existing episode without a readable manifest: {episode_dir}"
+        ) from error
+    if not isinstance(manifest, dict):
+        raise ValueError(f"existing episode manifest is not an object: {manifest_path}")
+    completed = manifest.get("completed") is True
+    if require_failure and not completed:
+        raise ValueError("existing episode must be completed before it can be archived")
+    if require_failure and manifest.get("success") is not False:
+        raise ValueError(
+            "--retry-existing-failure requires a completed failed episode"
+        )
+    if not completed:
+        suffix = "interrupted_attempt"
+    elif manifest.get("success") is False:
+        suffix = "failed_attempt"
+    else:
+        suffix = "superseded_attempt"
+    attempt = 1
+    while True:
+        archive = episode_dir.with_name(
+            f"{episode_dir.name}_{suffix}{attempt:02d}"
+        )
+        if not archive.exists():
+            break
+        attempt += 1
+    shutil.move(str(episode_dir), str(archive))
+    return archive
+
+
+def archive_failed_episode(episode_dir: Path) -> Path:
+    """兼容旧调用：仅归档已完成失败轮次。"""
+
+    return archive_completed_episode(episode_dir, require_failure=True)
+
+
 def stale_processes() -> list[str]:
     result = subprocess.run(
         ["pgrep", "-af", STALE_PATTERN],
@@ -132,6 +255,8 @@ def build_start_command(
     camera_model: str,
     record_camera_debug: bool,
     tracking_mode: str = "PREDICTED_POSITION_VELOCITY_FF",
+    experiment_profile: str = "touchdown",
+    terminal_stabilization_mode: str = "disabled",
 ) -> list[str]:
     command = [
         str(workspace_dir / "scripts" / "start_sitl.sh"),
@@ -147,9 +272,26 @@ def build_start_command(
         camera_model,
         "--tracking-mode",
         tracking_mode,
-        "--enable-relative-descent",
-        "--enable-final-descent",
     ]
+    if experiment_profile in {"safe-descent", "rehearsal", "touchdown"}:
+        command.extend(
+            ["--enable-relative-descent", "--descent-test-height", "0.50"]
+        )
+    if experiment_profile == "touchdown":
+        command.append("--enable-final-descent")
+
+    terminal_flag = {
+        "disabled": None,
+        "shadow": "--terminal-contact-stabilization-shadow",
+        "rehearsal": "--terminal-contact-stabilization-rehearsal",
+        "active": "--enable-terminal-contact-stabilization",
+    }.get(terminal_stabilization_mode)
+    if terminal_stabilization_mode not in TERMINAL_STABILIZATION_MODES:
+        raise ValueError(
+            f"unsupported terminal stabilization mode: {terminal_stabilization_mode}"
+        )
+    if terminal_flag is not None:
+        command.append(terminal_flag)
     command.append("--record-camera-debug" if record_camera_debug else "--record")
     return command
 
@@ -232,6 +374,17 @@ def parse_state_line(line: str) -> str | None:
     return value if value in KNOWN_STATES else None
 
 
+def recovery_after_terminal_phase(
+    state_sequence: list[str], current_state: str
+) -> bool:
+    """触地候选或 hold 后进入恢复即为本轮硬失败，不再自动二次降落。"""
+
+    return current_state in {"RECOVER_TO_GNSS", "RECOVER_CLIMB"} and any(
+        state in {"TOUCHDOWN_CANDIDATE_HOLD", "TOUCHDOWN_HOLD"}
+        for state in state_sequence
+    )
+
+
 def terminate_process_group(process: subprocess.Popen[str], timeout_s: float = 20.0) -> None:
     if process.poll() is not None:
         return
@@ -266,6 +419,8 @@ def snapshot_configs(
     scenario: str,
     seed: int,
     tracking_mode: str,
+    experiment_profile: str = "touchdown",
+    terminal_stabilization_mode: str = "disabled",
 ) -> None:
     controller_source = (
         workspace_dir
@@ -281,6 +436,8 @@ def snapshot_configs(
         "heave_h1": "heave_h1.yaml",
         "heave_h2": "heave_h2.yaml",
         "heave_h3": "heave_h3.yaml",
+        "tilt_roll_pos_2deg": "tilt_roll_pos_2deg.yaml",
+        "tilt_pitch_pos_2deg": "tilt_pitch_pos_2deg.yaml",
     }[scenario]
     scenario_source = (
         workspace_dir / "src" / "moving_deck_sim" / "config" / scenario_filename
@@ -293,10 +450,12 @@ def snapshot_configs(
     scenario_data["moving_deck_controller"]["ros__parameters"]["random_seed"] = seed
     gnss_data["deck_gnss_simulator"]["ros__parameters"]["random_seed"] = seed
     snapshot = {
-        "touchdown_episode": {
+        "experiment_episode": {
             "scenario": scenario,
             "seed": seed,
             "tracking_mode": tracking_mode,
+            "experiment_profile": experiment_profile,
+            "terminal_stabilization_mode": terminal_stabilization_mode,
         },
         **scenario_data,
         **gnss_data,
@@ -306,49 +465,148 @@ def snapshot_configs(
     )
 
 
-def evaluator_path_for_scenario(workspace_dir: Path, scenario: str) -> Path:
-    """根据场景选择复用的 P6B 或 P8A 离线评测器。"""
+def evaluator_path_for_scenario(
+    workspace_dir: Path,
+    scenario: str,
+    *,
+    p8c3_touchdown: bool = False,
+    use_p8c_evaluator: bool = False,
+) -> Path:
+    """根据实验模式选择 P6B、P8A 或 P8C 离线评测器。"""
 
-    filename = (
-        "evaluate_p8a_heave_touchdown.py"
-        if scenario.startswith("heave_h")
-        else "evaluate_p6b_touchdown.py"
-    )
+    if p8c3_touchdown or use_p8c_evaluator:
+        filename = "evaluate_p8c_tilted_deck.py"
+    elif scenario.startswith("heave_h"):
+        filename = "evaluate_p8a_heave_touchdown.py"
+    else:
+        filename = "evaluate_p6b_touchdown.py"
     return workspace_dir / "scripts" / filename
+
+
+def _execute_evaluator(
+    command: list[str],
+    *,
+    text_path: Path,
+    json_path: Path,
+    run_log: TextIO,
+    label: str,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """运行一个离线评测器并保存人类可读与 JSON 输出。"""
+
+    human = subprocess.run(command, text=True, capture_output=True, check=False)
+    human_output = human.stdout + human.stderr
+    text_path.write_text(human_output, encoding="utf-8")
+    run_log.write(f"\n===== {label} =====\n")
+    run_log.write(human_output)
+    run_log.flush()
+    json_result = subprocess.run(
+        [*command, "--json"], text=True, capture_output=True, check=False
+    )
+    if json_result.returncode not in (0, 2):
+        return None, json_result.stderr.strip() or f"{label} failed"
+    try:
+        evaluation = json.loads(json_result.stdout)
+        if not isinstance(evaluation, dict):
+            raise ValueError("evaluation root is not an object")
+        atomic_write_json(json_path, evaluation)
+        evaluation = read_evaluation_json(json_path)
+    except (json.JSONDecodeError, ValueError) as error:
+        return None, str(error)
+    return evaluation, None
 
 
 def run_evaluator(
     workspace_dir: Path,
     scenario: str,
+    seed: int,
     bag_path: Path,
     episode_dir: Path,
     run_log: TextIO,
-) -> tuple[dict[str, Any] | None, str | None]:
-    evaluator = evaluator_path_for_scenario(workspace_dir, scenario)
-    base_command = [sys.executable, str(evaluator), str(bag_path)]
-    if scenario == "constant02":
-        base_command.append("--require-moving-deck")
-    human = subprocess.run(base_command, text=True, capture_output=True, check=False)
-    human_output = human.stdout + human.stderr
-    (episode_dir / "evaluation.txt").write_text(human_output, encoding="utf-8")
-    run_log.write(f"\n===== {evaluator.stem} =====\n")
-    run_log.write(human_output)
-    run_log.flush()
+    *,
+    p8c3_touchdown: bool = False,
+    experiment_profile: str = "touchdown",
+    terminal_stabilization_mode: str = "disabled",
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str | None]:
+    """运行主评测；static/constant02 触地同时执行旧 P6B 回归。"""
 
-    json_result = subprocess.run(
-        [*base_command, "--json"], text=True, capture_output=True, check=False
+    use_p8c_evaluator = bool(
+        p8c3_touchdown
+        or terminal_stabilization_mode != "disabled"
+        or experiment_profile in {"safe-altitude", "safe-descent", "rehearsal"}
     )
-    if json_result.returncode not in (0, 2):
-        return None, json_result.stderr.strip() or "evaluator failed"
-    try:
-        evaluation = json.loads(json_result.stdout)
-        if not isinstance(evaluation, dict):
-            raise ValueError("evaluation root is not an object")
-        atomic_write_json(episode_dir / "evaluation.json", evaluation)
-        evaluation = read_evaluation_json(episode_dir / "evaluation.json")
-    except (json.JSONDecodeError, ValueError) as error:
-        return None, str(error)
-    return evaluation, None
+    evaluator = evaluator_path_for_scenario(
+        workspace_dir,
+        scenario,
+        p8c3_touchdown=p8c3_touchdown,
+        use_p8c_evaluator=use_p8c_evaluator,
+    )
+    base_command = [sys.executable, str(evaluator), str(bag_path)]
+    if use_p8c_evaluator:
+        base_command.extend(["--scenario", scenario, "--seed", str(seed)])
+        if experiment_profile in {"safe-descent", "rehearsal"}:
+            base_command.append("--p8c2-safe-descent")
+        if p8c3_touchdown or experiment_profile == "touchdown":
+            base_command.append("--p8c3-touchdown")
+        if terminal_stabilization_mode != "disabled":
+            base_command.extend(
+                [
+                    "--p8c4-stabilization",
+                    "--p8c4-mode",
+                    terminal_stabilization_mode,
+                ]
+            )
+    elif scenario == "constant02":
+        base_command.append("--require-moving-deck")
+    evaluation, error = _execute_evaluator(
+        base_command,
+        text_path=episode_dir / "evaluation.txt",
+        json_path=episode_dir / "evaluation.json",
+        run_log=run_log,
+        label=evaluator.stem,
+    )
+    if error is not None:
+        return evaluation, None, error
+
+    legacy_evaluation: dict[str, Any] | None = None
+    if experiment_profile == "touchdown" and scenario in {"static", "constant02"}:
+        legacy = evaluator_path_for_scenario(workspace_dir, scenario)
+        legacy_command = [sys.executable, str(legacy), str(bag_path)]
+        if scenario == "constant02":
+            legacy_command.append("--require-moving-deck")
+        legacy_evaluation, legacy_error = _execute_evaluator(
+            legacy_command,
+            text_path=episode_dir / "legacy_evaluation.txt",
+            json_path=episode_dir / "legacy_evaluation.json",
+            run_log=run_log,
+            label=legacy.stem,
+        )
+        if legacy_error is not None:
+            return evaluation, legacy_evaluation, legacy_error
+    return evaluation, legacy_evaluation, None
+
+
+def evaluators_passed(
+    evaluation: dict[str, Any] | None,
+    legacy_evaluation: dict[str, Any] | None,
+    *,
+    experiment_profile: str = "touchdown",
+) -> bool:
+    """主评测与可选旧基线评测必须同时通过。"""
+
+    if evaluation is None:
+        return False
+    main_passed = (
+        evaluation.get("positive_touchdown_passed") is True
+        if experiment_profile == "touchdown"
+        else evaluation.get("final_result") == "PASS"
+    )
+    return bool(
+        main_passed
+        and (
+            legacy_evaluation is None
+            or legacy_evaluation.get("positive_touchdown_passed") is True
+        )
+    )
 
 
 def run_episode(args: argparse.Namespace) -> dict[str, Any]:
@@ -357,8 +615,53 @@ def run_episode(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("seed must fit in uint32")
     if args.episode_timeout <= 0.0 or args.startup_timeout <= 0.0:
         raise ValueError("timeouts must be positive")
-    if args.touchdown_hold < 10.0:
+    experiment_profile = str(getattr(args, "experiment_profile", "touchdown"))
+    terminal_stabilization_mode = str(
+        getattr(args, "terminal_stabilization_mode", "disabled")
+    )
+    if experiment_profile not in EXPERIMENT_PROFILES:
+        raise ValueError(f"unsupported experiment profile: {experiment_profile}")
+    if terminal_stabilization_mode not in TERMINAL_STABILIZATION_MODES:
+        raise ValueError(
+            f"unsupported terminal stabilization mode: {terminal_stabilization_mode}"
+        )
+    if experiment_profile == "touchdown" and args.touchdown_hold < 10.0:
         raise ValueError("touchdown hold must be at least 10 seconds")
+    p8c3_touchdown = bool(getattr(args, "p8c3_touchdown", False))
+    if p8c3_touchdown and args.scenario not in {
+        "static",
+        "constant02",
+        "tilt_roll_pos_2deg",
+        "tilt_pitch_pos_2deg",
+    }:
+        raise ValueError("P8C-3 mode supports static, constant02, and positive fixed +2 degree tilt only")
+    positive_tilt = args.scenario in {
+        "tilt_roll_pos_2deg",
+        "tilt_pitch_pos_2deg",
+    }
+    if terminal_stabilization_mode != "disabled" and not positive_tilt:
+        raise ValueError(
+            "P8C-4 terminal stabilization automation supports positive fixed +2 degree tilt only"
+        )
+    valid_profile_mode_pairs = {
+        ("safe-altitude", "shadow"),
+        ("safe-descent", "shadow"),
+        ("rehearsal", "rehearsal"),
+        ("touchdown", "active"),
+    }
+    if terminal_stabilization_mode != "disabled" and (
+        experiment_profile,
+        terminal_stabilization_mode,
+    ) not in valid_profile_mode_pairs:
+        raise ValueError(
+            "terminal stabilization mode does not match the staged experiment profile"
+        )
+    if terminal_stabilization_mode == "active":
+        p8c3_touchdown = True
+
+    completion_states, completion_duration_s = completion_requirement(
+        experiment_profile, args.touchdown_hold
+    )
 
     batch_id = args.batch_id or make_batch_id("p7_single")
     episode_id = args.episode_id or make_episode_id(
@@ -380,6 +683,8 @@ def run_episode(args: argparse.Namespace) -> dict[str, Any]:
         args.camera_model,
         args.record_camera_debug,
         tracking_mode,
+        experiment_profile,
+        terminal_stabilization_mode,
     )
     if args.dry_run:
         result = {
@@ -390,11 +695,32 @@ def run_episode(args: argparse.Namespace) -> dict[str, Any]:
             "scenario": args.scenario,
             "seed": args.seed,
             "command": start_command,
+            "p8c3_touchdown": p8c3_touchdown,
+            "experiment_profile": experiment_profile,
+            "terminal_stabilization_mode": terminal_stabilization_mode,
+            "completion_states": sorted(completion_states),
+            "completion_duration_s": completion_duration_s,
         }
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return result
+    archived_previous_attempt: Path | None = None
     if episode_dir.exists():
-        raise ValueError(f"episode directory already exists: {episode_dir}")
+        retry_failure = bool(getattr(args, "retry_existing_failure", False))
+        rerun_after_change = bool(getattr(args, "rerun_after_code_change", False))
+        if retry_failure and rerun_after_change:
+            raise ValueError(
+                "--retry-existing-failure and --rerun-after-code-change are mutually exclusive"
+            )
+        if retry_failure:
+            archived_previous_attempt = archive_completed_episode(
+                episode_dir, require_failure=True
+            )
+        elif rerun_after_change:
+            archived_previous_attempt = archive_completed_episode(
+                episode_dir, require_failure=False
+            )
+        else:
+            raise ValueError(f"episode directory already exists: {episode_dir}")
     episode_dir.mkdir(parents=True)
 
     git_commit, dirty_worktree = git_state(workspace_dir)
@@ -413,6 +739,13 @@ def run_episode(args: argparse.Namespace) -> dict[str, Any]:
         "camera_model": args.camera_model,
         "tracking_mode": tracking_mode,
         "record_camera_debug": args.record_camera_debug,
+        "p8c3_touchdown": p8c3_touchdown,
+        "experiment_profile": experiment_profile,
+        "terminal_stabilization_mode": terminal_stabilization_mode,
+        "completion_states": sorted(completion_states),
+        "completion_duration_s": completion_duration_s,
+        "required_touchdown_hold_s": args.touchdown_hold,
+        "post_hold_recording_margin_s": POST_HOLD_RECORDING_MARGIN_S,
         "start_command": start_command,
         "exit_code": None,
         "success": False,
@@ -420,12 +753,51 @@ def run_episode(args: argparse.Namespace) -> dict[str, Any]:
         "failure_detail": None,
         "bag_path": str(bag_path),
         "evaluation_path": None,
+        "legacy_evaluation_path": None,
         "state_sequence": [],
         "completed": False,
+        "archived_previous_attempt": (
+            str(archived_previous_attempt)
+            if archived_previous_attempt is not None
+            else None
+        ),
     }
     atomic_write_json(episode_dir / "manifest.json", manifest)
+    (episode_dir / "command.txt").write_text(
+        shlex.join(start_command) + "\n", encoding="utf-8"
+    )
+    (episode_dir / "run_metadata.txt").write_text(
+        "\n".join(
+            (
+                f"scenario={args.scenario}",
+                f"seed={args.seed}",
+                f"git_commit={git_commit}",
+                f"git_dirty={str(dirty_worktree).lower()}",
+                f"camera_model={args.camera_model}",
+                f"tracking_mode={tracking_mode}",
+                f"p8c3_touchdown={str(p8c3_touchdown).lower()}",
+                f"experiment_profile={experiment_profile}",
+                f"terminal_stabilization_mode={terminal_stabilization_mode}",
+                "relative_descent=" + str(
+                    experiment_profile in {"safe-descent", "rehearsal", "touchdown"}
+                ).lower(),
+                "descent_test_height_m=0.50",
+                "final_descent=" + str(experiment_profile == "touchdown").lower(),
+                f"touchdown_hold_required_s={args.touchdown_hold}",
+                f"post_hold_recording_margin_s={POST_HOLD_RECORDING_MARGIN_S}",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     snapshot_configs(
-        workspace_dir, episode_dir, args.scenario, args.seed, tracking_mode
+        workspace_dir,
+        episode_dir,
+        args.scenario,
+        args.seed,
+        tracking_mode,
+        experiment_profile,
+        terminal_stabilization_mode,
     )
 
     preexisting = stale_processes()
@@ -448,7 +820,7 @@ def run_episode(args: argparse.Namespace) -> dict[str, Any]:
     event_detail: str | None = None
     state_sequence: list[str] = []
     current_state: str | None = None
-    hold_start_monotonic: float | None = None
+    completion_start_monotonic: float | None = None
     episode_start_monotonic: float | None = None
 
     with (episode_dir / "run.log").open("w", encoding="utf-8") as run_log:
@@ -499,20 +871,30 @@ def run_episode(args: argparse.Namespace) -> dict[str, Any]:
                             state_sequence.append(state)
                         if state != current_state:
                             current_state = state
-                            hold_start_monotonic = (
-                                now if state == "TOUCHDOWN_HOLD" else None
+                            completion_start_monotonic = (
+                                now if state in completion_states else None
                             )
                         if state == "ABORT":
                             event = "PX4_ABORT"
                             event_detail = "controller entered ABORT"
                             break
-                if current_state == "TOUCHDOWN_HOLD" and hold_start_monotonic is not None:
-                    if now - hold_start_monotonic >= args.touchdown_hold:
-                        event = "NONE"
-                        event_detail = (
-                            f"TOUCHDOWN_HOLD sustained for {args.touchdown_hold:.1f} s"
-                        )
-                        break
+                        if recovery_after_terminal_phase(state_sequence, state):
+                            event = "RECOVERY_LIMIT"
+                            event_detail = (
+                                "controller entered recovery after touchdown candidate/hold"
+                            )
+                            break
+                if (
+                    current_state in completion_states
+                    and completion_start_monotonic is not None
+                    and now - completion_start_monotonic >= completion_duration_s
+                ):
+                    event = "NONE"
+                    event_detail = (
+                        f"{current_state} sustained for {completion_duration_s:.1f} s "
+                        f"under {experiment_profile} completion profile"
+                    )
+                    break
                 if start_process.poll() is not None:
                     event = "PROCESS_EXITED"
                     event_detail = f"start_sitl exited with {start_process.returncode}"
@@ -540,28 +922,44 @@ def run_episode(args: argparse.Namespace) -> dict[str, Any]:
         cleanup_residuals = stale_processes()
         cleanup_ok = not cleanup_residuals
         evaluation: dict[str, Any] | None = None
+        legacy_evaluation: dict[str, Any] | None = None
         evaluation_error: str | None = None
         if bag_path.is_dir():
-            evaluation, evaluation_error = run_evaluator(
-                workspace_dir, args.scenario, bag_path, episode_dir, run_log
+            evaluation, legacy_evaluation, evaluation_error = run_evaluator(
+                workspace_dir,
+                args.scenario,
+                args.seed,
+                bag_path,
+                episode_dir,
+                run_log,
+                p8c3_touchdown=p8c3_touchdown,
+                experiment_profile=experiment_profile,
+                terminal_stabilization_mode=terminal_stabilization_mode,
             )
             if evaluation is not None:
                 manifest["evaluation_path"] = str(episode_dir / "evaluation.json")
+            if legacy_evaluation is not None:
+                manifest["legacy_evaluation_path"] = str(
+                    episode_dir / "legacy_evaluation.json"
+                )
         elif event == "NONE":
             evaluation_error = "bag directory was not created"
 
-        success = bool(
-            event == "NONE"
-            and evaluation is not None
-            and evaluation.get("positive_touchdown_passed") is True
-            and cleanup_ok
+        evaluator_passed = evaluators_passed(
+            evaluation,
+            legacy_evaluation,
+            experiment_profile=experiment_profile,
         )
+        success = bool(event == "NONE" and evaluator_passed and cleanup_ok)
         log_text = (episode_dir / "run.log").read_text(
             encoding="utf-8", errors="replace"
         )
+        classification_event = event
+        if event == "NONE" and (evaluation_error or not evaluator_passed):
+            classification_event = "EVALUATION_ERROR"
         failure_reason = classify_failure(
             success=success,
-            event=("EVALUATION_ERROR" if evaluation_error and event == "NONE" else event),
+            event=classification_event,
             state_sequence=state_sequence,
             evaluation=evaluation,
             log_text=log_text,
@@ -578,6 +976,14 @@ def run_episode(args: argparse.Namespace) -> dict[str, Any]:
         if cleanup_residuals:
             residual_detail = "cleanup residuals: " + " | ".join(cleanup_residuals)
             event_detail = f"{event_detail}; {residual_detail}" if event_detail else residual_detail
+        (episode_dir / "process_cleanup.txt").write_text(
+            (
+                "cleanup=PASS\nresidual_processes=0\n"
+                if cleanup_ok
+                else "cleanup=FAIL\n" + "\n".join(cleanup_residuals) + "\n"
+            ),
+            encoding="utf-8",
+        )
 
     end_monotonic = time.monotonic()
     manifest.update(
@@ -600,11 +1006,11 @@ def run_episode(args: argparse.Namespace) -> dict[str, Any]:
 def main() -> int:
     args = parse_arguments()
     try:
-        run_episode(args)
+        manifest = run_episode(args)
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         print(f"Error: {error}", file=sys.stderr)
         return 2
-    return 0
+    return 0 if manifest.get("dry_run") is True or manifest.get("success") is True else 2
 
 
 if __name__ == "__main__":

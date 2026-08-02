@@ -66,8 +66,8 @@
 5. 当前高级阶段缺口如下：
    - `P8A` 已完成升沉甲板最终下降、真实接触和接触后相对保持，H1 3/3、H2 3/3 PASS。
    - `P8B` 已完成综述、计划、固定 OSQP/OsqpEigen 依赖、水平相对 MPC 生产实现、完整 P4.7 fallback、终端安全 handoff、`271` 项全工作区测试和严格顺序真实 SITL；安全高度 15/15、下降 6/6、最终代码真实触地 6/6 PASS，状态为 `VALIDATION PASS`。
-   - `P8C` 固定倾斜与低频 roll/pitch 甲板尚未完成几何建模、计划、实现和验收。
-   - `P9` 统一批量评测、消融和论文实验尚未开始。
+   - `P8C` fixed T1 已完成：P8C-3 水平机体失败证据保留，P8C-4 Offboard position 终端稳定化、接触顺应和受限预压通过 shadow 12/12、rehearsal 6/6、固定正 +2° touchdown 6/6 和旧路径回归 9/9；状态为 `P8C-4 VALIDATION PASS / P8C T1 VALIDATION PASS / P8C-3 DESIGN GATE CLOSED`。
+   - `P9` 统一批量评测、消融和论文实验为当前下一阶段。
    - 当前保持 `NAV_LAND / Disarm = 0 / 0`，Ground Truth 只能用于离线评测。
 
 ---
@@ -948,11 +948,11 @@ P8A 重点验证相对垂直速度语义和 `TOUCHDOWN_HOLD` 对升沉甲板的�
 
 P8B 综述、统一数学模型、固定求解器、执行计划、生产实现和真实验收均已完成。第一版只负责自由飞行和安全下降阶段的水平相对运动，P4.7 保持默认并作为 solver 失败回退；从 `FINAL_DESCENT` 起使用 `TERMINAL_PHASE_P47` 安全 handoff，不接管最终垂直下降、touchdown detector、landing window 或姿态对齐。
 
-严格顺序结果为安全高度 15/15、下降 6/6、真实触地 6/6 PASS，所有有效 MPC 轮次均为 0 deadline miss、0 solver failure、0 unexpected fallback，验收见 `docs/validation/P8B_RELATIVE_MPC_VALIDATION.md`。下一步只允许开始 P8C 综述和几何建模。
+严格顺序结果为安全高度 15/15、下降 6/6、真实触地 6/6 PASS，所有有效 MPC 轮次均为 0 deadline miss、0 solver failure、0 unexpected fallback，验收见 `docs/validation/P8B_RELATIVE_MPC_VALIDATION.md`。P8C 综述、几何模型和独立执行计划现已完成。
 
 ### P8C：固定倾斜及低频 roll/pitch 甲板降落
 
-P8B 通过后，必须先完成倾斜甲板综述和几何模型，再保存独立执行计划。第一版从固定 2°、UAV 保持水平开始；只有 T1 暴露单侧冲击、滑移、倾覆风险、触地证据不稳定或 hold 失败时，才单独调研和实现甲板法向姿态对齐。
+P8C 已完成研究、独立计划、P8C-0、P8C-1、P8C-2、P8C-3 失败诊断和 P8C-4 终端接触稳定化。+2° roll seed2 滑移硬门失败及姿态发散、离板和恢复证据完整保留；P8C-4 最终 fixed T1 touchdown roll 3/3、pitch 3/3，旧路径回归 9/9，全工作区 340 项测试通过。当前状态为 `P8C-4 VALIDATION PASS / P8C T1 VALIDATION PASS / P8C-3 DESIGN GATE CLOSED`。该方案不是 PX4 attitude setpoint 姿态对齐；负倾角、动态 roll/pitch/combined 和 Ground Truth 控制继续关闭。
 
 ### P9：统一批量评测、消融和论文实验
 
@@ -964,7 +964,7 @@ B1：关闭额外预测
 B2：关闭速度前馈
 B3：完整水平相对 MPC
 B4：MPC + 升沉处理
-B5：若已实现，MPC + 法向姿态对齐
+B5：固定正 T1 场景下的当前终端接触稳定化方案（Offboard position 内法向整形、接触顺应和受限预压）
 ```
 
 每个新组合先 3 次 smoke，再根据论文问题确定正式次数，不机械规定所有组合 50 次。
@@ -1089,16 +1089,14 @@ colcon test-result --verbose
 
 ## 16. Codex 下一步默认任务
 
-`P0`～`P8A` 已完成真实验收，P7-lite 真实 3+3 冒烟已于 2026-07-30 以 6/6 PASS 冻结。P8B 已完成研究、计划、固定依赖、生产实现和全量测试。
+`P0`～`P8C fixed T1` 已完成真实验收，P7-lite 真实 3+3 冒烟已于 2026-07-30 以 6/6 PASS 冻结。P8C-3 失败证据完整保留，P8C-4 已完成终端接触稳定化和固定正 +2° roll/pitch 真实触地验收。
 
 下一项任务：
 
 ```text
-从 P8B static 5 m 单轮开始，按计划严格顺序完成真实 PX4 SITL；
-每个场景先单轮，通过后再三个不同 seed；
-保存 Bag 并输出水平 RMSE、相对速度、控制平滑度、solve time mean/P95、iteration 和 fallback；
-使用同 seed P4.7 对照，确认 static/constant02/sinusoidal 无明显退化；
-安全高度场景全部通过后，才允许下降和真实触地；
-P8B 未达到 VALIDATION PASS 时停止，不进入 P8C；
-全程保持 NAV_LAND / Disarm = 0 / 0，Ground Truth 只用于离线评测。
+执行 P9 统一批量评测、消融和论文实验；
+复用 P7 自动化并执行保留的 static/constant02 20+20；
+只评测已经通过相应安全验证的方法-场景-profile 组合；
+负倾角下降、动态 rollpitch/combined、PX4 attitude setpoint 姿态对齐和 Ground Truth 控制继续关闭；
+全程保持 NAV_LAND / Disarm = 0 / 0，禁止放宽冻结门或通过重复运行挑选 PASS。
 ```

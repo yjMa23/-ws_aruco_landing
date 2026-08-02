@@ -39,6 +39,7 @@ enum class TouchdownEvidence : std::uint32_t
   kNoReportedMovement = 1U << 9,
   kLowRelativeHorizontalSpeed = 1U << 10,
   kTerminalContactStall = 1U << 11,
+  kTerminalGeometryProximity = 1U << 12,
 };
 
 /**
@@ -55,6 +56,7 @@ struct TouchdownDetectorParameters
   double max_relative_horizontal_speed_mps{0.15};
   double terminal_contact_max_height_m{0.24};
   double terminal_contact_min_reference_error_m{0.10};
+  double terminal_contact_max_geometry_gap_m{0.03};
   double terminal_contact_max_vertical_speed_mps{0.05};
   double terminal_contact_px4_status_timeout_s{2.0};
   double candidate_required_duration_s{0.50};
@@ -94,6 +96,10 @@ struct TouchdownDetectorInput
   bool terminal_descent_active{false};
   bool terminal_command_complete{false};
   double relative_height_reference_m{0.0};
+  /** active P8C-4 在线甲板平面几何是否有效；禁止使用 Ground Truth。 */
+  bool terminal_contact_geometry_valid{false};
+  /** 在线估计的四滑橇最小法向间隙，单位 m。 */
+  double minimum_skid_clearance_m{0.0};
 };
 
 /**
@@ -113,9 +119,10 @@ struct TouchdownDetectorOutput
  * 视觉高度只能作为普通触地路径的辅助证据，不能单独确认触地。PX4 报告世界系
  * 水平运动时，只有无人机相对估计甲板的水平速度足够小才允许形成候选；PX4 报告
  * 世界系垂直运动时，必须有有效且足够小的甲板相对垂直速度，从而支持升沉平台而
- * 不绕过相对运动约束。终端落板段只有在最低落板命令已经
- * 到达后，才允许使用“低高度、参考已压入甲板、实际垂直运动持续停滞、PX4
- * close-to-ground”为组合接触证据，
+ * 不绕过相对运动约束。终端落板段保留“最低落板命令已到达、参考已压入甲板”
+ * 的原组合路径；active P8C-4 还可使用在线视觉甲板平面给出的四滑橇最小间隙，
+ * 与低高度、实际垂直运动持续停滞和 PX4 close-to-ground 联合形成候选。该路径
+ * 不读取 Ground Truth，且不能绕过视觉新鲜度和相对运动约束。
  * 用于 Offboard 位置环已经压住起落架但 PX4 land detector 尚未置位的情况。强触地
  * 路径要求 PX4 同时报告 `landed` 与 `at_rest`。确认结果会锁存，只有显式 reset 才清除。
  */

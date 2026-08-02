@@ -25,6 +25,7 @@ TouchdownDetectorParameters test_parameters()
   parameters.max_relative_horizontal_speed_mps = 0.15;
   parameters.terminal_contact_max_height_m = 0.24;
   parameters.terminal_contact_min_reference_error_m = 0.10;
+  parameters.terminal_contact_max_geometry_gap_m = 0.03;
   parameters.terminal_contact_max_vertical_speed_mps = 0.05;
   parameters.candidate_required_duration_s = 0.30;
   return parameters;
@@ -128,6 +129,55 @@ TEST(TouchdownDetectorTest, TerminalContactStallConfirmsWithoutPx4ContactFlag)
   EXPECT_NE(
     output.evidence_mask &
     touchdown_evidence_mask(TouchdownEvidence::kTerminalContactStall),
+    0U);
+}
+
+TEST(TouchdownDetectorTest, TerminalGeometryProximityConfirmsBeforeMinimumCommand)
+{
+  TouchdownDetector detector(test_parameters());
+
+  TouchdownDetectorOutput output;
+  for (int index = 0; index <= 3; ++index) {
+    auto input = base_input(index * 0.1);
+    input.relative_height_m = 0.23;
+    input.relative_height_reference_m = 0.19;
+    input.terminal_descent_active = true;
+    input.terminal_command_complete = false;
+    input.terminal_contact_geometry_valid = true;
+    input.minimum_skid_clearance_m = 0.02;
+    input.relative_vertical_velocity_mps = 0.01;
+    input.uav_vertical_velocity_mps = 0.01;
+    output = detector.update(input);
+  }
+
+  EXPECT_EQ(output.status, TouchdownStatus::kConfirmed);
+  EXPECT_TRUE(output.confirmed_latched);
+  EXPECT_NE(
+    output.evidence_mask &
+    touchdown_evidence_mask(TouchdownEvidence::kTerminalGeometryProximity),
+    0U);
+}
+
+TEST(TouchdownDetectorTest, TerminalGeometryProximityRejectsLargeOrInvalidGap)
+{
+  TouchdownDetector detector(test_parameters());
+  auto input = base_input(0.0);
+  input.relative_height_m = 0.23;
+  input.relative_height_reference_m = 0.19;
+  input.terminal_descent_active = true;
+  input.terminal_command_complete = false;
+  input.terminal_contact_geometry_valid = true;
+  input.minimum_skid_clearance_m = 0.04;
+  EXPECT_EQ(detector.update(input).status, TouchdownStatus::kAirborne);
+
+  input.sample_time_s = 0.1;
+  input.terminal_contact_geometry_valid = false;
+  input.minimum_skid_clearance_m = 0.0;
+  const auto invalid = detector.update(input);
+  EXPECT_EQ(invalid.status, TouchdownStatus::kAirborne);
+  EXPECT_EQ(
+    invalid.evidence_mask &
+    touchdown_evidence_mask(TouchdownEvidence::kTerminalGeometryProximity),
     0U);
 }
 

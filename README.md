@@ -2,7 +2,7 @@
 
 `ws_aruco_landing` 是一个基于 **ROS 2 Humble、PX4 SITL 和 Gazebo Harmonic** 的移动船舶无人机自主降落传统基线工作空间。
 
-系统实现从船舶 GNSS 粗引导到视觉接管、移动目标跟踪、规则式着陆窗口、相对高度下降和多源触地确认的完整链路，并提供可选的水平相对运动线性 MPC。当前 P8A 升沉触地与 P8B MPC 已通过真实 PX4 SITL 验收，下一阶段为 P8C 倾斜甲板研究与几何建模。
+系统实现从船舶 GNSS 粗引导到视觉接管、移动目标跟踪、规则式着陆窗口、相对高度下降和多源触地确认的完整链路，并提供可选的水平相对运动线性 MPC。当前 P8A 升沉触地、P8B MPC 与 P8C fixed T1 均已通过真实 PX4 SITL 验收。P8C-3 的水平机体失败 Bag、seed2 滑移硬门失败、姿态发散、离板和恢复证据完整保留；P8C-4 在 Offboard position 模式内实现终端主轴法向整形、状态化接触锚点、切向阻尼、接触顺应、candidate/HOLD 法向锁存和受限预压，最终固定正 `+2° roll/pitch` 真实触地 roll 3/3、pitch 3/3，旧路径回归 9/9，全工作区 340 项测试通过。当前状态为 `P8C-4 VALIDATION PASS / P8C T1 VALIDATION PASS / P8C-3 DESIGN GATE CLOSED`，下一工程阶段是 P9 统一批量评测。
 
 ```text
 船舶 GNSS 会合
@@ -65,6 +65,19 @@ source install/setup.bash
 QGC需手动打开。
 
 默认配置只跟踪甲板并保持安全高度：相对下降和最终下降均关闭，不发送 `NAV_LAND`，不自动 Disarm。按 `Ctrl-C` 可统一停止本轮 SITL 进程。
+
+## P8C fixed T1 当前边界
+
+P8C-3 已实现固定正 `+2° roll/pitch` 的严格 final-descent 白名单、无人值守状态监控、Bag 和离线接触评测，并保留了水平机体方案的失败证据。P8C-4 随后完成独立研究、接口冻结、TDD、终端接触稳定化实现和分级真实验证；该方案继续使用 PX4 Offboard position setpoint，在终端阶段叠加法向整形、接触锚点顺应、切向阻尼和受限预压，不是直接发送 attitude setpoint 的姿态对齐。
+
+```text
+P8C-3 FAILURE EVIDENCE PRESERVED
+P8C-4 VALIDATION PASS
+P8C T1 VALIDATION PASS
+P8C-3 DESIGN GATE CLOSED
+```
+
+固定 T1 结论只覆盖正 `+2° roll/pitch`。负倾角 touchdown、动态 `rollpitch/combined`、动态姿态 final descent、Ground Truth 控制、`NAV_LAND` 和自动 Disarm 仍关闭，不能由 fixed T1 结果直接外推。历史失败证据位于 `results/p8c3_validation_20260802/`，最终成功证据位于 `results/p8c4_validation_20260802/`。
 
 ## 详细文档
 

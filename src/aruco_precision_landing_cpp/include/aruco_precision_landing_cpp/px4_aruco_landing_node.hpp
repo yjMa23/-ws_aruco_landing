@@ -6,6 +6,7 @@
 
 #include "aruco_precision_landing_cpp/coordinate_transform.hpp"
 #include "aruco_precision_landing_cpp/deck_attitude_estimator.hpp"
+#include "aruco_precision_landing_cpp/deck_plane_geometry.hpp"
 #include "aruco_precision_landing_cpp/final_descent_controller.hpp"
 #include "aruco_precision_landing_cpp/gnss_rendezvous_guidance.hpp"
 #include "aruco_precision_landing_cpp/landing_window.hpp"
@@ -14,6 +15,7 @@
 #include "aruco_precision_landing_cpp/relative_descent_controller.hpp"
 #include "aruco_precision_landing_cpp/relative_mpc_controller.hpp"
 #include "aruco_precision_landing_cpp/target_state_estimator.hpp"
+#include "aruco_precision_landing_cpp/terminal_contact_stabilization.hpp"
 #include "aruco_precision_landing_cpp/touchdown_detector.hpp"
 #include "aruco_precision_landing_cpp/touchdown_hold_controller.hpp"
 #include "aruco_precision_landing_cpp/vehicle_pose_history.hpp"
@@ -42,6 +44,7 @@
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float64.hpp>
+#include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_msgs/msg/int32.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/u_int32.hpp>
@@ -134,6 +137,7 @@ private:
   void update_estimated_deck_attitude(
     const Eigen::Quaterniond & marker_to_ned_rotation,
     const rclcpp::Time & sample_time);
+  void update_deck_plane_geometry_shadow(const rclcpp::Time & now);
   void update_landing_window(
     const rclcpp::Time & now,
     bool visual_valid,
@@ -158,10 +162,18 @@ private:
     const rclcpp::Time & now,
     double dt);
   void update_touchdown_detection(const rclcpp::Time & now);
+  TerminalStabilizationPhase terminal_stabilization_phase() const;
+  bool update_terminal_contact_stabilization(
+    const rclcpp::Time & now,
+    double dt,
+    const std::optional<TargetStateEstimate> & estimate,
+    const std::optional<Eigen::Vector2d> & uav_velocity_xy,
+    Eigen::Vector2d & horizontal_target_xy);
 
   void set_target(double x, double y, double z, double yaw);
   void set_velocity_feedforward(double north_mps, double east_mps);
   void set_horizontal_acceleration_feedforward(double north_mps2, double east_mps2);
+  void set_vertical_acceleration_feedforward(double down_mps2);
   void set_vertical_velocity_feedforward(double down_mps);
   void set_adaptive_tracking_debug(
     const std::optional<double> & effective_gain,
@@ -190,6 +202,9 @@ private:
   void publish_effective_relative_velocity_gain();
   void publish_estimated_deck_acceleration(const rclcpp::Time & now);
   void publish_estimated_deck_attitude();
+  void publish_deck_plane_geometry_shadow(const rclcpp::Time & now);
+  void publish_deck_normal_calibration_debug();
+  void publish_terminal_stabilization_debug(const rclcpp::Time & now);
   void publish_landing_window_debug();
   void publish_relative_descent_debug();
   void publish_vertical_state(const rclcpp::Time & now);
@@ -208,6 +223,7 @@ private:
   static const char * touchdown_hold_mode_name(TouchdownHoldMode mode);
   static const char * touchdown_hold_reason_name(TouchdownHoldReason reason);
   static double quaternion_to_yaw(const float q[4]);
+  static Eigen::Vector2d quaternion_to_roll_pitch(const float q[4]);
   static bool quaternion_is_valid(const float q[4]);
 
   double control_rate_hz_{20.0};
@@ -266,10 +282,12 @@ private:
   double touchdown_max_relative_horizontal_speed_mps_{0.15};
   double touchdown_terminal_contact_max_height_m_{0.24};
   double touchdown_terminal_contact_min_reference_error_m_{0.10};
+  double touchdown_terminal_contact_max_geometry_gap_m_{0.03};
   double touchdown_terminal_contact_max_vertical_speed_mps_{0.05};
   double touchdown_terminal_contact_px4_status_timeout_s_{2.0};
   double touchdown_candidate_required_duration_s_{0.50};
   double touchdown_hold_max_target_rate_mps_{0.60};
+  double touchdown_hold_max_reference_preload_rate_mps_{0.05};
   double touchdown_hold_motion_enter_speed_mps_{0.04};
   double touchdown_hold_motion_exit_speed_mps_{0.02};
   bool final_descent_enabled_{false};
@@ -316,6 +334,51 @@ private:
   double relative_mpc_active_constraint_tolerance_{1.0e-3};
   double deck_attitude_filter_gain_{0.20};
   double deck_attitude_minimum_upward_normal_component_{0.50};
+  bool deck_plane_geometry_enabled_{true};
+  double deck_plane_geometry_normal_filter_gain_{0.08};
+  bool deck_plane_geometry_shadow_only_{true};
+  double deck_plane_geometry_minimum_normal_norm_{1.0e-6};
+  double deck_plane_geometry_minimum_upward_component_{0.50};
+  bool deck_plane_geometry_apply_marker_plane_offset_{true};
+  std::array<double, 12> deck_plane_geometry_contact_points_body_frd_m_{{
+    -0.125, -0.132, 0.227,
+    0.125, -0.132, 0.227,
+    -0.125, 0.132, 0.227,
+    0.125, 0.132, 0.227}};
+  std::array<double, 4> deck_plane_geometry_marker_plane_offsets_m_{{
+    0.001, 0.002, 0.003, 0.004}};
+  bool terminal_contact_stabilization_enabled_{false};
+  bool terminal_contact_stabilization_shadow_only_{true};
+  bool terminal_contact_stabilization_rehearsal_enabled_{false};
+  std::string terminal_contact_stabilization_scenario_{"none"};
+  double terminal_contact_maximum_target_tilt_deg_{2.5};
+  double terminal_contact_normal_freshness_timeout_s_{0.20};
+  double terminal_contact_short_loss_hold_s_{0.10};
+  double terminal_contact_marker_switch_jump_gate_deg_{1.0};
+  double terminal_contact_tilt_slew_rate_degps_{4.0};
+  double terminal_contact_acceleration_bias_limit_mps2_{0.45};
+  double terminal_contact_acceleration_bias_slew_rate_mps3_{0.80};
+  double terminal_contact_activation_duration_s_{0.50};
+  double terminal_contact_deactivation_duration_s_{0.30};
+  double terminal_contact_total_acceleration_limit_mps2_{1.50};
+  double terminal_contact_rehearsal_max_duration_s_{1.0};
+  double terminal_contact_preload_relative_height_m_{0.20};
+  double terminal_contact_preload_acceleration_mps2_{1.0};
+  double terminal_contact_preload_acceleration_slew_mps3_{1.0};
+  bool terminal_contact_compliance_enabled_{true};
+  double terminal_contact_compliance_deadband_m_{0.015};
+  double terminal_contact_compliance_maximum_allowance_m_{0.040};
+  double terminal_contact_compliance_target_rate_mps_{0.10};
+  double terminal_contact_compliance_anchor_correction_rate_mps_{0.05};
+  double terminal_contact_compliance_deck_velocity_deadband_mps_{0.035};
+  double terminal_contact_compliance_velocity_damping_s_{0.12};
+  double terminal_contact_compliance_maximum_damping_offset_m_{0.020};
+  bool terminal_contact_attitude_safety_enabled_{true};
+  double terminal_contact_attitude_trigger_deg_{6.0};
+  double terminal_contact_attitude_clear_deg_{4.0};
+  double terminal_contact_angular_rate_trigger_degps_{45.0};
+  double terminal_contact_safety_required_duration_s_{0.20};
+  double terminal_contact_safety_clear_duration_s_{0.30};
   double landing_window_enter_horizontal_error_m_{0.15};
   double landing_window_exit_horizontal_error_m_{0.25};
   double landing_window_enter_relative_speed_mps_{0.15};
@@ -378,6 +441,11 @@ private:
   bool have_last_aruco_sample_stamp_{false};
   bool have_estimator_measurement_receipt_time_{false};
   bool have_estimated_deck_attitude_{false};
+  bool have_deck_plane_geometry_sample_{false};
+  bool have_shadow_deck_attitude_{false};
+  bool have_previous_deck_normal_{false};
+  bool deck_normal_rate_valid_{false};
+  bool marker_switch_normal_jump_valid_{false};
   bool landing_window_result_valid_{false};
   bool relative_descent_debug_valid_{false};
   bool vertical_state_measurement_valid_{false};
@@ -385,6 +453,9 @@ private:
   bool touchdown_result_valid_{false};
   bool final_descent_debug_valid_{false};
   bool touchdown_hold_debug_valid_{false};
+  bool terminal_stabilization_debug_valid_{false};
+  bool terminal_stabilization_applied_{false};
+  bool terminal_combined_acceleration_valid_{false};
   bool descent_reentry_locked_{false};
   bool have_px4_to_ros_time_offset_{false};
   bool have_last_time_sync_observation_{false};
@@ -399,6 +470,8 @@ private:
   geometry_msgs::msg::PoseStamped aruco_pose_{};
   geometry_msgs::msg::PoseStamped marker_pose_ned_{};
   Pose3d body_camera_pose_{};
+  Pose3d deck_plane_geometry_sample_body_pose_{};
+  Eigen::Vector3d deck_plane_geometry_sample_deck_position_ned_m_{Eigen::Vector3d::Zero()};
 
   rclcpp::Time last_aruco_pose_time_;
   rclcpp::Time last_aruco_visible_time_;
@@ -408,6 +481,8 @@ private:
   rclcpp::Time last_command_time_;
   rclcpp::Time last_control_time_;
   rclcpp::Time last_estimated_deck_attitude_time_;
+  rclcpp::Time last_deck_plane_geometry_sample_time_;
+  rclcpp::Time previous_deck_normal_time_;
   bool have_last_marker_seen_time_{false};
   bool have_last_command_time_{false};
 
@@ -420,6 +495,8 @@ private:
   double last_vertical_state_measurement_receipt_time_s_{0.0};
   double last_vehicle_land_detected_receipt_time_s_{0.0};
   double raw_relative_height_m_{0.0};
+  double deck_normal_rate_degps_{0.0};
+  double marker_switch_normal_jump_deg_{0.0};
   double px4_to_ros_time_offset_s_{0.0};
   double last_time_sync_receipt_s_{0.0};
 
@@ -439,13 +516,31 @@ private:
   bool horizontal_acceleration_feedforward_valid_{false};
   double horizontal_acceleration_feedforward_north_mps2_{0.0};
   double horizontal_acceleration_feedforward_east_mps2_{0.0};
+  bool vertical_acceleration_feedforward_valid_{false};
+  double vertical_acceleration_feedforward_down_mps2_{0.0};
   bool vertical_velocity_feedforward_valid_{false};
   double vertical_velocity_feedforward_down_mps_{0.0};
   bool effective_relative_velocity_gain_valid_{false};
   bool estimated_deck_acceleration_valid_{false};
   double effective_relative_velocity_gain_{0.0};
   Eigen::Vector2d estimated_deck_acceleration_xy_{Eigen::Vector2d::Zero()};
+  Eigen::Vector2d terminal_base_acceleration_ff_xy_{Eigen::Vector2d::Zero()};
+  Eigen::Vector2d terminal_combined_acceleration_ff_xy_{Eigen::Vector2d::Zero()};
+  double terminal_vertical_preload_acceleration_mps2_{0.0};
+  double terminal_rehearsal_elapsed_s_{0.0};
+  std::uint32_t terminal_fallback_count_{0U};
+  std::uint32_t terminal_divergence_protection_count_{0U};
+  Eigen::Vector3d previous_deck_normal_ned_{Eigen::Vector3d{0.0, 0.0, -1.0}};
+  std::array<Eigen::Vector3d, 4> marker_normal_ned_by_id_{{
+    Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(),
+    Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero()}};
+  std::uint32_t marker_normal_valid_mask_{0U};
+  int32_t previous_deck_normal_marker_id_{-1};
+  int32_t deck_plane_geometry_sample_marker_id_{-1};
   DeckAttitudeEstimate estimated_deck_attitude_{};
+  DeckAttitudeEstimate shadow_deck_attitude_{};
+  DeckPlaneGeometryResult deck_plane_geometry_result_{};
+  std::string deck_plane_geometry_status_{"not updated"};
   LandingWindowResult landing_window_result_{};
   double relative_height_m_{0.0};
   double relative_height_reference_m_{0.0};
@@ -453,6 +548,9 @@ private:
   FinalDescentOutput final_descent_output_{};
   TouchdownDetectorOutput touchdown_result_{};
   TouchdownHoldOutput touchdown_hold_output_{};
+  TerminalDeckNormalOutput terminal_normal_output_{};
+  TerminalContactComplianceOutput terminal_compliance_output_{};
+  TerminalAttitudeSafetyOutput terminal_attitude_safety_output_{};
   RelativeMpcResult relative_mpc_result_{};
   bool relative_mpc_debug_valid_{false};
   std::uint32_t relative_mpc_fallback_count_{0U};
@@ -468,11 +566,15 @@ private:
   std::unique_ptr<RelativeMpcController> relative_mpc_controller_;
   std::unique_ptr<VehiclePoseHistory> vehicle_pose_history_;
   std::unique_ptr<DeckAttitudeEstimator> deck_attitude_estimator_;
+  std::unique_ptr<DeckAttitudeEstimator> deck_plane_shadow_attitude_estimator_;
   std::unique_ptr<LandingWindow> landing_window_;
   std::unique_ptr<RelativeDescentController> relative_descent_controller_;
   std::unique_ptr<TouchdownDetector> touchdown_detector_;
   std::unique_ptr<FinalDescentController> final_descent_controller_;
   std::unique_ptr<TouchdownHoldController> touchdown_hold_controller_;
+  std::unique_ptr<TerminalDeckNormalStabilizer> terminal_normal_stabilizer_;
+  std::unique_ptr<TerminalContactComplianceController> terminal_compliance_controller_;
+  std::unique_ptr<TerminalAttitudeSafetyMonitor> terminal_attitude_safety_monitor_;
 
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr aruco_pose_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr aruco_visible_sub_;
@@ -515,6 +617,51 @@ private:
     estimated_deck_acceleration_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Vector3Stamped>::SharedPtr
     estimated_deck_attitude_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::Vector3Stamped>::SharedPtr
+    deck_plane_upward_normal_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr deck_plane_body_clearance_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr
+    deck_plane_skid_clearances_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr
+    deck_plane_minimum_skid_clearance_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr
+    deck_plane_maximum_skid_clearance_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr deck_plane_clearance_spread_pub_;
+  rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr
+    deck_plane_first_contact_point_index_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr
+    deck_plane_normal_relative_velocity_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr
+    deck_plane_skid_normal_relative_velocities_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::Vector3Stamped>::SharedPtr
+    deck_plane_tangential_position_error_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::Vector3Stamped>::SharedPtr
+    deck_plane_tangential_relative_velocity_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr deck_plane_status_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr deck_normal_rate_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr marker_switch_normal_jump_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr marker_normals_by_id_pub_;
+  rclcpp::Publisher<std_msgs::msg::UInt32>::SharedPtr marker_normal_valid_mask_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr terminal_stabilization_enabled_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr terminal_stabilization_mode_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr terminal_stabilization_reason_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::Vector3Stamped>::SharedPtr
+    terminal_desired_normal_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::Vector3Stamped>::SharedPtr
+    terminal_desired_roll_pitch_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::Vector3Stamped>::SharedPtr
+    terminal_actual_roll_pitch_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::Vector3Stamped>::SharedPtr
+    terminal_attitude_error_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::Vector3Stamped>::SharedPtr
+    terminal_acceleration_bias_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::Vector3Stamped>::SharedPtr
+    terminal_combined_acceleration_ff_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::Vector3Stamped>::SharedPtr
+    terminal_contact_anchor_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::Vector3Stamped>::SharedPtr
+    terminal_compliant_target_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr terminal_divergence_status_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr landing_window_open_pub_;
   rclcpp::Publisher<std_msgs::msg::UInt32>::SharedPtr landing_window_reject_reasons_pub_;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr

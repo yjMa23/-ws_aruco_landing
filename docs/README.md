@@ -2,7 +2,7 @@
 
 本目录集中保存 `ws_aruco_landing` 的操作指南、系统参考、阶段计划、研究综述和验收记录。
 
-当前开发基线已完成 P8A 升沉甲板触地与 P8B 水平相对 MPC 真实 PX4 SITL 验收。下一阶段仅推进 P8C 倾斜甲板综述与几何建模；完成 `RESEARCH PASS` 和独立计划前，不修改倾斜甲板终端控制生产代码。
+当前开发基线已完成 P8A 升沉甲板触地、P8B 水平相对 MPC，以及 P8C T1 固定 `±2°` 几何、安全高度、安全下降和正 `+2° roll/pitch` 真实触地验收。P8C 状态为 `RESEARCH PASS / PLAN PASS / P8C-0 IMPLEMENTATION PASS / P8C-1 VALIDATION PASS / P8C-2 SAFE DESCENT PASS / P8C-4 VALIDATION PASS / P8C T1 VALIDATION PASS / P8C-3 DESIGN GATE CLOSED`；最终 active touchdown 为 roll `3/3`、pitch `3/3`，旧路径回归 `9/9`，全工作区 `340 tests, 0 failures, 0 skipped`。P8C-3 的失败 Bag 和设计门历史继续完整保留。
 
 ## 阅读入口
 
@@ -11,6 +11,11 @@
 - [当前完整开发计划](plans/NEXT_DEVELOPMENT_PLAN.md)
 - [P8 高级降落路线图](plans/P8_ADVANCED_LANDING_ROADMAP.md)
 - [P8B 最新验收记录](validation/P8B_RELATIVE_MPC_VALIDATION.md)
+- [P8C T1 完整验收记录](validation/P8C_TILTED_DECK_LANDING_VALIDATION.md)
+- [P8C 倾斜甲板综述与几何模型](research/P8C_TILTED_DECK_LANDING_REVIEW.md)
+- [P8C 独立执行计划](plans/P8C_TILTED_DECK_LANDING_PLAN.md)
+- [P8C-4 终端接触稳定化研究与接口冻结](research/P8C4_TERMINAL_CONTACT_STABILIZATION_REVIEW.md)
+- [P8C-4 终端接触稳定化执行计划](plans/P8C4_TERMINAL_CONTACT_STABILIZATION_PLAN.md)
 
 ## 操作指南
 
@@ -47,11 +52,12 @@
 - [P7 批量评测](plans/P7_BATCH_EVALUATION_PLAN.md)
 - [P8A 升沉甲板触地](plans/P8A_HEAVE_TOUCHDOWN_PLAN.md)
 - [P8B 水平相对 MPC](plans/P8B_RELATIVE_MPC_PLAN.md)
+- [P8C 固定倾斜与低频 roll/pitch 甲板降落](plans/P8C_TILTED_DECK_LANDING_PLAN.md)
 
 ## 研究综述
 
 - [P8B 水平相对 MPC 综述与论文级模型](research/P8B_RELATIVE_MPC_REVIEW.md)
-- P8C 倾斜甲板综述将在 `research/P8C_TILTED_DECK_LANDING_REVIEW.md` 中创建。
+- [P8C 固定倾斜与低频 roll/pitch 甲板综述与几何模型](research/P8C_TILTED_DECK_LANDING_REVIEW.md)
 
 ## 验收记录
 
@@ -72,6 +78,8 @@
 - [P6B 最终下降与触地](validation/P6B_FINAL_DESCENT_AND_TOUCHDOWN_VALIDATION.md)
 - [P8A 升沉甲板触地](validation/P8A_HEAVE_TOUCHDOWN_VALIDATION.md)
 - [P8B 水平相对 MPC](validation/P8B_RELATIVE_MPC_VALIDATION.md)
+- [P8C T1 固定 2° 倾斜甲板完整验收：P8C-4 PASS，设计门关闭](validation/P8C_TILTED_DECK_LANDING_VALIDATION.md)
+- [P8C-3 姿态对齐与接触稳定性独立设计门：历史证据与关闭结论](plans/P8C3_ATTITUDE_ALIGNMENT_DECISION_GATE.md)
 
 ## 归档约定
 

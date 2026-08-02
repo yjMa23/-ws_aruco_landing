@@ -106,6 +106,47 @@ TEST(TouchdownHoldControllerTest, MotionHysteresisAvoidsModeChatter)
     becomes_stationary->vertical_target_z_ned_m);
 }
 
+TEST(TouchdownHoldControllerTest, OptionalPreloadLowersReferenceAtBoundedRate)
+{
+  TouchdownHoldParameters parameters;
+  parameters.max_reference_preload_rate_mps = 0.05;
+  TouchdownHoldController controller(parameters);
+  auto input = valid_input(0.05, 1.766, 2.00, 0.0);
+  input.relative_height_target_m = 0.20;
+
+  const auto first = controller.update(input);
+  ASSERT_TRUE(first.has_value());
+  EXPECT_NEAR(first->relative_height_reference_m, 0.2315, 1.0e-12);
+  EXPECT_NEAR(first->vertical_target_z_ned_m, 1.7685, 1.0e-12);
+
+  input.dt_s = 0.10;
+  const auto second = controller.update(input);
+  ASSERT_TRUE(second.has_value());
+  EXPECT_NEAR(second->relative_height_reference_m, 0.2265, 1.0e-12);
+  EXPECT_NEAR(second->vertical_target_z_ned_m, 1.7735, 1.0e-12);
+}
+
+TEST(TouchdownHoldControllerTest, MissingPreloadPreservesStationaryTarget)
+{
+  TouchdownHoldController controller(TouchdownHoldParameters{});
+  const auto first = controller.update(valid_input(0.05, 1.80, 2.00, 0.0));
+  ASSERT_TRUE(first.has_value());
+  const auto second = controller.update(valid_input(0.10, 1.80, 2.10, 0.0));
+  ASSERT_TRUE(second.has_value());
+  EXPECT_DOUBLE_EQ(second->relative_height_reference_m, 0.20);
+  EXPECT_DOUBLE_EQ(second->vertical_target_z_ned_m, 1.80);
+}
+
+TEST(TouchdownHoldControllerTest, RejectsInvalidPreloadTarget)
+{
+  TouchdownHoldController controller(TouchdownHoldParameters{});
+  auto input = valid_input(0.05, 1.80, 2.00, 0.0);
+  input.relative_height_target_m = -0.01;
+  EXPECT_FALSE(controller.update(input).has_value());
+  input.relative_height_target_m = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_FALSE(controller.update(input).has_value());
+}
+
 TEST(TouchdownHoldControllerTest, LimitsVerticalTargetRate)
 {
   TouchdownHoldParameters parameters;
@@ -213,6 +254,12 @@ TEST(TouchdownHoldControllerTest, RejectsInvalidParameters)
     std::invalid_argument);
 
   parameters.max_target_rate_mps = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_THROW(
+    {TouchdownHoldController invalid_controller(parameters);},
+    std::invalid_argument);
+
+  parameters = TouchdownHoldParameters{};
+  parameters.max_reference_preload_rate_mps = 0.0;
   EXPECT_THROW(
     {TouchdownHoldController invalid_controller(parameters);},
     std::invalid_argument);

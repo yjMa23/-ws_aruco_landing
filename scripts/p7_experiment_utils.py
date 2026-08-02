@@ -22,6 +22,8 @@ SUPPORTED_SCENARIOS = (
     "heave_h1",
     "heave_h2",
     "heave_h3",
+    "tilt_roll_pos_2deg",
+    "tilt_pitch_pos_2deg",
 )
 FAILURE_TYPES = (
     "NONE",

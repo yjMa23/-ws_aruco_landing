@@ -5,6 +5,9 @@
 
 ```text
 P8B：水平相对运动线性 MPC（VALIDATION PASS）
+P8C-3：FAILURE EVIDENCE PRESERVED
+P8C-4：TERMINAL CONTACT STABILIZATION VALIDATION PASS
+P8C fixed T1：VALIDATION PASS / P8C-3 DESIGN GATE CLOSED
 ```
 
 当前主路径：
@@ -22,6 +25,8 @@ PX4 状态有效
 → 相对高度和最终下降
 → 多源触地确认
 → 接触后相对保持
+
+并行 shadow：甲板向上法向 → 甲板平面/X500 四滑橇间隙 → 法向/切向诊断
 ```
 
 相对下降和最终下降均需显式授权。默认：
@@ -32,7 +37,7 @@ descent.enabled: false
 final_descent.enabled: false
 ```
 
-控制器禁止订阅 Gazebo 甲板 Ground Truth，不发送 `NAV_LAND`，不自动 Disarm。
+控制器禁止订阅 Gazebo 甲板 Ground Truth，不发送 `NAV_LAND`，不自动 Disarm。P8C-1/P8C-2 的几何与独立 shadow 法向滤波保持诊断隔离；P8C-4 只在固定正 `+2° roll/pitch` 且显式授权的终端阶段进入生产控制，通过 Offboard position setpoint 内的法向整形、接触锚点顺应、切向阻尼、candidate/HOLD 法向锁存和受限预压稳定接触，不直接发送 PX4 attitude setpoint。最终 roll/pitch 真实触地 6/6、旧路径回归 9/9；负倾角、动态姿态和 combined touchdown 继续关闭。
 
 ## 1. 依赖与环境
 
@@ -296,6 +301,49 @@ ros2 launch aruco_precision_landing_cpp px4_aruco_landing.launch.py \
   config_file:=/path/to/raw_visual.yaml
 ```
 
+## P8C-0/P8C-1/P8C-2 倾斜甲板 shadow 几何、安全高度与安全下降
+
+`DeckPlaneGeometry` 是不依赖 ROS/Gazebo/Ground Truth 的 C++17 纯数学模块。统一语义：
+
+```text
+local_ned      = North, East, Down
+base_link_frd  = Forward, Right, Down
+n              = 指向甲板上方的单位法向；水平甲板为 [0, 0, -1]
+h_body         = nᵀ(p_uav - p_deck)
+h_i            = nᵀ(p_skid_i - p_deck)
+P_t            = I - n nᵀ
+```
+
+默认 X500 四个 FRD 等效接触点来自真实 `x500_base/model.sdf` 两条
+`0.25×0.015×0.015 m` 滑橇碰撞盒最低中心线：
+
+```text
+[-0.125, -0.132, 0.227] m
+[+0.125, -0.132, 0.227] m
+[-0.125, +0.132, 0.227] m
+[+0.125, +0.132, 0.227] m
+```
+
+该模型忽略碰撞盒 7.5 mm 半宽支持面、柔性和接触求解压入。甲板角速度尚未在线估计时，参考点法向速度仍可发布，但四端点动态法向速度保持无效，不填零冒充。
+
+```yaml
+deck_plane_geometry.enabled: true
+deck_plane_geometry.shadow_only: true
+deck_plane_geometry.normal_filter_gain: 0.08
+deck_plane_geometry.apply_marker_plane_offset: true
+deck_plane_geometry.contact_points_body_frd_m: [...12 values...]
+deck_plane_geometry.marker_plane_offsets_m: [0.001, 0.002, 0.003, 0.004]
+```
+
+离线检查：
+
+```bash
+python3 scripts/evaluate_p8c_tilted_deck.py --help
+python3 scripts/evaluate_p8c_tilted_deck.py /path/to/bag --json
+```
+
+P8C-1 已完成固定 ±2° 安全高度 12/12 验收，完整法向最差 RMSE/P95 为 `0.702°/1.353°`。P8C-2 只对白名单 `tilt_roll_pos_2deg / tilt_pitch_pos_2deg` 允许相对下降到严格 `0.50 m`，完成正倾角 3+3、static 和 constant02 共 8/8 PASS；最差水平 RMSE/max 为 `0.020931/0.068704 m`，最低真实滑橇间隙 `0.210051 m`，完整法向最差 RMSE/P95 为 `0.317644°/0.562188°`。P8C-3 失败证据已保留，P8C-4 fixed T1 touchdown 已完成 roll/pitch 6/6 与旧路径 9/9 验收；负倾角、动态 roll/pitch/combined final descent 和 PX4 attitude setpoint 姿态对齐仍未开放。
+
 ## 9. ROS 2 接口
 
 ### 9.1 输入
@@ -329,6 +377,7 @@ ros2 launch aruco_precision_landing_cpp px4_aruco_landing.launch.py \
 | `/landing/effective_relative_velocity_gain` | `std_msgs/msg/Float64` | 当前实际使用的相对速度阻尼增益 |
 | `/landing/estimated_deck_acceleration` | `geometry_msgs/msg/TwistStamped` | local NED 过滤后甲板水平加速度 |
 | `/landing/relative_mpc/*` | 多种标准消息 | MPC 求解、控制、约束和预测诊断 |
+| `/landing/deck_plane/*` | 多种标准消息 | P8C 法向、机体/四滑橇间隙、首接触、法向速度、平面内误差、状态和 Marker 法向标定 shadow 诊断 |
 | `/landing/touchdown_*` | 多种标准消息 | 触地证据、候选时间、确认和接触后保持诊断 |
 
 监控：
@@ -342,6 +391,9 @@ ros2 topic echo /landing/predicted_deck_pose
 ros2 topic echo /landing/tracking_velocity_setpoint
 ros2 topic echo /landing/effective_relative_velocity_gain
 ros2 topic echo /landing/estimated_deck_acceleration
+ros2 topic echo /landing/deck_plane/status
+ros2 topic echo /landing/deck_plane/skid_clearances
+ros2 topic echo /landing/deck_plane/clearance_spread
 ```
 
 ## 10. 主要参数
@@ -367,6 +419,11 @@ ros2 topic echo /landing/estimated_deck_acceleration
 | `tracking.max_velocity_feedforward_acceleration_mps2` | `1.0` | 前馈加速度上限 |
 | `tracking.max_prediction_age_s` | `0.75` | 短时预测最大年龄 |
 | `deck_attitude.filter_gain` | `0.20` | Marker 向上法向量低通系数 |
+| `deck_plane_geometry.enabled` | `true` | 启用 P8C shadow 几何诊断 |
+| `deck_plane_geometry.shadow_only` | `true` | P8C 安全门；必须保持为 true |
+| `deck_plane_geometry.normal_filter_gain` | `0.08` | 仅供 P8C shadow 几何使用的独立法向低通增益；不改变 production `deck_attitude.filter_gain=0.20` |
+| `deck_plane_geometry.contact_points_body_frd_m` | X500 四端点 | FRD 等效滑橇接触点，12 个数值 |
+| `deck_plane_geometry.marker_plane_offsets_m` | `[0.001,0.002,0.003,0.004]` | 四 Marker visual 平面到碰撞顶面的名义偏移 |
 | `landing_window.enter_horizontal_error_m` | `0.15` | 窗口进入水平误差阈值 |
 | `landing_window.exit_horizontal_error_m` | `0.25` | 窗口退出水平误差阈值 |
 | `landing_window.enter_relative_speed_mps` | `0.15` | 窗口进入相对速度阈值 |
@@ -402,7 +459,7 @@ colcon test-result --verbose
 当前结果：
 
 ```text
-182 tests
+294 tests
 0 errors
 0 failures
 0 skipped
@@ -419,6 +476,8 @@ colcon test-result --verbose
 - `moving_target_tracking_controller_test`
 - `vehicle_pose_history_test`
 - `deck_attitude_estimator_test`
+- `deck_plane_geometry_test`
+- `p8c_tilted_deck_tests`
 - `landing_window_test`
 - `relative_descent_controller_test`
 - `vertical_state_estimator_test`
@@ -448,6 +507,9 @@ docs/plans/P8A_HEAVE_TOUCHDOWN_PLAN.md
 docs/validation/P8A_HEAVE_TOUCHDOWN_VALIDATION.md
 docs/plans/P8B_RELATIVE_MPC_PLAN.md
 docs/validation/P8B_RELATIVE_MPC_VALIDATION.md
+docs/research/P8C_TILTED_DECK_LANDING_REVIEW.md
+docs/plans/P8C_TILTED_DECK_LANDING_PLAN.md
+docs/validation/P8C_TILTED_DECK_LANDING_VALIDATION.md
 ```
 
 ## 12. 当前验收边界
@@ -466,9 +528,9 @@ P4～P4.6 已完成静止、`0.2 m/s`、`0.4 m/s`、正弦、时间对齐和参�
 P4.7 已完成加速度感知连续增益调度，并设为统一默认：0.4 m/s 匀速位置 RMSE 为
 `0.0554 m`，XY 正弦位置 RMSE 为 `0.3490 m`，Marker 丢失和 GNSS 恢复均为 0。
 
-P5A～P6B 已完成着陆窗口、相对下降、垂直估计、最终下降和真实接触。P7-lite 真实 3+3 冒烟为 6/6 PASS；P8A H1/H2 升沉触地均为 3/3 PASS；P8B 已完成固定 OSQP/OsqpEigen 依赖、完整 P4.7 回退、271 项测试和严格顺序真实 SITL，安全高度 15/15、下降 6/6、真实触地 6/6 PASS。
+P5A～P6B 已完成着陆窗口、相对下降、垂直估计、最终下降和真实接触。P7-lite 真实 3+3 冒烟为 6/6 PASS；P8A H1/H2 升沉触地均为 3/3 PASS；P8B 已完成固定 OSQP/OsqpEigen 依赖、完整 P4.7 回退和严格顺序真实 SITL。P8C-3 的 +2° roll seed2 滑移硬门失败及姿态发散、离板、恢复证据完整保留；P8C-4 已完成终端接触稳定化实现和分级验证，最终 fixed T1 touchdown roll 3/3、pitch 3/3，旧路径回归 9/9，当前全工作区 340 项测试通过。状态为 `P8C-4 VALIDATION PASS / P8C T1 VALIDATION PASS / P8C-3 DESIGN GATE CLOSED`。
 
 ## 13. 安全提示
 
-节点会自动发送 Offboard 和 Arm 命令，只应先在 SITL 中运行。相对下降和最终下降默认关闭；最终下降必须双重显式授权，且当前只允许静止、纯水平运动和 P8A 分级升沉场景。不发送 `NAV_LAND` 或 Disarm。
+节点会自动发送 Offboard 和 Arm 命令，只应先在 SITL 中运行。相对下降和最终下降默认关闭；固定正 +2° 场景只有在 relative descent、严格 0.50 m、final descent 和 P8C-4 active 终端稳定化同时显式启用时开放。负倾角、动态 roll/pitch、combined 和 dynamic attitude final descent 继续拒绝；当前方案不是 PX4 attitude setpoint 姿态对齐。不发送 `NAV_LAND` 或 Disarm。
 实机测试前必须重新核对相机外参、时间同步、PX4 坐标系、速度/加速度限制、failsafe、人工接管和解锁策略。

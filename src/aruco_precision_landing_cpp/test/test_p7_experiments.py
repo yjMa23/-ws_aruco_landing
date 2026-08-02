@@ -19,6 +19,8 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 import aggregate_results  # noqa: E402
 import evaluate_p4_bag  # noqa: E402
+import evaluate_p6b_touchdown  # noqa: E402
+import mavlink_gcs_heartbeat  # noqa: E402
 import run_batch_experiments  # noqa: E402
 import run_single_experiment  # noqa: E402
 from p7_experiment_utils import (  # noqa: E402
@@ -86,6 +88,30 @@ class P7ExperimentTests(unittest.TestCase):
             self.assertEqual(config.scenarios[0].scenario, "heave_h1")
             self.assertEqual(config.scenarios[0].seeds, (101, 102, 103))
 
+    def test_p8c3_positive_fixed_tilt_profiles_are_supported_by_automation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "p8c3.yaml"
+            config_path.write_text(
+                textwrap.dedent(
+                    """
+                    name: p8c3
+                    output_root: results
+                    scenarios:
+                      - scenario: tilt_roll_pos_2deg
+                        repetitions: 3
+                        seeds: [1]
+                      - scenario: tilt_pitch_pos_2deg
+                        repetitions: 3
+                        seeds: [11]
+                    """
+                ),
+                encoding="utf-8",
+            )
+            config = load_batch_config(config_path, workspace_dir=root)
+            self.assertEqual(config.scenarios[0].seeds, (1, 2, 3))
+            self.assertEqual(config.scenarios[1].seeds, (11, 12, 13))
+
     def test_seed_expansion_rejects_mismatch(self) -> None:
         with self.assertRaises(ValueError):
             expand_seeds(3, [1, 2])
@@ -96,6 +122,50 @@ class P7ExperimentTests(unittest.TestCase):
         second = make_episode_id(batch_id, "static", 2, 2)
         third = make_episode_id(batch_id, "constant02", 1, 1)
         self.assertEqual(len({first, second, third}), 3)
+
+    def test_completed_success_can_be_archived_after_code_change(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            episode_dir = Path(directory) / "episode"
+            episode_dir.mkdir()
+            (episode_dir / "manifest.json").write_text(
+                json.dumps({"completed": True, "success": True}),
+                encoding="utf-8",
+            )
+            archive = run_single_experiment.archive_completed_episode(
+                episode_dir, require_failure=False
+            )
+            self.assertFalse(episode_dir.exists())
+            self.assertTrue(archive.exists())
+            self.assertIn("superseded_attempt01", archive.name)
+
+    def test_interrupted_episode_can_be_archived_after_code_change(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            episode_dir = Path(directory) / "episode"
+            episode_dir.mkdir()
+            (episode_dir / "manifest.json").write_text(
+                json.dumps({"completed": False, "success": False}),
+                encoding="utf-8",
+            )
+            archive = run_single_experiment.archive_completed_episode(
+                episode_dir, require_failure=False
+            )
+            self.assertFalse(episode_dir.exists())
+            self.assertTrue(archive.exists())
+            self.assertIn("interrupted_attempt01", archive.name)
+
+    def test_failed_episode_retry_archives_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            episode_dir = Path(directory) / "episode"
+            episode_dir.mkdir()
+            (episode_dir / "run.log").write_text("startup failure\n", encoding="utf-8")
+            (episode_dir / "manifest.json").write_text(
+                json.dumps({"completed": True, "success": False}),
+                encoding="utf-8",
+            )
+            archive = run_single_experiment.archive_failed_episode(episode_dir)
+            self.assertFalse(episode_dir.exists())
+            self.assertTrue((archive / "run.log").is_file())
+            self.assertIn("failed_attempt01", archive.name)
 
     def test_resume_requires_complete_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -309,6 +379,220 @@ class P7ExperimentTests(unittest.TestCase):
             ).name,
             "evaluate_p8a_heave_touchdown.py",
         )
+
+    def test_dual_evaluators_must_both_pass(self) -> None:
+        self.assertTrue(
+            run_single_experiment.evaluators_passed(
+                {"positive_touchdown_passed": True},
+                {"positive_touchdown_passed": True},
+            )
+        )
+        self.assertFalse(
+            run_single_experiment.evaluators_passed(
+                {"positive_touchdown_passed": True},
+                {"positive_touchdown_passed": False},
+            )
+        )
+        self.assertFalse(run_single_experiment.evaluators_passed(None, None))
+
+    def test_terminal_recovery_fails_fast_instead_of_second_landing(self) -> None:
+        self.assertTrue(
+            run_single_experiment.recovery_after_terminal_phase(
+                ["FINAL_DESCENT", "TOUCHDOWN_CANDIDATE_HOLD", "TOUCHDOWN_HOLD"],
+                "RECOVER_TO_GNSS",
+            )
+        )
+        self.assertFalse(
+            run_single_experiment.recovery_after_terminal_phase(
+                ["TRACK_TARGET"], "RECOVER_TO_GNSS"
+            )
+        )
+
+    def test_touchdown_hold_recording_adds_shutdown_margin(self) -> None:
+        self.assertEqual(
+            run_single_experiment.required_hold_recording_duration_s(10.0), 11.0
+        )
+        with self.assertRaises(ValueError):
+            run_single_experiment.required_hold_recording_duration_s(-0.1)
+
+    def test_local_gcs_heartbeat_fields_are_standard_and_noncontrolling(self) -> None:
+        fields = mavlink_gcs_heartbeat.heartbeat_fields()
+        self.assertEqual(fields["mav_type"], 6)  # MAV_TYPE_GCS
+        self.assertEqual(fields["autopilot"], 8)  # MAV_AUTOPILOT_INVALID
+        self.assertEqual(fields["base_mode"], 0)
+        self.assertEqual(fields["custom_mode"], 0)
+        self.assertEqual(fields["system_status"], 4)  # MAV_STATE_ACTIVE
+        self.assertEqual(fields["mavlink_version"], 3)
+
+    def test_local_gcs_heartbeat_uses_pymavlink_argument_order(self) -> None:
+        class Recorder:
+            def __init__(self) -> None:
+                self.arguments: tuple[int, ...] | None = None
+
+            def heartbeat_send(self, *arguments: int) -> None:
+                self.arguments = arguments
+
+        class Connection:
+            def __init__(self) -> None:
+                self.mav = Recorder()
+
+        connection = Connection()
+        mavlink_gcs_heartbeat.send_heartbeat(connection)
+        self.assertEqual(connection.mav.arguments, (6, 8, 0, 0, 4, 3))
+
+    def test_start_sitl_owns_gcs_heartbeat_and_cleanup(self) -> None:
+        script = (WORKSPACE_DIR / "scripts" / "start_sitl.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('start_process "local GCS heartbeat"', script)
+        self.assertIn("mavlink_gcs_heartbeat.py", script)
+        self.assertIn("mavlink_gcs_heartbeat.py", run_single_experiment.STALE_PATTERN)
+        self.assertLess(
+            script.index('start_process "local GCS heartbeat"'),
+            script.index('echo "Waiting for PX4 ROS topics..."'),
+        )
+
+    def test_p8c4_profile_completion_requirements_are_state_driven(self) -> None:
+        states, duration = run_single_experiment.completion_requirement(
+            "safe-altitude", 10.0
+        )
+        self.assertEqual(states, frozenset({"WAIT_LANDING_WINDOW"}))
+        self.assertEqual(duration, 10.0)
+        states, duration = run_single_experiment.completion_requirement(
+            "safe-descent", 10.0
+        )
+        self.assertEqual(states, frozenset({"TEST_HEIGHT_HOLD"}))
+        self.assertEqual(duration, 9.0)
+        states, duration = run_single_experiment.completion_requirement(
+            "rehearsal", 10.0
+        )
+        self.assertEqual(states, frozenset({"TEST_HEIGHT_HOLD"}))
+        self.assertEqual(duration, 10.0)
+        states, duration = run_single_experiment.completion_requirement(
+            "touchdown", 10.0
+        )
+        self.assertEqual(states, frozenset({"TOUCHDOWN_HOLD"}))
+        self.assertEqual(duration, 11.0)
+
+    def test_p8c4_staged_commands_are_strict_and_mutually_separated(self) -> None:
+        common = (
+            WORKSPACE_DIR,
+            "tilt_roll_pos_2deg",
+            1,
+            Path("/tmp/p8c4-bag"),
+            "close-range",
+            False,
+            "PREDICTED_POSITION_VELOCITY_FF",
+        )
+        safe_altitude = run_single_experiment.build_start_command(
+            *common,
+            experiment_profile="safe-altitude",
+            terminal_stabilization_mode="shadow",
+        )
+        self.assertIn("--terminal-contact-stabilization-shadow", safe_altitude)
+        self.assertNotIn("--enable-relative-descent", safe_altitude)
+        self.assertNotIn("--enable-final-descent", safe_altitude)
+
+        safe_descent = run_single_experiment.build_start_command(
+            *common,
+            experiment_profile="safe-descent",
+            terminal_stabilization_mode="shadow",
+        )
+        self.assertIn("--enable-relative-descent", safe_descent)
+        self.assertNotIn("--enable-final-descent", safe_descent)
+
+        rehearsal = run_single_experiment.build_start_command(
+            *common,
+            experiment_profile="rehearsal",
+            terminal_stabilization_mode="rehearsal",
+        )
+        self.assertIn("--terminal-contact-stabilization-rehearsal", rehearsal)
+        self.assertNotIn("--enable-final-descent", rehearsal)
+
+        touchdown = run_single_experiment.build_start_command(
+            *common,
+            experiment_profile="touchdown",
+            terminal_stabilization_mode="active",
+        )
+        self.assertIn("--enable-terminal-contact-stabilization", touchdown)
+        self.assertIn("--enable-final-descent", touchdown)
+
+    def test_legacy_p6b_contact_gate_uses_confirmed_time_not_preconfirm_minimum(self) -> None:
+        result = evaluate_p6b_touchdown.contact_clearance_gate(
+            confirmed_clearance_m=0.0003609528735845851,
+            maximum_contact_clearance_m=0.03,
+            maximum_contact_penetration_m=0.05,
+        )
+        self.assertTrue(result)
+        self.assertFalse(
+            evaluate_p6b_touchdown.contact_clearance_gate(
+                confirmed_clearance_m=-0.05014470920585659,
+                maximum_contact_clearance_m=0.03,
+                maximum_contact_penetration_m=0.05,
+            )
+        )
+
+    def test_non_touchdown_evaluator_accepts_p8c_final_result(self) -> None:
+        self.assertTrue(
+            run_single_experiment.evaluators_passed(
+                {"final_result": "PASS"},
+                None,
+                experiment_profile="safe-descent",
+            )
+        )
+        self.assertFalse(
+            run_single_experiment.evaluators_passed(
+                {"final_result": "FAIL"},
+                None,
+                experiment_profile="safe-descent",
+            )
+        )
+
+    def test_p8c3_evaluator_selection_and_frozen_command(self) -> None:
+        evaluator = run_single_experiment.evaluator_path_for_scenario(
+            WORKSPACE_DIR,
+            "tilt_roll_pos_2deg",
+            p8c3_touchdown=True,
+        )
+        self.assertEqual(evaluator.name, "evaluate_p8c_tilted_deck.py")
+        command = run_single_experiment.build_start_command(
+            WORKSPACE_DIR,
+            "tilt_roll_pos_2deg",
+            1,
+            Path("/tmp/p8c3-bag"),
+            "close-range",
+            False,
+            "PREDICTED_POSITION_VELOCITY_FF",
+        )
+        self.assertIn("--descent-test-height", command)
+        self.assertEqual(command[command.index("--descent-test-height") + 1], "0.50")
+        self.assertIn("--enable-relative-descent", command)
+        self.assertIn("--enable-final-descent", command)
+
+    def test_p8c3_tilt_dry_run_is_noninteractive_and_strict(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            args = SimpleNamespace(
+                scenario="tilt_roll_pos_2deg",
+                seed=1,
+                episode_timeout=180.0,
+                startup_timeout=60.0,
+                touchdown_hold=10.0,
+                output_directory=Path(directory),
+                batch_id="p8c3-dry",
+                episode_id="p8c3-dry-roll",
+                camera_model="close-range",
+                tracking_mode="PREDICTED_POSITION_VELOCITY_FF",
+                record_camera_debug=False,
+                p8c3_touchdown=True,
+                dry_run=True,
+                workspace_dir=WORKSPACE_DIR,
+            )
+            with mock.patch.object(run_single_experiment.subprocess, "Popen") as popen:
+                result = run_single_experiment.run_episode(args)
+            popen.assert_not_called()
+            self.assertTrue(result["p8c3_touchdown"])
+            self.assertIn("tilt_roll_pos_2deg", result["command"])
+            self.assertIn("--descent-test-height", result["command"])
 
     def test_heave_dry_run_uses_graded_scenario(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -37,6 +37,7 @@ TouchdownDetector::TouchdownDetector(const TouchdownDetectorParameters & paramet
     !positive_finite(parameters_.max_relative_horizontal_speed_mps) ||
     !positive_finite(parameters_.terminal_contact_max_height_m) ||
     !positive_finite(parameters_.terminal_contact_min_reference_error_m) ||
+    !positive_finite(parameters_.terminal_contact_max_geometry_gap_m) ||
     !positive_finite(parameters_.terminal_contact_max_vertical_speed_mps) ||
     !positive_finite(parameters_.terminal_contact_px4_status_timeout_s) ||
     !positive_finite(parameters_.candidate_required_duration_s))
@@ -160,15 +161,22 @@ TouchdownDetectorOutput TouchdownDetector::update(const TouchdownDetectorInput &
     !input.vertical_movement &&
     !input.horizontal_movement &&
     !input.rotational_movement;
-  const bool terminal_reference_valid =
-    input.terminal_descent_active &&
+  const bool terminal_reference_penetration =
     input.terminal_command_complete &&
     std::isfinite(input.relative_height_reference_m) &&
     input.relative_height_reference_m >= 0.0 &&
-    visual_fresh &&
-    input.relative_height_m <= parameters_.terminal_contact_max_height_m &&
     input.relative_height_m - input.relative_height_reference_m >=
     parameters_.terminal_contact_min_reference_error_m;
+  const bool terminal_geometry_proximity =
+    input.terminal_contact_geometry_valid &&
+    std::isfinite(input.minimum_skid_clearance_m) &&
+    input.minimum_skid_clearance_m <=
+    parameters_.terminal_contact_max_geometry_gap_m;
+  const bool terminal_reference_valid =
+    input.terminal_descent_active &&
+    visual_fresh &&
+    input.relative_height_m <= parameters_.terminal_contact_max_height_m &&
+    (terminal_reference_penetration || terminal_geometry_proximity);
   const bool terminal_vertical_stall =
     relative_speed_valid &&
     std::abs(input.relative_vertical_velocity_mps) <=
@@ -200,6 +208,11 @@ TouchdownDetectorOutput TouchdownDetector::update(const TouchdownDetectorInput &
     evidence_mask,
     low_relative_horizontal_speed,
     TouchdownEvidence::kLowRelativeHorizontalSpeed);
+
+  add_evidence(
+    evidence_mask,
+    terminal_geometry_proximity,
+    TouchdownEvidence::kTerminalGeometryProximity);
 
   const bool terminal_contact_stall =
     terminal_px4_status_fresh && terminal_reference_valid && terminal_vertical_stall &&

@@ -210,10 +210,24 @@ u_k = [a_x, a_y]^T
 
 ### 6.1 强制研究门槛
 
-第一步必须新增：
+已完成并保存：
 
 ```text
 docs/research/P8C_TILTED_DECK_LANDING_REVIEW.md
+docs/plans/P8C_TILTED_DECK_LANDING_PLAN.md
+```
+
+当前状态：
+
+```text
+P8C RESEARCH PASS
+P8C PLAN PASS
+P8C-0 IMPLEMENTATION PASS
+P8C-1 VALIDATION PASS
+P8C-2 SAFE DESCENT PASS
+P8C-4 VALIDATION PASS
+P8C T1 VALIDATION PASS
+P8C-3 DESIGN GATE CLOSED
 ```
 
 执行顺序：
@@ -225,9 +239,16 @@ docs/research/P8C_TILTED_DECK_LANDING_REVIEW.md
 → RESEARCH PASS
 → docs/plans/P8C_TILTED_DECK_LANDING_PLAN.md
 → PLAN PASS
-→ 固定小倾角 T1
-→ 必要时再做法向姿态对齐调研和实现
-→ 动态低频 roll/pitch
+→ P8C-0 纯数学几何、单元测试、shadow 诊断与 evaluator
+→ P8C-0 IMPLEMENTATION PASS
+→ P8C-1 固定 ±2° 安全高度法向与几何验证
+→ P8C-1 VALIDATION PASS
+→ P8C-2 固定 +2° 安全下降到 0.50 m
+→ P8C-2 SAFE DESCENT PASS
+→ P8C-3 固定 +2° 水平机体真实触地失败证据与独立设计门
+→ P8C-4 终端主轴法向整形、状态化顺应和受限预压
+→ P8C T1 固定 +2° roll/pitch 真实触地 6/6 PASS
+→ 动态低频 roll/pitch（后续独立阶段）
 → docs/validation/P8C_TILTED_DECK_LANDING_VALIDATION.md
 ```
 
@@ -275,7 +296,7 @@ B1：关闭额外预测
 B2：关闭速度前馈
 B3：完整水平相对 MPC
 B4：MPC + 升沉处理
-B5：若已实现，MPC + 法向姿态对齐
+B5：固定正 T1 场景下的当前终端接触稳定化方案（Offboard position 模式内法向整形、接触顺应和受限预压，不是 PX4 attitude setpoint 姿态对齐）
 ```
 
 P7 的 20+20 配置和自动化继续保留，可在 P9 中作为正式实验子集执行。
@@ -284,7 +305,7 @@ P7 的 20+20 配置和自动化继续保留，可在 P9 中作为正式实验子
 
 ## 8. 当前状态
 
-截至 2026-08-01：
+截至 2026-08-02：
 
 ```text
 P6B: VALIDATION PASS
@@ -292,8 +313,8 @@ P7-lite: VALIDATION PASS (static/constant02 3+3, 6/6 PASS)
 P7 20+20: deferred to P9
 P8A: VALIDATION PASS (H1 3/3, H2 3/3)
 P8B: RESEARCH PASS / PLAN PASS / IMPLEMENTATION PASS / VALIDATION PASS
-P8C: not started
-P9: not started
+P8C: RESEARCH PASS / PLAN PASS / P8C-0 IMPLEMENTATION PASS / P8C-1 VALIDATION PASS / P8C-2 SAFE DESCENT PASS / P8C-4 VALIDATION PASS / P8C T1 VALIDATION PASS / P8C-3 DESIGN GATE CLOSED
+P9: current next engineering phase
 ```
 
-P8A 验收见 `docs/validation/P8A_HEAVE_TOUCHDOWN_VALIDATION.md`。P8B 已完成 OSQP `v1.0.0` + OsqpEigen `v0.11.2` 固定依赖、水平相对 MPC、完整 P4.7 fallback、`TERMINAL_PHASE_P47` 安全 handoff、诊断、评测扩展、`271` 项全工作区测试和严格顺序真实 SITL，验收见 `docs/validation/P8B_RELATIVE_MPC_VALIDATION.md`。当前默认下一任务是创建并完成 `docs/research/P8C_TILTED_DECK_LANDING_REVIEW.md`；P8C 未达到 `RESEARCH PASS` 并保存独立计划前，不得直接编写倾斜甲板终端控制生产代码。
+P8A 验收见 `docs/validation/P8A_HEAVE_TOUCHDOWN_VALIDATION.md`。P8B 已完成 OSQP `v1.0.0` + OsqpEigen `v0.11.2` 固定依赖、水平相对 MPC、完整 P4.7 fallback、`TERMINAL_PHASE_P47` 安全 handoff、诊断、评测扩展和严格顺序真实 SITL，验收见 `docs/validation/P8B_RELATIVE_MPC_VALIDATION.md`。P8C-3 的水平机体失败 Bag 与独立设计门继续保留；P8C-4 已按 Stage 0～7 完成终端接触稳定化，最终 fixed T1 active touchdown 为 roll `3/3`、pitch `3/3`，static/constant02/H1/H2/RELATIVE_MPC 回归 `9/9`，全工作区 `340 tests, 0 failures, 0 skipped`。最差 tracking P95 `0.238131°`、slip `0.059209 m`、HOLD 速度 P95 `0.032226 m/s`，fallback、离板、二次接触和 recovery 均为 0。负倾角与动态 roll/pitch/combined 仍属于后续独立阶段。

@@ -236,6 +236,8 @@ MicroXRCEAgent
 | `sinusoidal` | XY 正弦运动。 |
 | `heave` | 通用升沉场景。 |
 | `heave_h1/h2/h3` | P8A 分级升沉场景。 |
+| `tilt_roll_pos_2deg / tilt_pitch_pos_2deg` | P8C 正 `2°` 固定倾角；允许安全高度、安全下降，或在固定白名单和显式终端稳定化下执行 P8C-4 touchdown。 |
+| `tilt_roll_neg_2deg / tilt_pitch_neg_2deg` | P8C 负 `2°` 固定倾角；仍仅允许 P8C-1 安全高度 shadow。 |
 | `rollpitch` | 低频横摇/纵摇，仅用于当前研究和安全高度测试。 |
 | `combined` | 水平、升沉和姿态组合运动。 |
 
@@ -247,6 +249,32 @@ MicroXRCEAgent
 ```
 
 `close-range` 为默认配置，near clip 为 `0.02 m`；`px4-default` 的 near clip 为 `0.10 m`，仅用于 A/B 对照。
+
+P8C-1 固定倾角安全高度示例：
+
+```bash
+./scripts/start_sitl.sh \
+  --scenario tilt_roll_pos_2deg \
+  --headless \
+  --record
+```
+
+P8C-2 正倾角安全下降示例：
+
+```bash
+./scripts/start_sitl.sh \
+  --scenario tilt_roll_pos_2deg \
+  --headless \
+  --seed 1 \
+  --auto-confirm-controller \
+  --camera-model close-range \
+  --tracking-mode PREDICTED_POSITION_VELOCITY_FF \
+  --enable-relative-descent \
+  --descent-test-height 0.50 \
+  --bag-output results/p8c2_validation_YYYYMMDD/tilt_roll_pos_2deg_seed1/bag
+```
+
+只有 `tilt_roll_pos_2deg / tilt_pitch_pos_2deg` 可在显式 relative descent 且测试高度严格为 `0.50 m` 时进入 P8C-2。P8C-2 本身仍不构成真实接触许可；真实 fixed T1 touchdown 只能通过 P8C-4 的显式 active 终端稳定化白名单启动。正倾角非 `0.50 m`、负倾角 relative descent 或 touchdown、动态 `rollpitch/combined` final descent 均会在启动 PX4/Gazebo/ROS 前返回非零。
 
 普通 `--record` 不记录大体积图像。需要原始图像、`camera_info` 和 `/aruco/debug_image` 时使用：
 
@@ -299,7 +327,7 @@ MPC 求解异常时当前周期自动回退 P4.7；终端下降阶段固定交�
   --enable-final-descent
 ```
 
-当前脚本只允许 `static`、纯水平运动场景和 `heave_h1/h2/h3` 启用最终下降；`heave`、`rollpitch` 和 `combined` 会被拒绝。P8A 升沉触地示例：
+当前脚本允许 `static`、纯水平运动场景、`heave_h1/h2/h3` 启用最终下降；固定正 `+2° roll/pitch` 只有在 P8C-4 active 终端稳定化、relative descent、严格 `0.50 m` 和 final descent 同时显式启用时开放。`heave`、负倾角、`rollpitch` 和 `combined` final descent 继续拒绝。P8A 升沉触地示例：
 
 ```bash
 ./scripts/start_sitl.sh \
@@ -563,6 +591,10 @@ ros2 topic echo /landing/touchdown_status
 ros2 topic echo /landing/touchdown_confirmed
 ros2 topic echo /landing/relative_mpc/status
 ros2 topic echo /landing/relative_mpc/solve_time_ms
+ros2 topic echo /landing/deck_plane/status
+ros2 topic echo /landing/deck_plane/upward_normal_ned
+ros2 topic echo /landing/deck_plane/skid_clearances
+ros2 topic echo /landing/deck_plane/clearance_spread
 ```
 
 手动录制最小调试 Bag：
@@ -583,7 +615,7 @@ ros2 bag record \
   /fmu/in/trajectory_setpoint
 ```
 
-Ground Truth 只能进入离线评测，不得进入控制器。`bags/` 默认被 Git 忽略。
+Ground Truth 只能进入离线评测，不得进入控制器。`bags/` 默认被 Git 忽略。P8C 完整验收记录和固定阈值见 `docs/validation/P8C_TILTED_DECK_LANDING_VALIDATION.md`。
 
 阶段评测入口：
 
@@ -595,6 +627,11 @@ python3 scripts/evaluate_p5c_vertical_estimation.py bags/<bag_name>
 python3 scripts/evaluate_p6a_touchdown.py bags/<bag_name>
 python3 scripts/evaluate_p6b_touchdown.py bags/<bag_name>
 python3 scripts/evaluate_p8a_heave_touchdown.py bags/<bag_name>
+python3 scripts/evaluate_p8c_tilted_deck.py \
+  bags/<bag_name> \
+  --scenario tilt_roll_pos_2deg \
+  --seed 1 \
+  --output-json results/p8c_evaluation.json
 ```
 
 ## 7. 常见问题
@@ -640,7 +677,39 @@ pgrep -af 'MicroXRCEAgent|px4|gz sim|moving_deck|deck_gnss|aruco_detector|px4_ar
 
 `start_sitl.sh` 检测到同类残留进程时会拒绝启动新一轮实验。
 
-## 8. 停止与安全边界
+## 8. P8C fixed T1 无人值守固定倾角触地
+
+只允许正 `+2° roll/pitch`，并且必须同时显式给出 relative descent、严格 `0.50 m` 和 final descent：
+
+```bash
+python3 scripts/run_single_experiment.py \
+  --scenario tilt_roll_pos_2deg \
+  --seed 1 \
+  --episode-timeout 240 \
+  --startup-timeout 120 \
+  --touchdown-hold 10 \
+  --output-directory results/p8c3_validation_20260802 \
+  --batch-id p8c3-final \
+  --episode-id tilt_roll_pos_2deg_seed1 \
+  --camera-model close-range \
+  --tracking-mode PREDICTED_POSITION_VELOCITY_FF \
+  --p8c3-touchdown
+```
+
+实验器自动等待状态、录 Bag、要求 `TOUCHDOWN_HOLD` 完整维持 10 秒、额外录制 1 秒停机隔离余量、运行 evaluator 并清理本轮进程。发生 terminal recovery 或 evaluator 失败时返回非零，不会自动用二次降落覆盖首次失败。
+
+上述 P8C-3 命令用于保留水平机体历史方案与失败证据。当前固定 T1 的最终状态为：
+
+```text
+P8C-3 FAILURE EVIDENCE PRESERVED
+P8C-4 VALIDATION PASS
+P8C T1 VALIDATION PASS
+P8C-3 DESIGN GATE CLOSED
+```
+
+P8C-4 使用 Offboard position 模式内的终端主轴法向整形、接触锚点顺应、切向阻尼和受限预压，不是 PX4 attitude setpoint 姿态对齐。负倾角、动态 `rollpitch/combined`、dynamic attitude final descent、Ground Truth 控制、`NAV_LAND` 和自动 Disarm 继续关闭。历史失败证据见 `results/p8c3_validation_20260802/`，最终成功证据见 `results/p8c4_validation_20260802/`。
+
+## 9. 停止与安全边界
 
 一键启动时使用 `Ctrl-C`，脚本会依次发送 `INT`、`TERM`，必要时再终止本轮子进程。
 
