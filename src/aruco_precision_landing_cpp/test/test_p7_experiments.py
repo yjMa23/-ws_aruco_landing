@@ -989,6 +989,14 @@ class P7ExperimentTests(unittest.TestCase):
         self.assertEqual(summary["min"], 1.0)
         self.assertEqual(summary["max"], 3.0)
 
+    def test_stale_process_pid_parser_ignores_invalid_and_duplicates(self) -> None:
+        self.assertEqual(
+            run_single_experiment.stale_process_pids(
+                ["123 MicroXRCEAgent udp4", "bad line", "123 duplicate", "456 gz sim"]
+            ),
+            [123, 456],
+        )
+
     def test_frozen_applicability_examples(self) -> None:
         self.assertTrue(combination_is_applicable("B4", "heave_h1", "touchdown"))
         self.assertTrue(

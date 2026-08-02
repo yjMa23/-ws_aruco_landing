@@ -285,6 +285,52 @@ def stale_processes() -> list[str]:
     return [line for line in result.stdout.splitlines() if line.strip()]
 
 
+def stale_process_pids(lines: list[str]) -> list[int]:
+    """Extract unique positive PIDs from pgrep -af output."""
+
+    pids: list[int] = []
+    for line in lines:
+        token = line.strip().split(maxsplit=1)[0] if line.strip() else ""
+        try:
+            pid = int(token)
+        except ValueError:
+            continue
+        if pid > 1 and pid != os.getpid() and pid not in pids:
+            pids.append(pid)
+    return pids
+
+
+def cleanup_stale_processes(timeout_s: float = 5.0) -> list[str]:
+    """Clean residual processes created by the just-finished episode.
+
+    The caller must have passed the pre-start stale-process gate, therefore any
+    matching process after the episode belongs to the current automation run.
+    """
+
+    residuals = stale_processes()
+    if not residuals:
+        return []
+    for signal_value, wait_s in (
+        (signal.SIGINT, min(2.0, timeout_s)),
+        (signal.SIGTERM, min(2.0, timeout_s)),
+        (signal.SIGKILL, min(1.0, timeout_s)),
+    ):
+        for pid in stale_process_pids(residuals):
+            try:
+                os.kill(pid, signal_value)
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                continue
+        deadline = time.monotonic() + wait_s
+        while time.monotonic() < deadline:
+            time.sleep(0.1)
+            residuals = stale_processes()
+            if not residuals:
+                return []
+    return stale_processes()
+
+
 def build_start_command(
     workspace_dir: Path,
     scenario: str,
@@ -1184,7 +1230,7 @@ def run_episode(args: argparse.Namespace) -> dict[str, Any]:
             if state_monitor is not None:
                 state_monitor.stop()
 
-        cleanup_residuals = stale_processes()
+        cleanup_residuals = cleanup_stale_processes()
         cleanup_ok = not cleanup_residuals
         evaluation: dict[str, Any] | None = None
         legacy_evaluation: dict[str, Any] | None = None
