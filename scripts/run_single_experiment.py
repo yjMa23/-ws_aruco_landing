@@ -640,14 +640,15 @@ def parse_evaluator_json_output(output: str) -> dict[str, Any]:
 
     decoder = json.JSONDecoder()
     positions = [index for index, character in enumerate(output) if character == "{"]
-    for index in reversed(positions):
+    for index in positions:
         try:
-            value, _ = decoder.raw_decode(output[index:])
+            value, consumed = decoder.raw_decode(output[index:])
         except json.JSONDecodeError:
             continue
-        if isinstance(value, dict):
+        trailing = output[index + consumed :].strip()
+        if isinstance(value, dict) and not trailing:
             return value
-    raise ValueError("evaluator output does not contain a JSON object")
+    raise ValueError("evaluator output does not contain a complete JSON object")
 
 
 def _execute_evaluator(

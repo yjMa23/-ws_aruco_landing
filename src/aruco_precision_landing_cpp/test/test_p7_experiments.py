@@ -1097,13 +1097,32 @@ class P7ExperimentTests(unittest.TestCase):
                 reevaluate_experiment.archive_evaluation_files(episode_dir), None
             )
 
-    def test_evaluator_json_parser_accepts_ros_log_prefix(self) -> None:
+    def test_evaluator_json_parser_accepts_ros_prefix_and_nested_json(self) -> None:
         parsed = run_single_experiment.parse_evaluator_json_output(
-            "[INFO] opened bag\n{\"horizontal_position_rmse_m\": 0.1}\n"
+            "[INFO] opened bag\n"
+            "{\"horizontal_position_rmse_m\": 0.1, "
+            "\"nested\": {\"CONFIRMED\": {\"count\": 12}}}\n"
         )
         self.assertEqual(parsed["horizontal_position_rmse_m"], 0.1)
+        self.assertEqual(parsed["nested"]["CONFIRMED"]["count"], 12)
+
+    def test_evaluator_json_parser_ignores_log_braces_and_allows_whitespace(self) -> None:
+        parsed = run_single_experiment.parse_evaluator_json_output(
+            "[INFO] waiting for state {READY}\n"
+            "[WARN] ignored diagnostic={}\n"
+            "{\"result\": {\"success\": true}}\n\t  "
+        )
+        self.assertTrue(parsed["result"]["success"])
+
+    def test_evaluator_json_parser_rejects_garbage_or_missing_json(self) -> None:
         with self.assertRaises(ValueError):
-            run_single_experiment.parse_evaluator_json_output("[INFO] no json")
+            run_single_experiment.parse_evaluator_json_output(
+                "[INFO] opened bag\n{\"success\": true}\ntrailing garbage"
+            )
+        with self.assertRaises(ValueError):
+            run_single_experiment.parse_evaluator_json_output(
+                "[INFO] no json, only a brace { in the log"
+            )
 
     def test_stale_process_pid_parser_ignores_invalid_and_duplicates(self) -> None:
         self.assertEqual(

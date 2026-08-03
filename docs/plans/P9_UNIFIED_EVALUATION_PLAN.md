@@ -8,7 +8,7 @@ P8C-3 FAILURE EVIDENCE PRESERVED
 P8C-4 VALIDATION PASS
 P8C T1 VALIDATION PASS
 P8C-3 DESIGN GATE CLOSED
-P9 状态：PLAN FROZEN / IMPLEMENTATION IN PROGRESS
+P9 状态：PLAN PASS / IMPLEMENTATION PASS / TEST PASS / SMOKE COMPLETE / BASELINE IN PROGRESS / FORMAL ABLATION PENDING
 ```
 
 P9 只评测已经通过相应安全验证的能力，不承担控制器调参、扩大触地白名单或开放新安全边界。P8C-4 的实际方案是 PX4 Offboard position 模式内的终端主轴法向整形、接触顺应、状态化锚点、切向阻尼、candidate/HOLD 法向锁存和受限预压，不是直接发送 PX4 attitude setpoint 的姿态对齐。
@@ -89,37 +89,49 @@ P9 不回答负倾角、动态姿态或 combined touchdown 的问题；这些问
 
 每个新 method/scenario/profile 组合先运行 3 个冻结 seed，3/3 全部通过后才进入该组合正式实验。控制能力失败时停止该组合正式实验，但其他组合继续；自动化或 evaluator 缺陷则保留失败证据、最小修复并仅重跑受影响轮次。
 
-第一版 smoke 组合：
+第一版 smoke 组合与冻结结果：
 
 ```text
-B1 static safe-altitude                 3
-B1 constant02 safe-altitude             3
-B2 static safe-altitude                 3
-B2 constant02 safe-altitude             3
-B3 constant02 touchdown                 3
-B3 sinusoidal safe-altitude             3
-B4 heave_h1 touchdown                   3
-B5 tilt_roll_pos_2deg touchdown         3
-B5 tilt_pitch_pos_2deg touchdown        3
-总计                                      27
+B1 static safe-altitude                 3/3 PASS
+B1 constant02 safe-altitude             3/3 PASS
+B2 static safe-altitude                 3/3 PASS
+B2 constant02 safe-altitude             0/3 PASS，3 SAFETY_GATE_FAILURE
+B3 constant02 touchdown                 3/3 PASS
+B3 sinusoidal safe-altitude             3/3 PASS
+B4 heave_h1 touchdown                   2/3 PASS，1 SAFETY_GATE_FAILURE
+B5 tilt_roll_pos_2deg touchdown         3/3 PASS
+B5 tilt_pitch_pos_2deg touchdown        0/3 PASS，3 SAFETY_GATE_FAILURE
+总计                                    27 executed，20 success，7 failure
 ```
+
+smoke 结果目录为 `results/p9_smoke_20260803/`。B2 constant02 在关闭 velocity feedforward 后水平 RMSE 超过 `0.15 m` 冻结门；B4 heave_h1 有一轮水平最大误差约 `0.346 m`，水平跟踪和 HOLD 垂直语义门未同时通过；B5 pitch `+2°` 三轮 attitude tracking P95 均超过 `1.5°` 冻结门。三者属于方法能力失败，不调参、不换 seed、不重跑挑结果，并在正式消融中记为 `NOT_APPLICABLE`。
 
 ### 4.3 正式实验
 
 1. P7 冻结基线：B0 static touchdown 20 次、B0 constant02 touchdown 20 次；严格使用原 `p7_baseline.yaml` seeds `1001..1020` 与 `2001..2020`。
 2. 第一版消融每个组合 10 次，足以统一计算成功率、均值、总体标准差、中位数和经验 P95；论文最终版若需要置信区间，可在参数继续冻结后增加轮次。
-3. 正式消融组合：
+3. smoke 后正式消融只执行通过安全门的组合：
 
 ```text
-B0/B1/B2/B3 constant02 safe-altitude    各 10
-B0/B3 sinusoidal safe-altitude           各 10
-B4 heave_h1 touchdown                       10
-B5 tilt_roll_pos_2deg touchdown             10
-B5 tilt_pitch_pos_2deg touchdown            10
-总计                                         90
+B0 constant02 safe-altitude              10
+B1 constant02 safe-altitude              10
+B3 constant02 safe-altitude              10
+B0 sinusoidal safe-altitude              10
+B3 sinusoidal safe-altitude              10
+B5 tilt_roll_pos_2deg touchdown          10
+总计                                      60 executable episodes
 ```
 
-P9 第一版计划总新运行数：smoke 27 + baseline 40 + formal ablation 90 = 157。
+以下计划槽位保留在 `experiment_matrix.csv`，但必须标记为 `NOT_APPLICABLE`，不得启动、不得进入失败分母：
+
+```text
+B2 constant02 safe-altitude              10
+B4 heave_h1 touchdown                    10
+B5 tilt_pitch_pos_2deg touchdown         10
+总计                                      30 gated NOT_APPLICABLE episodes
+```
+
+P9 第一版总实际计划为：smoke `27 executed` + baseline `40 planned` + formal ablation `60 executable` = `127 executable new episodes`。另有 `30` 个 smoke 后关闭的正式消融槽位仅记录适用性。历史失败 attempt 和 interrupted attempt 不计入计划轮次，但必须完整保留。
 
 ---
 
@@ -214,6 +226,7 @@ legacy_evaluation.json + legacy_evaluation.txt（需要时）
 ## 8. 参数冻结、resume 与重跑规则
 
 - 正式 batch 启动后禁止修改控制参数、seed、profile、硬门或 evaluator 阈值。
+- `results/p9_baseline_20x20_20260803/` 是基于 `b65713d` 启动后中断的 pre-freeze batch，仅完成 static seeds `1001..1004` 的 `4/40` 且均 PASS；该目录只作为历史证据保留，排除在最终 baseline 统计之外。解析器冻结提交后必须使用包含日期和短哈希的新 batch ID，从 static seed `1001` 重新完整运行 40 轮。
 - resume 唯一键包含 batch ID、method、scenario、profile、repetition、seed。
 - 完成且 Git commit/dirty fingerprint 一致的轮次可跳过。
 - 同 ID 失败重试前归档旧目录为 `failed_attemptNN`。

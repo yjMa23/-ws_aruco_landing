@@ -405,7 +405,21 @@ results/<batch_id>/
     └── bag/
 ```
 
-P7-lite 真实 3+3 冒烟已完成 6/6 PASS；20+20 保留到 P9 统一论文实验执行。详细设计见 [P7 批量评测计划](../plans/P7_BATCH_EVALUATION_PLAN.md)。
+P7-lite 真实 3+3 冒烟已完成 6/6 PASS。P9 自动化实现和测试已通过，P9 smoke `27` 轮已完成 `20 success / 7 SAFETY_GATE_FAILURE`。正式 baseline 和 smoke 后消融使用：
+
+```bash
+python3 scripts/run_batch_experiments.py \
+  config/experiments/p9_baseline_20x20.yaml \
+  --batch-id p9_baseline_20x20_<YYYYMMDD>_<shortsha>
+
+python3 scripts/run_batch_experiments.py \
+  config/experiments/p9_ablation.yaml \
+  --batch-id p9_ablation_<YYYYMMDD>_<shortsha>
+```
+
+正式 baseline 为 static/constant02 `20+20`，共 `40` 个 episode。正式消融只执行 B0/B1/B3 constant02、B0/B3 sinusoidal 和 B5 roll `+2°`，共 `60` 个 episode；B2 constant02、B4 heave_h1 和 B5 pitch `+2°` 的 `30` 个计划槽位记为 `NOT_APPLICABLE`，不会启动也不进入失败分母。`results/p9_baseline_20x20_20260803/` 是旧提交上的 interrupted pre-freeze batch，仅 `4/40`，必须保留但排除在最终统计之外。
+
+详细设计见 [P7 批量评测计划](../plans/P7_BATCH_EVALUATION_PLAN.md) 与 [P9 统一评测计划](../plans/P9_UNIFIED_EVALUATION_PLAN.md)。
 
 ## 4. 手动多终端启动
 

@@ -2,7 +2,7 @@
 
 `ws_aruco_landing` 是一个基于 **ROS 2 Humble、PX4 SITL 和 Gazebo Harmonic** 的移动船舶无人机自主降落传统基线工作空间。
 
-系统实现从船舶 GNSS 粗引导到视觉接管、移动目标跟踪、规则式着陆窗口、相对高度下降和多源触地确认的完整链路，并提供可选的水平相对运动线性 MPC。当前 P8A 升沉触地、P8B MPC 与 P8C fixed T1 均已通过真实 PX4 SITL 验收。P8C-3 的水平机体失败 Bag、seed2 滑移硬门失败、姿态发散、离板和恢复证据完整保留；P8C-4 在 Offboard position 模式内实现终端主轴法向整形、状态化接触锚点、切向阻尼、接触顺应、candidate/HOLD 法向锁存和受限预压，最终固定正 `+2° roll/pitch` 真实触地 roll 3/3、pitch 3/3，旧路径回归 9/9，全工作区 340 项测试通过。当前状态为 `P8C-4 VALIDATION PASS / P8C T1 VALIDATION PASS / P8C-3 DESIGN GATE CLOSED`，下一工程阶段是 P9 统一批量评测。
+系统实现从船舶 GNSS 粗引导到视觉接管、移动目标跟踪、规则式着陆窗口、相对高度下降和多源触地确认的完整链路，并提供可选的水平相对运动线性 MPC。当前 P8A 升沉触地、P8B MPC 与 P8C fixed T1 均已通过真实 PX4 SITL 验收。P8C-3 的水平机体失败 Bag、seed2 滑移硬门失败、姿态发散、离板和恢复证据完整保留；P8C-4 在 Offboard position 模式内实现终端主轴法向整形、状态化接触锚点、切向阻尼、接触顺应、candidate/HOLD 法向锁存和受限预压，最终固定正 `+2° roll/pitch` 真实触地 roll 3/3、pitch 3/3，旧路径回归 9/9，全工作区 340 项测试通过。当前 P9 自动化实现和测试已通过，27 轮 smoke 已完成 `20/27`，baseline 20+20 正在冻结后重启，正式消融矩阵已收缩为 `60` 个可执行 episode 与 `30` 个 `NOT_APPLICABLE` 槽位。
 
 ```text
 船舶 GNSS 会合
@@ -78,6 +78,18 @@ P8C-3 DESIGN GATE CLOSED
 ```
 
 固定 T1 结论只覆盖正 `+2° roll/pitch`。负倾角 touchdown、动态 `rollpitch/combined`、动态姿态 final descent、Ground Truth 控制、`NAV_LAND` 和自动 Disarm 仍关闭，不能由 fixed T1 结果直接外推。历史失败证据位于 `results/p8c3_validation_20260802/`，最终成功证据位于 `results/p8c4_validation_20260802/`。
+
+## P9 当前状态
+
+```text
+P9 automation implementation: PASS
+P9 tests: PASS
+P9 smoke: COMPLETE（27 executed，20 success，7 SAFETY_GATE_FAILURE）
+P9 baseline 20+20: IN PROGRESS
+P9 formal ablation: PENDING（60 executable，30 NOT_APPLICABLE）
+```
+
+B2 constant02、B4 heave_h1 和 B5 pitch `+2°` 被 smoke 安全门关闭，不调参、不换 seed、不进入正式失败分母；B5 roll `+2°` 是 fixed T1 唯一正式 touchdown 组合。P9 第一版总实际计划为 `127` 个可执行新 episode。详见 `docs/plans/P9_UNIFIED_EVALUATION_PLAN.md` 和 `docs/validation/P9_UNIFIED_EVALUATION_VALIDATION.md`。
 
 ## 详细文档
 

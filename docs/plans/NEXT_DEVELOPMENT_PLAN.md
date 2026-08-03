@@ -20,7 +20,7 @@
 → 丢失恢复、安全中止和批量评测
 ```
 
-本文档是传统基线的阶段执行计划。当前 `P0`～`P8C fixed T1` 已完成代码、测试和真实 PX4 SITL 验收：P7-lite 真实 3+3 冒烟为 6/6 PASS；P8A 升沉触地 H1/H2 均为 3/3 PASS；P8B 水平相对 MPC 完成固定依赖、生产实现、P4.7 安全回退和严格顺序验收，安全高度 15/15、下降 6/6、真实触地 6/6 PASS。P8C-3 水平机体失败证据完整保留，P8C-4 终端接触稳定化在固定正 `+2° roll/pitch` 完成 shadow 安全高度 6/6、shadow 安全下降 6/6、active rehearsal 6/6、真实触地 6/6 和旧路径回归 9/9；全工作区 `340 tests, 0 failures, 0 skipped`。当前下一阶段为 `P9 统一批量评测、消融和论文实验`，详见 `docs/plans/P8_ADVANCED_LANDING_ROADMAP.md`。
+本文档是传统基线的阶段执行计划。当前 `P0`～`P8C fixed T1` 已完成代码、测试和真实 PX4 SITL 验收：P7-lite 真实 3+3 冒烟为 6/6 PASS；P8A 升沉触地 H1/H2 均为 3/3 PASS；P8B 水平相对 MPC 完成固定依赖、生产实现、P4.7 安全回退和严格顺序验收，安全高度 15/15、下降 6/6、真实触地 6/6 PASS。P8C-3 水平机体失败证据完整保留，P8C-4 终端接触稳定化在固定正 `+2° roll/pitch` 完成 shadow 安全高度 6/6、shadow 安全下降 6/6、active rehearsal 6/6、真实触地 6/6 和旧路径回归 9/9。P9 自动化实现和测试已通过，全工作区 `340 tests, 0 failures, 0 skipped`；27 轮 smoke 已完成 `20/27`，baseline 20+20 正在进行，正式消融冻结为 `60 executable + 30 NOT_APPLICABLE`。
 
 ---
 
@@ -1663,7 +1663,9 @@ P8C-3 水平机体失败 Bag 和设计门文档继续保留，作为 P8C-4 设�
 
 ## P9：统一批量评测、消融和论文实验
 
-P9 复用并扩展 P7 自动化。P7 的 static/constant02 20+20 配置保留并在此阶段执行，不再作为 P8A 的前置门槛。每个新方法-场景组合先做 3 次 smoke，再根据论文问题设计正式次数，不机械规定所有组合 50 次。
+P9 复用并扩展 P7 自动化。当前状态为 `PLAN PASS / IMPLEMENTATION PASS / TEST PASS / SMOKE COMPLETE / BASELINE IN PROGRESS / FORMAL ABLATION PENDING`。P9 smoke 共执行 27 轮，20 成功、7 个 `SAFETY_GATE_FAILURE`；B2 constant02、B4 heave_h1 和 B5 pitch `+2°` 被安全门关闭，不调参、不换 seed、不进入正式实验。P7 的 static/constant02 20+20 配置保留并在此阶段基于新的干净冻结提交完整执行。
+
+smoke 后正式消融只执行 B0/B1/B3 constant02、B0/B3 sinusoidal 和 B5 roll `+2°`，每组 10 轮，共 `60` 个可执行 episode。B2 constant02、B4 heave_h1 和 B5 pitch `+2°` 的 `30` 个计划槽位标记为 `NOT_APPLICABLE`。P9 第一版总实际计划为 smoke `27` + baseline `40` + formal ablation `60` = `127` 个可执行新 episode。
 
 推荐方法：
 
@@ -1676,7 +1678,7 @@ B4：MPC + 升沉处理
 B5：固定正 T1 场景下的当前终端接触稳定化方案（Offboard position 模式内法向整形、接触顺应与受限预压；不是 PX4 attitude setpoint 姿态对齐）
 ```
 
-统一输出 `overall`、`by_scenario`、`by_method` 和 failure breakdown，并保留失败轮完整诊断与成功轮轻量 Bag。
+统一输出 `overall`、`by_scenario`、`by_method` 和 failure breakdown，并保留失败轮完整诊断与成功轮轻量 Bag。`results/p9_baseline_20x20_20260803/` 是旧提交上的 interrupted pre-freeze batch，仅完成 `4/40`，只作历史证据并排除在最终 baseline 统计之外。
 
 ---
 

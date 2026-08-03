@@ -2,7 +2,7 @@
 
 本目录集中保存 `ws_aruco_landing` 的操作指南、系统参考、阶段计划、研究综述和验收记录。
 
-当前开发基线已完成 P8A 升沉甲板触地、P8B 水平相对 MPC，以及 P8C T1 固定 `±2°` 几何、安全高度、安全下降和正 `+2° roll/pitch` 真实触地验收。P8C 状态为 `RESEARCH PASS / PLAN PASS / P8C-0 IMPLEMENTATION PASS / P8C-1 VALIDATION PASS / P8C-2 SAFE DESCENT PASS / P8C-4 VALIDATION PASS / P8C T1 VALIDATION PASS / P8C-3 DESIGN GATE CLOSED`；最终 active touchdown 为 roll `3/3`、pitch `3/3`，旧路径回归 `9/9`，全工作区 `340 tests, 0 failures, 0 skipped`。P8C-3 的失败 Bag 和设计门历史继续完整保留。
+当前开发基线已完成 P8A 升沉甲板触地、P8B 水平相对 MPC，以及 P8C T1 固定 `±2°` 几何、安全高度、安全下降和正 `+2° roll/pitch` 真实触地验收。P8C 状态为 `RESEARCH PASS / PLAN PASS / P8C-0 IMPLEMENTATION PASS / P8C-1 VALIDATION PASS / P8C-2 SAFE DESCENT PASS / P8C-4 VALIDATION PASS / P8C T1 VALIDATION PASS / P8C-3 DESIGN GATE CLOSED`；最终 active touchdown 为 roll `3/3`、pitch `3/3`，旧路径回归 `9/9`。P9 自动化实现与测试已通过，全工作区 `340 tests, 0 failures, 0 skipped`；27 轮 smoke 已完成 `20/27`，baseline 20+20 正在进行，正式消融冻结为 `60 executable + 30 NOT_APPLICABLE`。P8C-3 和 P9 smoke 的失败证据继续完整保留。
 
 ## 阅读入口
 
@@ -16,6 +16,8 @@
 - [P8C 独立执行计划](plans/P8C_TILTED_DECK_LANDING_PLAN.md)
 - [P8C-4 终端接触稳定化研究与接口冻结](research/P8C4_TERMINAL_CONTACT_STABILIZATION_REVIEW.md)
 - [P8C-4 终端接触稳定化执行计划](plans/P8C4_TERMINAL_CONTACT_STABILIZATION_PLAN.md)
+- [P9 统一批量评测计划](plans/P9_UNIFIED_EVALUATION_PLAN.md)
+- [P9 统一批量评测验收记录](validation/P9_UNIFIED_EVALUATION_VALIDATION.md)
 
 ## 操作指南
 
@@ -53,6 +55,7 @@
 - [P8A 升沉甲板触地](plans/P8A_HEAVE_TOUCHDOWN_PLAN.md)
 - [P8B 水平相对 MPC](plans/P8B_RELATIVE_MPC_PLAN.md)
 - [P8C 固定倾斜与低频 roll/pitch 甲板降落](plans/P8C_TILTED_DECK_LANDING_PLAN.md)
+- [P9 统一批量评测、消融和论文实验](plans/P9_UNIFIED_EVALUATION_PLAN.md)
 
 ## 研究综述
 
@@ -80,6 +83,7 @@
 - [P8B 水平相对 MPC](validation/P8B_RELATIVE_MPC_VALIDATION.md)
 - [P8C T1 固定 2° 倾斜甲板完整验收：P8C-4 PASS，设计门关闭](validation/P8C_TILTED_DECK_LANDING_VALIDATION.md)
 - [P8C-3 姿态对齐与接触稳定性独立设计门：历史证据与关闭结论](plans/P8C3_ATTITUDE_ALIGNMENT_DECISION_GATE.md)
+- [P9 统一批量评测第一版](validation/P9_UNIFIED_EVALUATION_VALIDATION.md)
 
 ## 归档约定
 
