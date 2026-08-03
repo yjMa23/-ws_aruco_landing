@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "aruco_precision_landing_cpp/px4_aruco_landing_node.hpp"
+#include "aruco_precision_landing_cpp/time_source_guard.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1775,13 +1776,19 @@ void Px4ArucoLandingNode::aruco_visible_callback(
   const std_msgs::msg::Bool::SharedPtr msg)
 {
   const bool was_visible = aruco_visible_;
+  const rclcpp::Time receipt_time = get_clock()->now();
+  const bool clock_source_changed =
+    have_aruco_visible_since_ &&
+    aruco_visible_since_.get_clock_type() != receipt_time.get_clock_type();
   aruco_visible_ = msg->data;
-  last_aruco_visible_time_ = get_clock()->now();
+  last_aruco_visible_time_ = receipt_time;
 
   if (aruco_visible_) {
-    if (!was_visible || !have_aruco_visible_since_) {
-      aruco_visible_since_ = last_aruco_visible_time_;
+    if (!was_visible || !have_aruco_visible_since_ || clock_source_changed) {
+      // use_sim_time 接管时重新累计稳定可见时长，禁止混用 SYSTEM_TIME 与 ROS_TIME。
+      aruco_visible_since_ = receipt_time;
       have_aruco_visible_since_ = true;
+      stable_visible_count_ = 0;
     }
     if (stable_visible_count_ < stable_detect_count_) {
       ++stable_visible_count_;
@@ -1926,7 +1933,11 @@ void Px4ArucoLandingNode::vehicle_odometry_callback(
 void Px4ArucoLandingNode::control_timer_callback()
 {
   const auto now = get_clock()->now();
-  double dt = (now - last_control_time_).seconds();
+  double dt = 1.0 / control_rate_hz_;
+  const auto elapsed_s = elapsed_seconds_same_clock(now, last_control_time_);
+  if (elapsed_s.has_value() && *elapsed_s > 0.0) {
+    dt = *elapsed_s;
+  }
   last_control_time_ = now;
 
   if (!std::isfinite(dt) || dt <= 0.0) {
@@ -2140,8 +2151,13 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
           search_pattern_start_time_ = now;
           have_search_pattern_start_time_ = true;
         }
-        const double elapsed_s = (now - search_pattern_start_time_).seconds();
-        const auto offset = gnss_guidance_->search_offset(elapsed_s);
+        auto search_elapsed_s =
+          elapsed_seconds_same_clock(now, search_pattern_start_time_);
+        if (!search_elapsed_s.has_value() || *search_elapsed_s < 0.0) {
+          search_pattern_start_time_ = now;
+          search_elapsed_s = 0.0;
+        }
+        const auto offset = gnss_guidance_->search_offset(*search_elapsed_s);
         if (!offset.has_value()) {
           transition_to(LandingState::ABORT, "invalid GNSS-centered search offset");
           break;
@@ -2748,9 +2764,13 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
           }
         }
       } else {
+        const auto marker_lost_elapsed_s =
+          have_last_marker_seen_time_ ?
+          elapsed_seconds_same_clock(now, last_marker_seen_time_) : std::nullopt;
         if (
           have_last_marker_seen_time_ &&
-          (now - last_marker_seen_time_).seconds() > marker_lost_timeout_)
+          (!marker_lost_elapsed_s.has_value() ||
+          *marker_lost_elapsed_s > marker_lost_timeout_))
         {
           transition_to(
             LandingState::WAIT_ARUCO,
@@ -2786,9 +2806,13 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
             current_yaw_);
         }
       } else {
+        const auto marker_lost_elapsed_s =
+          have_last_marker_seen_time_ ?
+          elapsed_seconds_same_clock(now, last_marker_seen_time_) : std::nullopt;
         if (
           have_last_marker_seen_time_ &&
-          (now - last_marker_seen_time_).seconds() > marker_lost_timeout_)
+          (!marker_lost_elapsed_s.has_value() ||
+          *marker_lost_elapsed_s > marker_lost_timeout_))
         {
           transition_to(
             LandingState::ABORT,
@@ -3150,24 +3174,34 @@ bool Px4ArucoLandingNode::marker_is_fresh(const rclcpp::Time & now) const
     return false;
   }
 
-  return (now - last_aruco_pose_time_).seconds() <= aruco_pose_timeout_ &&
-         (now - last_aruco_visible_time_).seconds() <= aruco_pose_timeout_ &&
+  const auto pose_age_s = elapsed_seconds_same_clock(now, last_aruco_pose_time_);
+  const auto visible_age_s = elapsed_seconds_same_clock(now, last_aruco_visible_time_);
+  return pose_age_s.has_value() && visible_age_s.has_value() &&
+         *pose_age_s >= 0.0 && *pose_age_s <= aruco_pose_timeout_ &&
+         *visible_age_s >= 0.0 && *visible_age_s <= aruco_pose_timeout_ &&
          std::isfinite(aruco_pose_.pose.position.x) &&
          std::isfinite(aruco_pose_.pose.position.y);
 }
 
 bool Px4ArucoLandingNode::marker_is_stably_visible(const rclcpp::Time & now) const
 {
-  return marker_is_fresh(now) &&
-         have_aruco_visible_since_ &&
-         now >= aruco_visible_since_ &&
-         (now - aruco_visible_since_).seconds() >= aruco_acquire_duration_s_;
+  if (!marker_is_fresh(now) || !have_aruco_visible_since_) {
+    return false;
+  }
+
+  const auto visible_duration_s = elapsed_seconds_same_clock(now, aruco_visible_since_);
+  return visible_duration_s.has_value() &&
+         *visible_duration_s >= aruco_acquire_duration_s_;
 }
 
 bool Px4ArucoLandingNode::should_retry_command(const rclcpp::Time & now) const
 {
-  return !have_last_command_time_ ||
-         (now - last_command_time_).seconds() >= command_retry_interval_;
+  if (!have_last_command_time_) {
+    return true;
+  }
+
+  const auto elapsed_s = elapsed_seconds_same_clock(now, last_command_time_);
+  return !elapsed_s.has_value() || *elapsed_s >= command_retry_interval_;
 }
 
 std::optional<double> Px4ArucoLandingNode::update_px4_to_ros_time_offset(
@@ -3312,9 +3346,10 @@ void Px4ArucoLandingNode::update_estimated_deck_attitude(
     const double normal_dot = std::clamp(
       previous_deck_normal_ned_.dot(shadow_estimate->upward_normal_ned), -1.0, 1.0);
     const double normal_jump_deg = std::acos(normal_dot) / kDegreesToRadians;
-    const double dt_s = (sample_time - previous_deck_normal_time_).seconds();
-    if (std::isfinite(normal_jump_deg) && std::isfinite(dt_s) && dt_s > 0.0) {
-      deck_normal_rate_degps_ = normal_jump_deg / dt_s;
+    const auto dt_s =
+      elapsed_seconds_same_clock(sample_time, previous_deck_normal_time_);
+    if (std::isfinite(normal_jump_deg) && dt_s.has_value() && *dt_s > 0.0) {
+      deck_normal_rate_degps_ = normal_jump_deg / *dt_s;
       deck_normal_rate_valid_ = std::isfinite(deck_normal_rate_degps_);
     }
     if (current_marker_id >= 0 && previous_deck_normal_marker_id_ >= 0 &&
@@ -3358,9 +3393,10 @@ void Px4ArucoLandingNode::update_deck_plane_geometry_shadow(const rclcpp::Time &
     return;
   }
 
-  const double sample_age_s = (now - last_deck_plane_geometry_sample_time_).seconds();
-  if (!std::isfinite(sample_age_s) || sample_age_s < 0.0 ||
-    sample_age_s > estimator_output_timeout_s_)
+  const auto sample_age_s =
+    elapsed_seconds_same_clock(now, last_deck_plane_geometry_sample_time_);
+  if (!sample_age_s.has_value() || *sample_age_s < 0.0 ||
+    *sample_age_s > estimator_output_timeout_s_)
   {
     deck_plane_geometry_status_ = "INVALID: synchronized visual geometry sample is stale";
     return;
@@ -3473,11 +3509,11 @@ void Px4ArucoLandingNode::update_landing_window(
     input.relative_height_m = std::numeric_limits<double>::quiet_NaN();
   }
 
+  const auto attitude_age_s = have_estimated_deck_attitude_ ?
+    elapsed_seconds_same_clock(now, last_estimated_deck_attitude_time_) : std::nullopt;
   const bool attitude_fresh =
-    have_estimated_deck_attitude_ &&
-    now >= last_estimated_deck_attitude_time_ &&
-    (now - last_estimated_deck_attitude_time_).seconds() <=
-    landing_window_max_visual_age_s_;
+    attitude_age_s.has_value() && *attitude_age_s >= 0.0 &&
+    *attitude_age_s <= landing_window_max_visual_age_s_;
   if (attitude_fresh) {
     input.deck_roll_rad = estimated_deck_attitude_.roll_rad;
     input.deck_pitch_rad = estimated_deck_attitude_.pitch_rad;
@@ -3851,9 +3887,10 @@ bool Px4ArucoLandingNode::update_terminal_contact_stabilization(
     phase : TerminalStabilizationPhase::kInactive;
   normal_input.production_enabled = terminal_contact_stabilization_enabled_;
   normal_input.rehearsal_enabled = rehearsal_authorized;
-  normal_input.normal_age_s = have_deck_plane_geometry_sample_ ?
-    (now - last_deck_plane_geometry_sample_time_).seconds() :
-    std::numeric_limits<double>::infinity();
+  const auto normal_age_s = have_deck_plane_geometry_sample_ ?
+    elapsed_seconds_same_clock(now, last_deck_plane_geometry_sample_time_) : std::nullopt;
+  normal_input.normal_age_s = normal_age_s.has_value() ?
+    *normal_age_s : std::numeric_limits<double>::infinity();
   normal_input.normal_valid =
     have_shadow_deck_attitude_ && have_deck_plane_geometry_sample_ &&
     std::isfinite(normal_input.normal_age_s) && normal_input.normal_age_s >= 0.0;

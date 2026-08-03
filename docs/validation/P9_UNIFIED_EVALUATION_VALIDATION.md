@@ -72,6 +72,12 @@ colcon test-result --verbose: 340 tests, 0 errors, 0 failures, 0 skipped
 git diff --check: PASS
 ```
 
+### 4.1 正式批次时钟源缺陷与修复
+
+2026-08-04 首次正式消融批次 `results/p9_ablation_20260804_a9d011d/` 在第 1 轮进入 `ACQUIRE_ARUCO` 后暴露启动期时钟源切换缺陷：节点在 `use_sim_time` 接管前保存了 SYSTEM_TIME 可见性时间戳，接管后使用 ROS_TIME 做差，触发 `can't subtract times with different time sources [1 != 2]` 并退出。该批次在 `2/60` 后停止并完整保留，属于 runner/控制运行语义缺陷证据，不计入正式方法统计。
+
+修复只增加同源时钟差校验，并在时钟源变化时重新累计 ArUco 稳定可见时长；同时覆盖控制周期、搜索、Marker 丢失、姿态和甲板几何时间窗。控制参数、MarkerSelector、close-range 相机、安全硬门、NAV_LAND 和 Disarm 语义均未改变。新增异时钟不抛异常测试后，包级 `344 tests, 0 errors, 0 failures, 0 skipped`。修复提交完成后，baseline 与 ablation 均须使用同一新提交从第 1 轮重新执行。
+
 ---
 
 ## 5. 真实 smoke

@@ -218,6 +218,13 @@ if(BUILD_TESTING)
   )
   target_link_libraries(terminal_contact_stabilization_test aruco_landing_math)
 
+  ament_add_gtest(
+    time_source_guard_test
+    test/time_source_guard_test.cpp
+  )
+  target_link_libraries(time_source_guard_test aruco_landing_math)
+  ament_target_dependencies(time_source_guard_test rclcpp)
+
   add_test(
     NAME p7_experiment_tests
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_p7_experiments.py
