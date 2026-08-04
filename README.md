@@ -2,7 +2,7 @@
 
 `ws_aruco_landing` 是一个基于 **ROS 2 Humble、PX4 SITL 和 Gazebo Harmonic** 的移动船舶无人机自主降落传统基线工作空间。
 
-系统实现从船舶 GNSS 粗引导到视觉接管、移动目标跟踪、规则式着陆窗口、相对高度下降和多源触地确认的完整链路，并提供可选的水平相对运动线性 MPC。P8A 升沉触地、P8B MPC 与 P8C fixed T1 均已通过真实 PX4 SITL 验收；P8C-3 的失败 Bag 和设计门关闭证据继续完整保留。P9 统一评测第一版已完成：smoke `20/27`，正式 baseline static/constant02 `20+20` 为 `40/40`，正式消融 `60/60`，三个 smoke 关闭组合保留为 `30` 个 `NOT_APPLICABLE` 槽位。三批次合计 `120/127`，全部 7 个失败均为 smoke `SAFETY_GATE_FAILURE`；正式批次保持 `NAV_LAND / Disarm = 0 / 0`，Ground Truth 仅用于离线 evaluator。
+系统实现从船舶 GNSS 粗引导到视觉接管、移动目标跟踪、规则式着陆窗口、相对高度下降和多源触地确认的完整链路，并提供可选的水平相对运动线性 MPC。P8A 升沉触地、P8B MPC 与 P8C fixed T1 均已通过真实 PX4 SITL 验收；P8C-3 的失败 Bag 和设计门关闭证据继续完整保留。P9 统一评测第一版已完成：smoke `20/27`，正式 baseline static/constant02 `20+20` 为 `40/40`，正式消融 `60/60`，三个 smoke 关闭组合保留为 `30` 个 `NOT_APPLICABLE` 槽位。P10 已基于这些冻结证据完成 Wilson/Bootstrap 95% 置信区间、独立样本方法差异、论文表格与 PNG/PDF/SVG 图表、provenance 和 SHA256 清单；没有修改控制器或运行新的 SITL。三批次保持 `NAV_LAND / Disarm = 0 / 0`，Ground Truth 仅用于离线 evaluator。
 
 ```text
 船舶 GNSS 会合
@@ -79,21 +79,26 @@ P8C-3 DESIGN GATE CLOSED
 
 固定 T1 结论只覆盖正 `+2° roll/pitch`。负倾角 touchdown、动态 `rollpitch/combined`、动态姿态 final descent、Ground Truth 控制、`NAV_LAND` 和自动 Disarm 仍关闭，不能由 fixed T1 结果直接外推。历史失败证据位于 `results/p8c3_validation_20260802/`，最终成功证据位于 `results/p8c4_validation_20260802/`。
 
-## P9 当前状态
+## P9 / P10 当前状态
 
 ```text
 P9 PLAN / IMPLEMENTATION / TEST: PASS
 P9 smoke: COMPLETE（20/27，7 SAFETY_GATE_FAILURE）
 P9 baseline 20+20: COMPLETE（40/40）
 P9 formal ablation: COMPLETE（60/60，30 NOT_APPLICABLE slots）
-P9 aggregation: PASS
 P9 unified evaluation v0.1: PASS
+P10 paper results finalization: PASS
+P10 reproducible evidence package: PASS
 ```
 
-正式运行提交为 `71af1cc`；baseline 目录为 `results/p9_baseline_20x20_20260804_71af1cc/`，ablation 目录为 `results/p9_ablation_20260804_71af1cc/`。B2 constant02、B4 heave_h1 和 B5 pitch `+2°` 被 smoke 安全门关闭，不调参、不换 seed、不进入正式失败分母；B5 roll `+2°` 是 fixed T1 唯一正式 touchdown 组合。完整统计、失败证据和图表路径见 `docs/validation/P9_UNIFIED_EVALUATION_VALIDATION.md`。
+正式运行提交为 `71af1cc`；baseline 目录为 `results/p9_baseline_20x20_20260804_71af1cc/`，ablation 目录为 `results/p9_ablation_20260804_71af1cc/`。B2 constant02、B4 heave_h1 和 B5 pitch `+2°` 被 smoke 安全门关闭，不调参、不换 seed、不进入正式失败分母；B5 roll `+2°` 是 fixed T1 唯一正式 touchdown 组合。
+
+P10 可使用 `scripts/finalize_p9_paper_results.py` 从三个显式冻结目录重新生成 `results/p9_paper_results_v0.1/`。正式总体观测成功率为 `100/100`，Wilson 95% CI 为 `[0.963, 1.000]`；`10/10` 或 `20/20` 不等价于真实成功概率为 100%。论文摘要见 [P9 论文结果](docs/results/P9_PAPER_RESULTS.md)，数据来源和哈希见 [P9 数据 provenance](docs/results/P9_DATA_PROVENANCE.md)，P9 原始验收见 `docs/validation/P9_UNIFIED_EVALUATION_VALIDATION.md`。原始 Bag 外部归档和远端同步仍需用户执行或授权。
 
 ## 详细文档
 
 - [文档索引](docs/README.md)
 - [安装、构建、启动、实验与故障排查](docs/guides/OPERATIONS.md)
 - [系统架构与接口总览](docs/reference/SYSTEM_OVERVIEW.md)
+- [P9 论文结果与置信区间](docs/results/P9_PAPER_RESULTS.md)
+- [P9 数据来源与 SHA256 清单](docs/results/P9_DATA_PROVENANCE.md)

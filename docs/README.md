@@ -2,7 +2,7 @@
 
 本目录集中保存 `ws_aruco_landing` 的操作指南、系统参考、阶段计划、研究综述和验收记录。
 
-当前开发基线已完成 P8A 升沉甲板触地、P8B 水平相对 MPC，以及 P8C fixed T1 分级验收。P8C 状态为 `P8C-4 VALIDATION PASS / P8C T1 VALIDATION PASS / P8C-3 DESIGN GATE CLOSED`；P8C-3 失败证据继续完整保留。P9 统一评测第一版已完成真实 smoke `20/27`、正式 baseline `40/40` 和正式消融 `60/60`，三批次合计 `120/127`；B2 constant02、B4 heave_h1 和 B5 pitch `+2°` 的 30 个正式槽位保持 `NOT_APPLICABLE`，所有 7 个失败均为 smoke `SAFETY_GATE_FAILURE`。正式结果、失败目录和图表见 P9 验收记录。
+当前开发基线已完成 P8A 升沉甲板触地、P8B 水平相对 MPC，以及 P8C fixed T1 分级验收。P8C 状态为 `P8C-4 VALIDATION PASS / P8C T1 VALIDATION PASS / P8C-3 DESIGN GATE CLOSED`；P8C-3 失败证据继续完整保留。P9 统一评测第一版已完成真实 smoke `20/27`、正式 baseline `40/40` 和正式消融 `60/60`，三批次合计 `120/127`；B2 constant02、B4 heave_h1 和 B5 pitch `+2°` 的 30 个正式槽位保持 `NOT_APPLICABLE`，所有 7 个失败均为 smoke `SAFETY_GATE_FAILURE`。P10 已完成冻结结果复核、Wilson/Bootstrap 置信区间、方法差异、论文表格/图表和可复现证据归档；没有修改控制器或运行新的 SITL。
 
 ## 阅读入口
 
@@ -18,6 +18,9 @@
 - [P8C-4 终端接触稳定化执行计划](plans/P8C4_TERMINAL_CONTACT_STABILIZATION_PLAN.md)
 - [P9 统一批量评测计划](plans/P9_UNIFIED_EVALUATION_PLAN.md)
 - [P9 统一批量评测验收记录](validation/P9_UNIFIED_EVALUATION_VALIDATION.md)
+- [P10 论文结果定稿计划](plans/P10_PAPER_RESULTS_FINALIZATION_PLAN.md)
+- [P9 论文结果与置信区间](results/P9_PAPER_RESULTS.md)
+- [P9 数据来源与 SHA256 清单](results/P9_DATA_PROVENANCE.md)
 
 ## 操作指南
 
@@ -56,6 +59,7 @@
 - [P8B 水平相对 MPC](plans/P8B_RELATIVE_MPC_PLAN.md)
 - [P8C 固定倾斜与低频 roll/pitch 甲板降落](plans/P8C_TILTED_DECK_LANDING_PLAN.md)
 - [P9 统一批量评测、消融和论文实验](plans/P9_UNIFIED_EVALUATION_PLAN.md)
+- [P10 论文结果定稿与可复现实验包](plans/P10_PAPER_RESULTS_FINALIZATION_PLAN.md)
 
 ## 研究综述
 
@@ -84,6 +88,11 @@
 - [P8C T1 固定 2° 倾斜甲板完整验收：P8C-4 PASS，设计门关闭](validation/P8C_TILTED_DECK_LANDING_VALIDATION.md)
 - [P8C-3 姿态对齐与接触稳定性独立设计门：历史证据与关闭结论](plans/P8C3_ATTITUDE_ALIGNMENT_DECISION_GATE.md)
 - [P9 统一批量评测第一版](validation/P9_UNIFIED_EVALUATION_VALIDATION.md)
+
+## 论文结果
+
+- [P9 论文结果定稿](results/P9_PAPER_RESULTS.md)
+- [P9 论文数据来源与可复现证据](results/P9_DATA_PROVENANCE.md)
 
 ## 归档约定
 

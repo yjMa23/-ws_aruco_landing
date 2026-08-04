@@ -251,6 +251,15 @@ if(BUILD_TESTING)
     p8c_tilted_deck_tests
     PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../..
   )
+
+  add_test(
+    NAME p10_paper_results_tests
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_p10_paper_results.py
+  )
+  set_tests_properties(
+    p10_paper_results_tests
+    PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../..
+  )
 endif()
 
 ament_export_dependencies(Eigen3 OsqpEigen osqp)

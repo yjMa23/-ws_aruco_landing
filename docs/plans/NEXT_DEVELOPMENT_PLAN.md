@@ -20,7 +20,7 @@
 → 丢失恢复、安全中止和批量评测
 ```
 
-本文档是传统基线的阶段执行计划。当前 `P0`～`P8C fixed T1` 已完成代码、测试和真实 PX4 SITL 验收：P7-lite 真实 3+3 冒烟为 6/6 PASS；P8A 升沉触地 H1/H2 均为 3/3 PASS；P8B 水平相对 MPC 完成固定依赖、生产实现、P4.7 安全回退和严格顺序验收；P8C-3 水平机体失败证据完整保留，P8C-4 在固定正 `+2° roll/pitch` 完成分级验证。P9 统一评测第一版的 smoke、正式 baseline、正式消融与聚合均已完成：`20/27 + 40/40 + 60/60 = 120/127`，7 个失败全部是 smoke `SAFETY_GATE_FAILURE`；30 个被关闭的正式槽位准确记录为 `NOT_APPLICABLE`。
+本文档是传统基线的阶段执行计划。当前 `P0`～`P8C fixed T1` 已完成代码、测试和真实 PX4 SITL 验收：P7-lite 真实 3+3 冒烟为 6/6 PASS；P8A 升沉触地 H1/H2 均为 3/3 PASS；P8B 水平相对 MPC 完成固定依赖、生产实现、P4.7 安全回退和严格顺序验收；P8C-3 水平机体失败证据完整保留，P8C-4 在固定正 `+2° roll/pitch` 完成分级验证。P9 统一评测第一版的 smoke、正式 baseline、正式消融与聚合均已完成：`20/27 + 40/40 + 60/60 = 120/127`，7 个失败全部是 smoke `SAFETY_GATE_FAILURE`；30 个被关闭的正式槽位准确记录为 `NOT_APPLICABLE`。P10 已对冻结 P9 证据完成置信区间、方法差异、论文表格/图表和 provenance 定稿，不运行新 SITL、不修改控制器。
 
 ---
 
@@ -56,6 +56,8 @@
 | `P8C-3` 水平机体触地诊断 | FAILURE EVIDENCE PRESERVED | seed2 滑移硬门失败及姿态发散、离板、恢复证据完整归档，未放宽阈值、未删失败轮 |
 | `P8C-4` 终端接触稳定化 | VALIDATION PASS | Offboard position 模式内的法向整形、锚点顺应、切向阻尼和受限预压；shadow 12/12、rehearsal 6/6、fixed T1 touchdown 6/6、旧路径 9/9 |
 | `P8C fixed T1` | VALIDATION PASS | `P8C-4 VALIDATION PASS / P8C T1 VALIDATION PASS / P8C-3 DESIGN GATE CLOSED` |
+| `P9` 统一批量评测 | COMPLETE | smoke `20/27`、baseline `40/40`、formal ablation `60/60`、30 个 `NOT_APPLICABLE` 槽位，标签 `baseline-unified-evaluation-v0.1` |
+| `P10` 论文结果定稿 | COMPLETE | Wilson/Bootstrap 95% CI、非配对方法差异、6 组论文表格、7 张 PNG/PDF/SVG 图、782 条结构化证据哈希和本地论文结果标签 |
 
 ### 2.2 当前已有 ROS 2 包
 
@@ -103,8 +105,9 @@ src/moving_deck_sim
 - P8A 已完成升沉甲板最终下降、真实接触、相对垂直速度语义和接触后相对保持，H1 3/3、H2 3/3 PASS。
 - P8B 已完成综述、计划、固定 OSQP/OsqpEigen 依赖、4 状态水平相对 MPC、约束、warm start、完整 P4.7 fallback、终端安全 handoff、诊断、`271` 项全工作区测试和严格顺序真实 SITL；安全高度 15/15、下降 6/6、最终代码真实触地 6/6 PASS，状态为 `VALIDATION PASS`。
 - P8C fixed T1 已完成：P8C-3 失败证据保留，P8C-4 终端接触稳定化与固定正 `+2° roll/pitch` 真实触地验收通过，设计门关闭。该结论不能外推到负倾角、动态 roll/pitch 或 combined。
-- P9 统一批量评测第一版已完成真实实验和聚合；下一步转入论文结果复核、统计置信区间与图表定稿，不扩大当前触地安全边界。
-- 没有触地后的 Land/Disarm 授权和最终恢复策略；当前继续保持 `NAV_LAND / Disarm = 0 / 0`。
+- P9 统一批量评测第一版已完成真实实验、聚合、文档和统一评测标签冻结。
+- P10 论文结果定稿与证据归档已完成；正式总体 `100/100` 的 Wilson 95% CI 为 `[0.963, 1.000]`，所有论文统计由已有 episode 数据确定性生成。
+- 没有触地后的 Land/Disarm 授权和最终恢复策略；当前继续保持 `NAV_LAND / Disarm = 0 / 0`。远端同步和原始 Bag 外部归档仍需用户执行或授权。
 
 ### 2.5 2026-07-29 P7 第一版状态
 
@@ -1680,6 +1683,19 @@ B5：固定正 T1 场景下的当前终端接触稳定化方案（Offboard posit
 
 统一输出 `overall`、`by_scenario`、`by_method`、`by_method_scenario` 和 failure breakdown，并保留失败轮完整诊断与成功轮轻量 Bag。正式目录为 `results/p9_baseline_20x20_20260804_71af1cc/` 与 `results/p9_ablation_20260804_71af1cc/`；`results/p9_baseline_20x20_20260803/` 是旧提交上的 interrupted pre-freeze batch，仅完成 `4/40`，只作历史证据并排除在最终 baseline 统计之外。
 
+## P10：论文结果定稿与可复现实验包
+
+P10 只使用 P9 smoke、baseline 和 formal ablation 的显式冻结结构化证据，不重新运行大规模 SITL。已完成：
+
+- overall、by method、by scenario、by method/scenario 和正式 method/scenario/profile 的 Wilson 95% 成功率区间；
+- 固定 seed `20260804`、10000 次 percentile bootstrap 连续指标均值区间；
+- B1-B0、B3-B0 的独立双样本差异及区间，不假设 seed 配对；
+- CSV、Markdown、LaTeX 论文表格与 300 dpi PNG、PDF、SVG 图表；
+- 三批次 provenance、782 条小型结构化文件 SHA256、历史排除批次说明和 Bag 哈希限制；
+- 仓库内 `docs/results/P9_PAPER_RESULTS.md` 与 `docs/results/P9_DATA_PROVENANCE.md`。
+
+P10 没有修改 P9 summary 的总体标准差语义，没有把 `NOT_APPLICABLE` 写成失败，没有把 smoke 失败混入正式成功率，也没有扩大 fixed T1 的适用范围。
+
 ---
 
 ## 9. 推荐文件结构演进
@@ -1917,6 +1933,9 @@ grep -R "/simulation/deck/ground_truth" \
 
 第十九步：P9
 统一批量评测、消融和论文实验
+
+第二十步：P10
+冻结论文统计、置信区间、表格/图表和可复现实验证据
 ```
 
 ---
@@ -1933,7 +1952,9 @@ P8C-3 DESIGN GATE CLOSED
 
 最终 roll/pitch active touchdown `6/6 PASS`，static/constant02/H1/H2/RELATIVE_MPC 回归 `9/9 PASS`，全工作区 `340 tests, 0 failures, 0 skipped`。原 P8C-3 seed2 滑移、灾难性姿态发散、离板和恢复证据仍完整保留，没有删除或被成功轮覆盖。
 
-P9 统一批量评测第一版已完成实验和聚合。下一项工作应优先复核论文统计、补充置信区间并定稿表格与图表；负倾角、动态 `rollpitch/combined` 和更复杂船舶姿态运动需另建独立阶段，不得把 fixed T1 结论直接外推。
+P9 统一批量评测第一版已完成实验、聚合、文档和标签冻结。P10 论文结果定稿与可复现实验包也已完成：正式成功率 Wilson 区间、连续指标和方法差异 bootstrap 区间、论文表格/图表、provenance 与 SHA256 清单均可由冻结输入确定性重建。
+
+当前不自动进入新的控制器能力阶段。剩余动作是由用户执行或授权远端同步，以及在 Git 外部归档原始 Bag。负倾角、动态 `rollpitch/combined` 和更复杂船舶姿态运动若继续研究，必须另建独立阶段和验收计划，不得把 fixed T1 结论直接外推。
 
 ---
 

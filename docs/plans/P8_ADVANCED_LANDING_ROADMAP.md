@@ -12,6 +12,7 @@ P7-lite 开发基线冻结
 → P8B 相对运动线性 MPC
 → P8C 固定倾斜及低频 roll/pitch 甲板降落
 → P9 统一批量评测、消融和论文实验
+→ P10 论文结果定稿与证据归档
 ```
 
 阶段依赖必须严格遵守：
@@ -25,6 +26,7 @@ P8A
 → P8C plan
 → P8C implementation
 → P9
+→ P10
 ```
 
 不得同时实现升沉触地、MPC 和倾斜姿态对齐。当前阶段没有通过真实验收时，后续阶段只能保留为未来计划，不能写成已实现成果。
@@ -299,22 +301,27 @@ B4：MPC + 升沉处理
 B5：固定正 T1 场景下的当前终端接触稳定化方案（Offboard position 模式内法向整形、接触顺应和受限预压，不是 PX4 attitude setpoint 姿态对齐）
 ```
 
-P7 的 20+20 配置和自动化继续保留，可在 P9 中作为正式实验子集执行。
+P7 的 20+20 配置和自动化继续保留，可在 P9 中作为正式实验子集执行。P9 已完成 smoke `20/27`、正式 baseline `40/40` 和正式消融 `60/60`；三个 smoke 关闭组合保留为 `30` 个 `NOT_APPLICABLE` 槽位。
+
+### 7.1 P10 论文结果定稿与证据归档
+
+P10 是 P9 后的离线论文产物阶段，不是新的控制器能力阶段。它只使用三个显式冻结批次，生成 Wilson 成功率区间、固定 seed bootstrap 连续指标与独立样本差异、CSV/Markdown/LaTeX 表格、300 dpi PNG/PDF/SVG 图表和结构化证据 SHA256 清单。P10 不运行新 SITL，不修改控制器、seed 或 evaluator 安全阈值。
 
 ---
 
 ## 8. 当前状态
 
-截至 2026-08-02：
+截至 2026-08-04：
 
 ```text
 P6B: VALIDATION PASS
 P7-lite: VALIDATION PASS (static/constant02 3+3, 6/6 PASS)
-P7 20+20: deferred to P9
+P7 20+20: completed in P9 baseline (40/40)
 P8A: VALIDATION PASS (H1 3/3, H2 3/3)
 P8B: RESEARCH PASS / PLAN PASS / IMPLEMENTATION PASS / VALIDATION PASS
 P8C: RESEARCH PASS / PLAN PASS / P8C-0 IMPLEMENTATION PASS / P8C-1 VALIDATION PASS / P8C-2 SAFE DESCENT PASS / P8C-4 VALIDATION PASS / P8C T1 VALIDATION PASS / P8C-3 DESIGN GATE CLOSED
-P9: current next engineering phase
+P9: UNIFIED EVALUATION PASS
+P10: PAPER RESULTS FINALIZATION PASS
 ```
 
-P8A 验收见 `docs/validation/P8A_HEAVE_TOUCHDOWN_VALIDATION.md`。P8B 已完成 OSQP `v1.0.0` + OsqpEigen `v0.11.2` 固定依赖、水平相对 MPC、完整 P4.7 fallback、`TERMINAL_PHASE_P47` 安全 handoff、诊断、评测扩展和严格顺序真实 SITL，验收见 `docs/validation/P8B_RELATIVE_MPC_VALIDATION.md`。P8C-3 的水平机体失败 Bag 与独立设计门继续保留；P8C-4 已按 Stage 0～7 完成终端接触稳定化，最终 fixed T1 active touchdown 为 roll `3/3`、pitch `3/3`，static/constant02/H1/H2/RELATIVE_MPC 回归 `9/9`，全工作区 `340 tests, 0 failures, 0 skipped`。最差 tracking P95 `0.238131°`、slip `0.059209 m`、HOLD 速度 P95 `0.032226 m/s`，fallback、离板、二次接触和 recovery 均为 0。负倾角与动态 roll/pitch/combined 仍属于后续独立阶段。
+P8A 验收见 `docs/validation/P8A_HEAVE_TOUCHDOWN_VALIDATION.md`。P8B 已完成 OSQP `v1.0.0` + OsqpEigen `v0.11.2` 固定依赖、水平相对 MPC、完整 P4.7 fallback、`TERMINAL_PHASE_P47` 安全 handoff、诊断、评测扩展和严格顺序真实 SITL，验收见 `docs/validation/P8B_RELATIVE_MPC_VALIDATION.md`。P8C-3 的水平机体失败 Bag 与独立设计门继续保留；P8C-4 已按 Stage 0～7 完成终端接触稳定化，最终 fixed T1 active touchdown 为 roll `3/3`、pitch `3/3`，static/constant02/H1/H2/RELATIVE_MPC 回归 `9/9`。P9/P10 已冻结正式论文输入、置信区间、表格/图表和 provenance。负倾角与动态 roll/pitch/combined 仍属于后续独立阶段；远端同步和原始 Bag 外部归档需用户执行或授权。

@@ -145,7 +145,8 @@ docs/reference/COORDINATE_FRAMES.md
 * `P8B` 已完成固定 OSQP/OsqpEigen 依赖、4 状态水平相对 MPC、约束、warm start、完整 P4.7 fallback、`TERMINAL_PHASE_P47` 安全 handoff、诊断、`271` 项全工作区测试和严格顺序真实 SITL；安全高度 15/15、下降 6/6、最终代码真实触地 6/6 PASS，状态为 `VALIDATION PASS`。
 * `P8C` 已完成固定 T1 全链路冻结：P8C-3 水平机体失败证据与 seed2 滑移硬门失败完整保留；P8C-4 在 Offboard position 模式内实现终端主轴法向整形、接触顺应、状态化锚点、切向阻尼、candidate/HOLD 法向锁存与受限预压。最终 shadow 安全高度 6/6、shadow 安全下降 6/6、active rehearsal 6/6、固定正 `+2° roll/pitch` 真实触地 6/6、旧路径回归 9/9 均通过，全工作区 `340 tests, 0 failures, 0 skipped`。状态为 `P8C-4 VALIDATION PASS / P8C T1 VALIDATION PASS / P8C-3 DESIGN GATE CLOSED`。
 * `P9` 统一批量评测第一版已完成正式实验与聚合：smoke `20/27`，baseline static/constant02 `20+20` 为 `40/40`，正式消融 `60/60`；三批次合计 `120/127`，7 个失败均为 smoke `SAFETY_GATE_FAILURE`。B2 constant02、B4 heave_h1、B5 pitch `+2°` 被 smoke 门关闭并记录为 `30` 个 `NOT_APPLICABLE` 槽位；B5 roll `+2°` 是唯一 fixed-T1 正式 touchdown 组合。正式仿真运行提交为 `71af1cc`，聚合修复提交为 `fc979fa`。
-* 触地后的 Land/Disarm 授权和最终恢复策略；当前仍保持 `NAV_LAND / Disarm = 0 / 0`。
+* `P10` 已完成 P9 冻结输入复核、Wilson 95% 成功率区间、固定 seed 的 bootstrap 均值与方法差异区间、论文表格和 PNG/PDF/SVG 图表、结构化证据 SHA256 清单及仓库内论文摘要。P10 只处理已有结果，没有修改控制器或安全阈值，也没有运行新的 SITL。
+* 触地后的 Land/Disarm 授权和最终恢复策略仍未开放；当前保持 `NAV_LAND / Disarm = 0 / 0`。远端同步和原始 Bag 外部归档需用户执行或授权。
 
 ---
 
@@ -174,7 +175,8 @@ Codex 必须按以下顺序推进，除非用户明确改变优先级：
 19. `P8A`：升沉甲板最终下降与真实接触，已完成 H1/H2 真实验收。
 20. `P8B`：水平相对运动线性 MPC，综述、固定依赖、实现、全量测试和严格顺序真实 SITL 已完成，验收见 `docs/validation/P8B_RELATIVE_MPC_VALIDATION.md`。
 21. `P8C`：固定 T1 几何、分级安全门、P8C-3 失败诊断、P8C-4 终端接触稳定化和固定正 `+2° roll/pitch` 真实触地验收均已完成；P8C-3 失败证据保留，设计门关闭。负倾角、动态 roll/pitch、combined 真实触地与 Ground Truth 控制继续禁止。
-22. `P9`：统一批量评测、消融和论文实验；smoke、正式 baseline、正式消融与聚合均已完成，最终文档、全工作区验证和标签冻结正在收尾。
+22. `P9`：统一批量评测、消融和论文实验；smoke、正式 baseline、正式消融、聚合、文档和标签冻结均已完成。
+23. `P10`：论文结果定稿与可复现实验包；冻结输入复核、置信区间、方法差异、论文表格/图表、provenance、测试和本地标签均已完成。
 
 P8A、P8B 与 P8C fixed T1 已通过真实验收。P8C 当前状态为 `P8C-4 VALIDATION PASS / P8C T1 VALIDATION PASS / P8C-3 DESIGN GATE CLOSED`，验收见 `docs/validation/P8C_TILTED_DECK_LANDING_VALIDATION.md`。该结论只能用于固定正 `+2° roll/pitch` T1，不能外推到负倾角、动态 roll/pitch 或 combined；这些能力必须另立后续阶段。P9 smoke 失败组合必须保留并阻断对应正式实验，不能继续调控制器扩大安全边界。强化学习不属于本轮传统高级基线实现范围。
 
@@ -421,6 +423,7 @@ P8A 已完成 H1/H2 升沉触地真实验收；
 P8B 已完成 research → model → fixed solver dependency → implementation → full test → strict SITL validation，验收为安全高度 15/15、下降 6/6、真实触地 6/6 PASS；
 P8C 已完成固定 T1 冻结：P8C-3 水平机体失败 Bag、seed2 滑移硬门失败、姿态发散/离板/恢复证据继续保留；P8C-4 终端接触稳定化已通过 shadow、安全下降、rehearsal、roll/pitch 真实触地与旧路径回归，当前状态为 P8C-4 VALIDATION PASS / P8C T1 VALIDATION PASS / P8C-3 DESIGN GATE CLOSED；该方案是 Offboard position 模式内的终端稳定化、接触顺应和受限预压，不是 PX4 attitude setpoint 姿态对齐；
 P9 smoke、static/constant02 20+20、60 轮正式消融和聚合已完成；正式结果为 smoke 20/27、baseline 40/40、ablation 60/60，B2 constant02、B4 heave_h1、B5 pitch +2° 保持 NOT_APPLICABLE；
-后续优先进行论文结果复核、置信区间与图表定稿，不得借 P9 结果开放负倾角、动态姿态、rollpitch 或 combined touchdown；
+P10 论文结果定稿与证据归档已完成：统计脚本、Wilson/Bootstrap 区间、方法差异、论文表格/图表、provenance 和 SHA256 清单均已冻结；不得借 P9/P10 结果开放负倾角、动态姿态、rollpitch 或 combined touchdown；
+默认剩余动作仅为用户授权后的远端同步和 Git 外原始 Bag 归档，不自动进入新的控制器能力阶段；
 全程继续保持 NAV_LAND / Disarm = 0 / 0，Ground Truth 只能用于离线评测。
 ```

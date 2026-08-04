@@ -67,8 +67,9 @@
    - `P8A` 已完成升沉甲板最终下降、真实接触和接触后相对保持，H1 3/3、H2 3/3 PASS。
    - `P8B` 已完成综述、计划、固定 OSQP/OsqpEigen 依赖、水平相对 MPC 生产实现、完整 P4.7 fallback、终端安全 handoff、`271` 项全工作区测试和严格顺序真实 SITL；安全高度 15/15、下降 6/6、最终代码真实触地 6/6 PASS，状态为 `VALIDATION PASS`。
    - `P8C` fixed T1 已完成：P8C-3 水平机体失败证据保留，P8C-4 Offboard position 终端稳定化、接触顺应和受限预压通过 shadow 12/12、rehearsal 6/6、固定正 +2° touchdown 6/6 和旧路径回归 9/9；状态为 `P8C-4 VALIDATION PASS / P8C T1 VALIDATION PASS / P8C-3 DESIGN GATE CLOSED`。
-   - `P9` 统一批量评测、消融和论文实验为当前下一阶段。
-   - 当前保持 `NAV_LAND / Disarm = 0 / 0`，Ground Truth 只能用于离线评测。
+   - `P9` 统一批量评测、消融和论文实验已完成：smoke `20/27`、baseline `40/40`、formal ablation `60/60`、30 个 `NOT_APPLICABLE` 槽位。
+   - `P10` 论文结果定稿与可复现实验包已完成：Wilson/Bootstrap 95% CI、独立样本方法差异、论文表格/图表和结构化证据 SHA256 已冻结。
+   - 当前保持 `NAV_LAND / Disarm = 0 / 0`，Ground Truth 只能用于离线评测；远端同步和原始 Bag 外部归档仍需用户执行或授权。
 
 ---
 
@@ -967,7 +968,22 @@ B4：MPC + 升沉处理
 B5：固定正 T1 场景下的当前终端接触稳定化方案（Offboard position 内法向整形、接触顺应和受限预压）
 ```
 
-每个新组合先 3 次 smoke，再根据论文问题确定正式次数，不机械规定所有组合 50 次。
+每个新组合先 3 次 smoke，再根据论文问题确定正式次数，不机械规定所有组合 50 次。P9 已按冻结安全门完成：smoke `20/27`、baseline `40/40`、formal ablation `60/60`；B2 constant02、B4 heave_h1 和 B5 pitch `+2°` 的 30 个正式槽位保持 `NOT_APPLICABLE`。
+
+### P10：论文结果定稿与可复现实验包
+
+P10 不引入控制器新能力，只从 P9 三个冻结批次生成：
+
+```text
+Wilson 95% 成功率置信区间
+固定 seed 的 10000 次 percentile bootstrap 均值区间
+非配对双样本方法差异区间
+CSV / Markdown / LaTeX 论文表格
+300 dpi PNG / PDF / SVG 图表
+provenance 与 DATA_MANIFEST.sha256
+```
+
+正式总体观测结果为 `100/100`，Wilson 95% CI 为 `[0.963, 1.000]`。`10/10`、`20/20` 和 `40/40` 不解释为真实成功概率 100%。smoke 失败与 `NOT_APPLICABLE` 保持独立语义，fixed T1 只覆盖正式 B5 roll `+2°` touchdown。
 
 ---
 
@@ -1089,14 +1105,14 @@ colcon test-result --verbose
 
 ## 16. Codex 下一步默认任务
 
-`P0`～`P8C fixed T1` 已完成真实验收，P7-lite 真实 3+3 冒烟已于 2026-07-30 以 6/6 PASS 冻结。P8C-3 失败证据完整保留，P8C-4 已完成终端接触稳定化和固定正 +2° roll/pitch 真实触地验收。
+`P0`～`P8C fixed T1` 已完成真实验收，P9 统一批量评测和 P10 论文结果定稿也已完成。P8C-3 失败证据、P9 smoke 失败和历史排除批次均完整保留。
 
-下一项任务：
+没有用户新指令时：
 
 ```text
-执行 P9 统一批量评测、消融和论文实验；
-复用 P7 自动化并执行保留的 static/constant02 20+20；
-只评测已经通过相应安全验证的方法-场景-profile 组合；
-负倾角下降、动态 rollpitch/combined、PX4 attitude setpoint 姿态对齐和 Ground Truth 控制继续关闭；
-全程保持 NAV_LAND / Disarm = 0 / 0，禁止放宽冻结门或通过重复运行挑选 PASS。
+不自动继续调控制器或扩大触地安全边界；
+保持负倾角下降、动态 rollpitch/combined、PX4 attitude setpoint 姿态对齐和 Ground Truth 控制关闭；
+保持 NAV_LAND / Disarm = 0 / 0；
+只执行用户授权后的远端同步和 Git 外原始 Bag 归档；
+任何新的动态姿态或实机研究必须建立独立阶段、计划和验收门。
 ```

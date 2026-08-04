@@ -423,6 +423,38 @@ P9 执行中还保留了以下排除证据：编排污染的 `results/p9_baselin
 
 详细设计见 [P7 批量评测计划](../plans/P7_BATCH_EVALUATION_PLAN.md) 与 [P9 统一评测计划](../plans/P9_UNIFIED_EVALUATION_PLAN.md)。
 
+### 3.6 P10 论文结果定稿与证据归档
+
+P10 不运行新的 SITL，只使用三个显式冻结目录的结构化证据：
+
+```bash
+python3 scripts/finalize_p9_paper_results.py \
+  --smoke results/p9_smoke_20260803 \
+  --baseline results/p9_baseline_20x20_20260804_71af1cc \
+  --ablation results/p9_ablation_20260804_71af1cc \
+  --output results/p9_paper_results_v0.1
+```
+
+脚本会硬检查 smoke `20/27`、baseline `40/40`、ablation `60/60`、三个关闭组合、30 个 `NOT_APPLICABLE` 槽位、formal 仿真提交 `71af1cc897136265a999c83dd6034bf156a32a50`、dirty 状态、JSON 完整性以及 `NAV_LAND / Disarm = 0 / 0`。历史 interrupted、污染或时钟修复前批次不得作为输入。
+
+输出目录包含：
+
+```text
+paper_summary.json
+success_rate_confidence_intervals.csv
+continuous_metric_confidence_intervals.csv
+method_comparisons.csv
+data_provenance.json
+DATA_MANIFEST.sha256
+P9_PAPER_RESULTS.md
+tables/*.csv|md|tex
+plots/*.png|pdf|svg
+```
+
+成功率使用 Wilson 95% 区间；连续指标均值与独立样本方法差异使用固定 seed `20260804`、10000 次确定性非参数 percentile bootstrap。`NOT_APPLICABLE` 不进入分母，smoke 失败不混入正式成功率。PNG 为 300 dpi，PDF/SVG 为矢量输出。完整说明见 [P10 计划](../plans/P10_PAPER_RESULTS_FINALIZATION_PLAN.md)、[论文结果](../results/P9_PAPER_RESULTS.md) 与 [数据 provenance](../results/P9_DATA_PROVENANCE.md)。
+
+`results/` 不提交 Git；原始 Bag 外部归档与远端同步需用户执行或授权。只提交统计代码、测试、仓库内摘要及小型最终 PDF/SVG 图表。
+
 ## 4. 手动多终端启动
 
 一键脚本应作为普通入口；以下流程仅用于逐项调试。控制器必须最后启动。
