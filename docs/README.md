@@ -2,7 +2,7 @@
 
 本目录集中保存 `ws_aruco_landing` 的操作指南、系统参考、阶段计划、研究综述和验收记录。
 
-当前开发基线已完成 P8A 升沉甲板触地、P8B 水平相对 MPC，以及 P8C T1 固定 `±2°` 几何、安全高度、安全下降和正 `+2° roll/pitch` 真实触地验收。P8C 状态为 `RESEARCH PASS / PLAN PASS / P8C-0 IMPLEMENTATION PASS / P8C-1 VALIDATION PASS / P8C-2 SAFE DESCENT PASS / P8C-4 VALIDATION PASS / P8C T1 VALIDATION PASS / P8C-3 DESIGN GATE CLOSED`；最终 active touchdown 为 roll `3/3`、pitch `3/3`，旧路径回归 `9/9`。P9 自动化实现与测试已通过，全工作区 `340 tests, 0 failures, 0 skipped`；27 轮 smoke 已完成 `20/27`，baseline 20+20 正在进行，正式消融冻结为 `60 executable + 30 NOT_APPLICABLE`。P8C-3 和 P9 smoke 的失败证据继续完整保留。
+当前开发基线已完成 P8A 升沉甲板触地、P8B 水平相对 MPC，以及 P8C fixed T1 分级验收。P8C 状态为 `P8C-4 VALIDATION PASS / P8C T1 VALIDATION PASS / P8C-3 DESIGN GATE CLOSED`；P8C-3 失败证据继续完整保留。P9 统一评测第一版已完成真实 smoke `20/27`、正式 baseline `40/40` 和正式消融 `60/60`，三批次合计 `120/127`；B2 constant02、B4 heave_h1 和 B5 pitch `+2°` 的 30 个正式槽位保持 `NOT_APPLICABLE`，所有 7 个失败均为 smoke `SAFETY_GATE_FAILURE`。正式结果、失败目录和图表见 P9 验收记录。
 
 ## 阅读入口
 

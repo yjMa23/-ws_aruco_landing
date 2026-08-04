@@ -8,7 +8,7 @@ P8C-3 FAILURE EVIDENCE PRESERVED
 P8C-4 VALIDATION PASS
 P8C T1 VALIDATION PASS
 P8C-3 DESIGN GATE CLOSED
-P9 状态：PLAN PASS / IMPLEMENTATION PASS / TEST PASS / SMOKE COMPLETE / BASELINE IN PROGRESS / FORMAL ABLATION PENDING
+P9 状态：PLAN PASS / IMPLEMENTATION PASS / TEST PASS / SMOKE COMPLETE / BASELINE COMPLETE / FORMAL ABLATION COMPLETE / AGGREGATION PASS
 ```
 
 P9 只评测已经通过相应安全验证的能力，不承担控制器调参、扩大触地白名单或开放新安全边界。P8C-4 的实际方案是 PX4 Offboard position 模式内的终端主轴法向整形、接触顺应、状态化锚点、切向阻尼、candidate/HOLD 法向锁存和受限预压，不是直接发送 PX4 attitude setpoint 的姿态对齐。
@@ -108,9 +108,9 @@ smoke 结果目录为 `results/p9_smoke_20260803/`。B2 constant02 在关闭 vel
 
 ### 4.3 正式实验
 
-1. P7 冻结基线：B0 static touchdown 20 次、B0 constant02 touchdown 20 次；严格使用原 `p7_baseline.yaml` seeds `1001..1020` 与 `2001..2020`。
-2. 第一版消融每个组合 10 次，足以统一计算成功率、均值、总体标准差、中位数和经验 P95；论文最终版若需要置信区间，可在参数继续冻结后增加轮次。
-3. smoke 后正式消融只执行通过安全门的组合：
+1. P7 冻结基线：B0 static touchdown 20 次、B0 constant02 touchdown 20 次；严格使用 seeds `1001..1020` 与 `2001..2020`。正式批次 `p9_baseline_20x20_20260804_71af1cc` 已完成 `40/40`。
+2. 第一版消融每个组合 10 次，用于统一计算成功率、均值、总体标准差、中位数和经验 P95；论文最终版若需要置信区间，可在参数继续冻结后增加轮次。
+3. smoke 后正式消融只执行通过安全门的组合，批次 `p9_ablation_20260804_71af1cc` 已完成 `60/60`：
 
 ```text
 B0 constant02 safe-altitude              10
@@ -131,7 +131,7 @@ B5 tilt_pitch_pos_2deg touchdown         10
 总计                                      30 gated NOT_APPLICABLE episodes
 ```
 
-P9 第一版总实际计划为：smoke `27 executed` + baseline `40 planned` + formal ablation `60 executable` = `127 executable new episodes`。另有 `30` 个 smoke 后关闭的正式消融槽位仅记录适用性。历史失败 attempt 和 interrupted attempt 不计入计划轮次，但必须完整保留。
+P9 第一版实际执行为：smoke `27` + baseline `40` + formal ablation `60` = `127 episodes`，其中成功 `120`、失败 `7`，全部失败均为 smoke `SAFETY_GATE_FAILURE`。另有 `30` 个 smoke 后关闭的正式消融槽位仅记录适用性。历史失败 attempt 和 interrupted attempt 不计入正式统计，但完整保留。
 
 ---
 
@@ -268,7 +268,7 @@ P9_RESULTS_SUMMARY.md
 
 ## 11. 完成条件
 
-P9 第一版完成必须同时满足：
+P9 第一版完成条件与实际状态：
 
 1. P8C commit/tag 已冻结且工作区证据一致。
 2. P9 配置、方法矩阵、解析、runner、resume、聚合、Markdown/图表代码完成。
@@ -280,7 +280,17 @@ P9 第一版完成必须同时满足：
 8. 所有失败有分类和证据路径。
 9. 聚合输出完整，文档同步。
 10. Ground Truth 控制隔离、`NAV_LAND/Disarm=0/0`、负倾角和动态姿态 touchdown 继续关闭。
-11. P9 commit 完成且工作区干净；只有上述条件全部满足才创建 `baseline-unified-evaluation-v0.1`。
+11. P9 最终文档提交完成且工作区干净；只有上述条件全部满足才创建 `baseline-unified-evaluation-v0.1`。
+
+真实结果与证据目录：
+
+```text
+smoke:    results/p9_smoke_20260803                    20/27
+baseline: results/p9_baseline_20x20_20260804_71af1cc  40/40
+ablation: results/p9_ablation_20260804_71af1cc         60/60
+```
+
+三个正式 `NOT_APPLICABLE` 组合为 B2 constant02、B4 heave_h1 和 B5 pitch `+2°`。正式运行全程保持 `NAV_LAND / Automatic Disarm = 0 / 0`，详细统计和历史排除批次见 `docs/validation/P9_UNIFIED_EVALUATION_VALIDATION.md`。
 
 ---
 

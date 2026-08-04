@@ -405,7 +405,7 @@ results/<batch_id>/
     └── bag/
 ```
 
-P7-lite 真实 3+3 冒烟已完成 6/6 PASS。P9 自动化实现和测试已通过，P9 smoke `27` 轮已完成 `20 success / 7 SAFETY_GATE_FAILURE`。正式 baseline 和 smoke 后消融使用：
+P7-lite 真实 3+3 冒烟已完成 6/6 PASS。P9 统一评测第一版已完成：smoke `20/27`，正式 baseline `40/40`，正式消融 `60/60`；正式运行提交为 `71af1cc`，所有 7 个失败均为 smoke `SAFETY_GATE_FAILURE`。复现实验命令为：
 
 ```bash
 python3 scripts/run_batch_experiments.py \
@@ -417,7 +417,9 @@ python3 scripts/run_batch_experiments.py \
   --batch-id p9_ablation_<YYYYMMDD>_<shortsha>
 ```
 
-正式 baseline 为 static/constant02 `20+20`，共 `40` 个 episode。正式消融只执行 B0/B1/B3 constant02、B0/B3 sinusoidal 和 B5 roll `+2°`，共 `60` 个 episode；B2 constant02、B4 heave_h1 和 B5 pitch `+2°` 的 `30` 个计划槽位记为 `NOT_APPLICABLE`，不会启动也不进入失败分母。`results/p9_baseline_20x20_20260803/` 是旧提交上的 interrupted pre-freeze batch，仅 `4/40`，必须保留但排除在最终统计之外。
+正式 baseline 为 static/constant02 `20+20`，实际目录为 `results/p9_baseline_20x20_20260804_71af1cc/`，40/40 PASS。正式消融目录为 `results/p9_ablation_20260804_71af1cc/`，只执行 B0/B1/B3 constant02、B0/B3 sinusoidal 和 B5 roll `+2°`，60/60 PASS；B2 constant02、B4 heave_h1 和 B5 pitch `+2°` 的 `30` 个计划槽位记为 `NOT_APPLICABLE`，没有启动也不进入失败分母。聚合命令为 `python3 scripts/aggregate_results.py <batch_dir>`，每个 batch 输出 `summary.json`、CSV、`P9_RESULTS_SUMMARY.md` 和图表。`results/p9_baseline_20x20_20260803/` 是旧提交上的 interrupted pre-freeze batch，仅 `4/40`，必须保留但排除在最终统计之外。
+
+P9 执行中还保留了以下排除证据：编排污染的 `results/p9_baseline_20x20_20260803_a9d011d/`、时钟修复前的完整 baseline `results/p9_baseline_20x20_20260803_a9d011d_clean1/`，以及暴露 SYSTEM_TIME/ROS_TIME 混用缺陷的 `results/p9_ablation_20260804_a9d011d/`。不得将这些目录 resume 或混入正式统计。
 
 详细设计见 [P7 批量评测计划](../plans/P7_BATCH_EVALUATION_PLAN.md) 与 [P9 统一评测计划](../plans/P9_UNIFIED_EVALUATION_PLAN.md)。
 

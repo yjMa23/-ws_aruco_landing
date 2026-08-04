@@ -2,7 +2,7 @@
 
 `ws_aruco_landing` 是一个基于 **ROS 2 Humble、PX4 SITL 和 Gazebo Harmonic** 的移动船舶无人机自主降落传统基线工作空间。
 
-系统实现从船舶 GNSS 粗引导到视觉接管、移动目标跟踪、规则式着陆窗口、相对高度下降和多源触地确认的完整链路，并提供可选的水平相对运动线性 MPC。当前 P8A 升沉触地、P8B MPC 与 P8C fixed T1 均已通过真实 PX4 SITL 验收。P8C-3 的水平机体失败 Bag、seed2 滑移硬门失败、姿态发散、离板和恢复证据完整保留；P8C-4 在 Offboard position 模式内实现终端主轴法向整形、状态化接触锚点、切向阻尼、接触顺应、candidate/HOLD 法向锁存和受限预压，最终固定正 `+2° roll/pitch` 真实触地 roll 3/3、pitch 3/3，旧路径回归 9/9，全工作区 340 项测试通过。当前 P9 自动化实现和测试已通过，27 轮 smoke 已完成 `20/27`，baseline 20+20 正在冻结后重启，正式消融矩阵已收缩为 `60` 个可执行 episode 与 `30` 个 `NOT_APPLICABLE` 槽位。
+系统实现从船舶 GNSS 粗引导到视觉接管、移动目标跟踪、规则式着陆窗口、相对高度下降和多源触地确认的完整链路，并提供可选的水平相对运动线性 MPC。P8A 升沉触地、P8B MPC 与 P8C fixed T1 均已通过真实 PX4 SITL 验收；P8C-3 的失败 Bag 和设计门关闭证据继续完整保留。P9 统一评测第一版已完成：smoke `20/27`，正式 baseline static/constant02 `20+20` 为 `40/40`，正式消融 `60/60`，三个 smoke 关闭组合保留为 `30` 个 `NOT_APPLICABLE` 槽位。三批次合计 `120/127`，全部 7 个失败均为 smoke `SAFETY_GATE_FAILURE`；正式批次保持 `NAV_LAND / Disarm = 0 / 0`，Ground Truth 仅用于离线 evaluator。
 
 ```text
 船舶 GNSS 会合
@@ -82,14 +82,15 @@ P8C-3 DESIGN GATE CLOSED
 ## P9 当前状态
 
 ```text
-P9 automation implementation: PASS
-P9 tests: PASS
-P9 smoke: COMPLETE（27 executed，20 success，7 SAFETY_GATE_FAILURE）
-P9 baseline 20+20: IN PROGRESS
-P9 formal ablation: PENDING（60 executable，30 NOT_APPLICABLE）
+P9 PLAN / IMPLEMENTATION / TEST: PASS
+P9 smoke: COMPLETE（20/27，7 SAFETY_GATE_FAILURE）
+P9 baseline 20+20: COMPLETE（40/40）
+P9 formal ablation: COMPLETE（60/60，30 NOT_APPLICABLE slots）
+P9 aggregation: PASS
+P9 unified evaluation v0.1: PASS
 ```
 
-B2 constant02、B4 heave_h1 和 B5 pitch `+2°` 被 smoke 安全门关闭，不调参、不换 seed、不进入正式失败分母；B5 roll `+2°` 是 fixed T1 唯一正式 touchdown 组合。P9 第一版总实际计划为 `127` 个可执行新 episode。详见 `docs/plans/P9_UNIFIED_EVALUATION_PLAN.md` 和 `docs/validation/P9_UNIFIED_EVALUATION_VALIDATION.md`。
+正式运行提交为 `71af1cc`；baseline 目录为 `results/p9_baseline_20x20_20260804_71af1cc/`，ablation 目录为 `results/p9_ablation_20260804_71af1cc/`。B2 constant02、B4 heave_h1 和 B5 pitch `+2°` 被 smoke 安全门关闭，不调参、不换 seed、不进入正式失败分母；B5 roll `+2°` 是 fixed T1 唯一正式 touchdown 组合。完整统计、失败证据和图表路径见 `docs/validation/P9_UNIFIED_EVALUATION_VALIDATION.md`。
 
 ## 详细文档
 

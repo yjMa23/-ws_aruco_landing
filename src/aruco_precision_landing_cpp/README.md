@@ -528,7 +528,7 @@ P4～P4.6 已完成静止、`0.2 m/s`、`0.4 m/s`、正弦、时间对齐和参�
 P4.7 已完成加速度感知连续增益调度，并设为统一默认：0.4 m/s 匀速位置 RMSE 为
 `0.0554 m`，XY 正弦位置 RMSE 为 `0.3490 m`，Marker 丢失和 GNSS 恢复均为 0。
 
-P5A～P6B 已完成着陆窗口、相对下降、垂直估计、最终下降和真实接触。P7-lite 真实 3+3 冒烟为 6/6 PASS；P8A H1/H2 升沉触地均为 3/3 PASS；P8B 已完成固定 OSQP/OsqpEigen 依赖、完整 P4.7 回退和严格顺序真实 SITL。P8C-3 的 +2° roll seed2 滑移硬门失败及姿态发散、离板、恢复证据完整保留；P8C-4 已完成终端接触稳定化实现和分级验证，最终 fixed T1 touchdown roll 3/3、pitch 3/3，旧路径回归 9/9。P9 自动化实现和测试已通过，当前全工作区 340 项测试通过；27 轮 smoke 为 `20 success / 7 SAFETY_GATE_FAILURE`，baseline 20+20 IN PROGRESS，正式消融 PENDING，矩阵冻结为 `60 executable + 30 NOT_APPLICABLE`。
+P5A～P6B 已完成着陆窗口、相对下降、垂直估计、最终下降和真实接触。P7-lite 真实 3+3 冒烟为 6/6 PASS；P8A H1/H2 升沉触地均为 3/3 PASS；P8B 已完成固定 OSQP/OsqpEigen 依赖、完整 P4.7 回退和严格顺序真实 SITL。P8C-3 的 +2° roll seed2 滑移硬门失败及姿态发散、离板、恢复证据完整保留；P8C-4 已完成终端接触稳定化实现和分级验证。P9 自动化、真实实验和聚合已完成：smoke `20/27`、baseline `40/40`、formal ablation `60/60`，三批次合计 `120/127`；B2 constant02、B4 heave_h1、B5 pitch `+2°` 保持 `NOT_APPLICABLE`，B5 roll `+2°` 正式 touchdown 为 10/10。正式运行提交为 `71af1cc`，全程 `NAV_LAND / Disarm = 0 / 0`。
 
 ## 13. 安全提示
 
