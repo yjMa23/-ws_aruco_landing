@@ -1044,6 +1044,44 @@ class P7ExperimentTests(unittest.TestCase):
         self.assertEqual(summary["min"], 1.0)
         self.assertEqual(summary["max"], 3.0)
 
+    def test_metric_value_reads_p8c_nested_metrics(self) -> None:
+        evaluation = {
+            "p8c3_touchdown_metrics": {
+                "horizontal_error_m": {"rmse": 0.031, "max_abs": 0.072},
+                "touchdown_normal_relative_velocity_mps": -0.012,
+                "normal_rmse_deg": 0.28,
+                "normal_p95_deg": 0.61,
+                "post_touchdown_tangential_slip_m": 0.056,
+                "hold_tangential_velocity_p95_mps": 0.025,
+                "attitude_divergence_delta_deg": 0.0,
+            },
+            "p8c4_terminal_stabilization_metrics": {
+                "attitude_tracking_error_deg": {"rmse": 0.14, "p95": 0.10},
+                "desired_tilt_deg": {"max_abs": 2.06},
+                "command_slew_degps": {"max_abs": 4.16},
+                "combined_acceleration_norm_mps2": {"max_abs": 0.35},
+                "fallback_count_after_activation": 0,
+                "activation_sample_count": 229,
+            },
+        }
+        expected = {
+            "horizontal_error_rmse_m": 0.031,
+            "horizontal_error_max_m": 0.072,
+            "touchdown_vertical_speed_mps": 0.012,
+            "normal_tracking_error_rmse_deg": 0.14,
+            "normal_tracking_error_p95_deg": 0.10,
+            "touchdown_slip_m": 0.056,
+            "hold_tangential_velocity_p95_mps": 0.025,
+            "attitude_divergence_increment_deg": 0.0,
+            "terminal_command_tilt_max_deg": 2.06,
+            "terminal_command_tilt_slew_p100_degps": 4.16,
+            "combined_horizontal_acceleration_max_mps2": 0.35,
+            "fallback_count": 0.0,
+            "terminal_stabilization_activation_count": 229.0,
+        }
+        for field, value in expected.items():
+            self.assertEqual(metric_value(evaluation, field), value)
+
     def test_reevaluation_refreshes_parent_batch_counts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             batch_dir = Path(directory)

@@ -775,16 +775,106 @@ METRIC_ALIASES: Mapping[str, tuple[str, ...]] = {
     ),
 }
 
+# P8C evaluator 保留论文级嵌套结构；P9 聚合显式映射需要进入统一表格的标量，
+# 避免递归搜索同名字段时误取 Ground Truth 或 observation-only 数据。
+METRIC_PATHS: Mapping[str, tuple[tuple[str, ...], ...]] = {
+    "horizontal_error_rmse_m": (
+        ("p8c3_touchdown_metrics", "horizontal_error_m", "rmse"),
+    ),
+    "horizontal_error_max_m": (
+        ("p8c3_touchdown_metrics", "horizontal_error_m", "max_abs"),
+    ),
+    "touchdown_vertical_speed_mps": (
+        ("p8c3_touchdown_metrics", "touchdown_normal_relative_velocity_mps"),
+    ),
+    "candidate_to_confirm_delay_s": (
+        ("p8c3_touchdown_metrics", "candidate_duration_s"),
+    ),
+    "hold_duration_s": (("p8c3_touchdown_metrics", "hold_duration_s"),),
+    "recovery_count": (("p8c3_touchdown_metrics", "recovery_count"),),
+    "marker_switch_count": (("p8c3_touchdown_metrics", "marker_switch_count"),),
+    "detach_count": (("p8c3_touchdown_metrics", "detach_count"),),
+    "secondary_contact_count": (
+        ("p8c3_touchdown_metrics", "secondary_contact_count"),
+    ),
+    "candidate_repeat_count": (
+        ("p8c3_touchdown_metrics", "candidate_repeat_count"),
+    ),
+    "normal_tracking_error_rmse_deg": (
+        (
+            "p8c4_terminal_stabilization_metrics",
+            "attitude_tracking_error_deg",
+            "rmse",
+        ),
+        ("p8c3_touchdown_metrics", "normal_rmse_deg"),
+    ),
+    "normal_tracking_error_p95_deg": (
+        (
+            "p8c4_terminal_stabilization_metrics",
+            "attitude_tracking_error_deg",
+            "p95",
+        ),
+        ("p8c3_touchdown_metrics", "normal_p95_deg"),
+    ),
+    "terminal_command_tilt_max_deg": (
+        ("p8c4_terminal_stabilization_metrics", "desired_tilt_deg", "max_abs"),
+    ),
+    "terminal_command_tilt_slew_p100_degps": (
+        ("p8c4_terminal_stabilization_metrics", "command_slew_degps", "max_abs"),
+    ),
+    "combined_horizontal_acceleration_max_mps2": (
+        (
+            "p8c4_terminal_stabilization_metrics",
+            "combined_acceleration_norm_mps2",
+            "max_abs",
+        ),
+    ),
+    "touchdown_slip_m": (
+        ("p8c3_touchdown_metrics", "post_touchdown_tangential_slip_m"),
+    ),
+    "hold_tangential_velocity_p95_mps": (
+        ("p8c3_touchdown_metrics", "hold_tangential_velocity_p95_mps"),
+    ),
+    "attitude_divergence_increment_deg": (
+        ("p8c3_touchdown_metrics", "attitude_divergence_delta_deg"),
+    ),
+    "fallback_count": (
+        ("p8c4_terminal_stabilization_metrics", "fallback_count_after_activation"),
+        ("p8c4_terminal_stabilization_metrics", "fallback_count"),
+    ),
+    "terminal_stabilization_activation_count": (
+        ("p8c4_terminal_stabilization_metrics", "activation_sample_count"),
+    ),
+}
+
+
+def _nested_value(evaluation: Mapping[str, Any], path: tuple[str, ...]) -> Any:
+    value: Any = evaluation
+    for key in path:
+        if not isinstance(value, Mapping):
+            return None
+        value = value.get(key)
+    return value
+
+
+def _finite_metric(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if math.isfinite(numeric) else None
+
 
 def metric_value(evaluation: Mapping[str, Any], field: str) -> float | None:
     for candidate in METRIC_ALIASES.get(field, (field,)):
-        value = evaluation.get(candidate)
-        if value is None or isinstance(value, bool):
-            continue
-        try:
-            numeric = float(value)
-        except (TypeError, ValueError):
-            continue
-        if math.isfinite(numeric):
-            return numeric
+        numeric = _finite_metric(evaluation.get(candidate))
+        if numeric is not None:
+            return abs(numeric) if field == "touchdown_vertical_speed_mps" else numeric
+
+    for path in METRIC_PATHS.get(field, ()):
+        numeric = _finite_metric(_nested_value(evaluation, path))
+        if numeric is not None:
+            return abs(numeric) if field == "touchdown_vertical_speed_mps" else numeric
     return None
