@@ -12,7 +12,7 @@ namespace aruco_precision_landing_cpp
 {
 
 /**
- * @brief P6B 最终下降阶段。
+ * @brief final descent 最终下降阶段。
  */
 enum class FinalDescentPhase
 {
@@ -68,13 +68,13 @@ struct FinalDescentOutput
 };
 
 /**
- * @brief 从 P5B 测试高度生成分段最终下降参考。
+ * @brief 从 relative descent 测试高度生成分段最终下降参考。
  *
  * 控制器不读取 ROS 或 Ground Truth。进入最终下降后先使用较快接近速率，在
  * `contact_slowdown_height_m` 以下切换为近接触低速。当参考进入
  * `terminal_descent_entry_height_m` 且上层确认除低高度外的着陆窗口条件仍安全时，
  * 允许继续执行终端落板段，避免仅因低高度窗口或暂时缺少 PX4 接触证据而悬停。
- * P6A 进入候选后立即冻结参考；确认后锁存保持。不安全拒绝仍请求恢复。最低命令高度
+ * touchdown evidence 进入候选后立即冻结参考；确认后锁存保持。不安全拒绝仍请求恢复。最低命令高度
  * 只用于限制向甲板内部发送的目标，不能作为触地证据。
  */
 class FinalDescentController

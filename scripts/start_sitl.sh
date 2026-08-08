@@ -11,10 +11,10 @@ Options:
              |tilt_roll_pos_2deg|tilt_roll_neg_2deg|tilt_pitch_pos_2deg|tilt_pitch_neg_2deg
                                          Deck scenario (default: static)
                                          constant02 = 0.2 m/s, constant = 0.4 m/s
-                                         heave_h1/h2/h3 = P8A graded profiles
-                                         negative tilt_*_2deg = P8C-1 safe-altitude shadow only
-                                         positive tilt_*_2deg = P8C-1 safe altitude, P8C-2 0.50 m safe descent,
-                                         or P8C-3 0.50 m relative + final-descent touchdown
+                                         heave_h1/h2/h3 = graded heave touchdown profiles
+                                         negative tilt_*_2deg = safe-altitude shadow only
+                                         positive tilt_*_2deg = safe altitude, 0.50 m safe descent,
+                                         or explicitly enabled touchdown
   --headless                             Run Gazebo without GUI
   --dry-run                              Validate arguments and safety gates without starting processes
   --record                               Record evaluation and ArUco diagnostics topics
@@ -35,17 +35,17 @@ Options:
   --adaptive-accel-high VALUE            High acceleration threshold (default: 0.35)
   --adaptive-max-accel VALUE             Acceleration clamp (default: 1.50)
   --adaptive-filter-gain GAIN            Acceleration low-pass gain (default: 0.20)
-  --enable-vertical-ff                   Enable P5C deck vertical-velocity feedforward (default)
+  --enable-vertical-ff                   Enable deck vertical-velocity feedforward (default)
   --disable-vertical-ff                  Disable vertical feedforward for ablation
   --vertical-ff-gain GAIN                Deck vertical-velocity gain (default: 1.0)
   --vertical-ff-max VALUE                Absolute vertical feedforward limit (default: 0.60)
-  --enable-relative-descent              Enable P5B relative-height descent
-  --descent-test-height HEIGHT           Override P5B minimum test height (default: 0.50)
-  --descent-fast-rate RATE               P5B high-altitude rate (default: 0.50)
-  --descent-medium-rate RATE             P5B middle-altitude rate (default: 0.30)
-  --descent-slow-rate RATE               P5B pre-final rate (default: 0.12)
+  --enable-relative-descent              Enable relative-height descent
+  --descent-test-height HEIGHT           Override relative descent minimum test height (default: 0.50)
+  --descent-fast-rate RATE               relative descent high-altitude rate (default: 0.50)
+  --descent-medium-rate RATE             relative descent middle-altitude rate (default: 0.30)
+  --descent-slow-rate RATE               relative descent pre-final rate (default: 0.12)
   --landing-window-min-height HEIGHT     Minimum valid estimated height (default: 0.08)
-  --enable-final-descent                 Enable P6B/P8A, or P8C-3 on positive fixed +2° profiles
+  --enable-final-descent                 Enable final descent/heave touchdown, or fixed-tilt touchdown on positive fixed +2° profiles
   --final-descent-approach-rate RATE     0.50 m to slowdown-height rate (default: 0.12)
   --final-descent-contact-rate RATE      Near-contact rate (default: 0.03)
   --final-descent-rate RATE              Alias for --final-descent-contact-rate
@@ -53,11 +53,11 @@ Options:
   --final-descent-terminal-height HEIGHT Begin safe terminal touchdown here (default: 0.20)
   --final-descent-min-height HEIGHT      Physical-contact command clamp (default: 0.05)
   --terminal-contact-stabilization-shadow
-                                         P8C-4 diagnostics only; no control output
+                                         terminal contact stabilization diagnostics only; no control output
   --terminal-contact-stabilization-rehearsal
-                                         P8C-4 bounded active rehearsal at 0.50 m; no contact
+                                         terminal contact stabilization bounded active rehearsal at 0.50 m; no contact
   --enable-terminal-contact-stabilization
-                                         P8C-4 active terminal output for positive +2° touchdown
+                                         terminal contact stabilization active terminal output for positive +2° touchdown
   -h, --help                             Show this help
 
 Environment:
@@ -370,36 +370,41 @@ case "$scenario" in
   tilt_roll_neg_2deg) scenario_config="tilt_roll_neg_2deg.yaml" ;;
   tilt_pitch_pos_2deg) scenario_config="tilt_pitch_pos_2deg.yaml" ;;
   tilt_pitch_neg_2deg) scenario_config="tilt_pitch_neg_2deg.yaml" ;;
-  *) die "invalid scenario '$scenario' (expected static, constant02, constant, sinusoidal, heave, heave_h1, heave_h2, heave_h3, rollpitch, combined, or a P8C fixed tilt_*_2deg profile)" ;;
+  *) die "invalid scenario '$scenario' (expected static, constant02, constant, sinusoidal, heave, heave_h1, heave_h2, heave_h3, rollpitch, combined, or a tilted-deck fixed tilt_*_2deg profile)" ;;
 esac
 
-p8c_gate_profile="not_p8c"
+if [[ "$scenario" == "rollpitch" || "$scenario" == "combined" ]]; then
+  [[ "$relative_descent_enabled" == "false" ]] ||
+    die "dynamic roll/pitch and combined scenarios are restricted to safe-altitude shadow validation"
+fi
+
+tilted_deck_gate_profile="not_tilted_deck"
 case "$scenario" in
   tilt_roll_pos_2deg | tilt_pitch_pos_2deg)
     if [[ "$final_descent_enabled" == "true" ]]; then
       [[ "$relative_descent_enabled" == "true" ]] ||
-        die "P8C-3 positive fixed-tilt touchdown requires --enable-relative-descent"
+        die "positive fixed-tilt touchdown requires --enable-relative-descent"
       awk -v value="$descent_minimum_test_height_m" \
         'BEGIN {exit !(value == 0.50)}' ||
-        die "P8C-3 positive fixed-tilt touchdown requires exactly 0.50 m test height"
-      p8c_gate_profile="P8C-3 positive fixed-tilt touchdown"
+        die "positive fixed-tilt touchdown requires exactly 0.50 m test height"
+      tilted_deck_gate_profile="positive fixed-tilt touchdown"
     elif [[ "$relative_descent_enabled" == "true" ]]; then
       awk -v value="$descent_minimum_test_height_m" \
         'BEGIN {exit !(value == 0.50)}' ||
-        die "P8C-2 positive fixed-tilt safe descent requires exactly 0.50 m test height"
-      p8c_gate_profile="P8C-2 positive fixed-tilt safe descent"
+        die "positive fixed-tilt safe descent requires exactly 0.50 m test height"
+      tilted_deck_gate_profile="positive fixed-tilt safe descent"
     else
-      p8c_gate_profile="P8C-1 fixed-tilt safe altitude"
+      tilted_deck_gate_profile="fixed-tilt safe altitude"
     fi
     ;;
   tilt_roll_neg_2deg | tilt_pitch_neg_2deg)
     if [[ "$final_descent_enabled" == "true" ]]; then
-      die "P8C-3 fixed-tilt final descent and real contact are not open"
+      die "negative fixed-tilt final descent and real contact are not open"
     fi
     if [[ "$relative_descent_enabled" == "true" ]]; then
-      die "P8C-1 negative fixed-tilt profiles remain safe-altitude shadow only"
+      die "fixed-tilt safe altitude negative fixed-tilt profiles remain safe-altitude shadow only"
     fi
-    p8c_gate_profile="P8C-1 fixed-tilt safe altitude"
+    tilted_deck_gate_profile="fixed-tilt safe altitude"
     ;;
 esac
 
@@ -407,37 +412,37 @@ if [[ "$terminal_contact_stabilization_enabled" == "true" ]]; then
   case "$scenario" in
     tilt_roll_pos_2deg | tilt_pitch_pos_2deg) ;;
     *)
-      die "P8C-4 terminal contact stabilization is restricted to positive fixed +2 degree roll/pitch scenarios"
+      die "terminal contact stabilization is restricted to positive fixed +2 degree roll/pitch scenarios"
       ;;
   esac
 
   case "$terminal_contact_stabilization_mode" in
     shadow)
       [[ "$final_descent_enabled" == "false" ]] ||
-        die "P8C-4 shadow validation requires final descent disabled"
+        die "terminal contact stabilization shadow validation requires final descent disabled"
       if [[ "$relative_descent_enabled" == "true" ]]; then
         awk -v value="$descent_minimum_test_height_m" \
           'BEGIN {exit !(value == 0.50)}' ||
-          die "P8C-4 shadow safe descent requires exactly 0.50 m test height"
+          die "terminal contact stabilization shadow safe descent requires exactly 0.50 m test height"
       fi
       ;;
     rehearsal)
       [[ "$relative_descent_enabled" == "true" ]] ||
-        die "P8C-4 rehearsal requires relative descent"
+        die "terminal contact stabilization rehearsal requires relative descent"
       awk -v value="$descent_minimum_test_height_m" \
         'BEGIN {exit !(value == 0.50)}' ||
-        die "P8C-4 rehearsal requires exactly 0.50 m test height"
+        die "terminal contact stabilization rehearsal requires exactly 0.50 m test height"
       [[ "$final_descent_enabled" == "false" ]] ||
-        die "P8C-4 rehearsal requires final descent disabled"
+        die "terminal contact stabilization rehearsal requires final descent disabled"
       ;;
     active)
       [[ "$relative_descent_enabled" == "true" ]] ||
-        die "P8C-4 active touchdown requires relative descent"
+        die "terminal contact stabilization active touchdown requires relative descent"
       awk -v value="$descent_minimum_test_height_m" \
         'BEGIN {exit !(value == 0.50)}' ||
-        die "P8C-4 active touchdown requires exactly 0.50 m test height"
+        die "terminal contact stabilization active touchdown requires exactly 0.50 m test height"
       [[ "$final_descent_enabled" == "true" ]] ||
-        die "P8C-4 active touchdown requires final descent"
+        die "terminal contact stabilization active touchdown requires final descent"
       ;;
     *) die "invalid terminal contact stabilization mode" ;;
   esac
@@ -458,12 +463,12 @@ case "$tracking_mode" in
 esac
 
 if [[ "$tracking_mode" == "RELATIVE_MPC" ]]; then
-  p8b_mpc_prefix="${P8B_MPC_PREFIX:-$HOME/.local/p8b-mpc/osqp-1.0.0-osqpeigen-0.11.2}"
-  [[ -f "$p8b_mpc_prefix/lib/cmake/osqp/osqp-config.cmake" ]] ||
-    die "OSQP CMake package not found under $p8b_mpc_prefix"
-  [[ -f "$p8b_mpc_prefix/lib/cmake/OsqpEigen/OsqpEigenConfig.cmake" ]] ||
-    die "OsqpEigen CMake package not found under $p8b_mpc_prefix"
-  export LD_LIBRARY_PATH="$p8b_mpc_prefix/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  relative_mpc_prefix="${RELATIVE_MPC_PREFIX:-$HOME/.local/relative-mpc/osqp-1.0.0-osqpeigen-0.11.2}"
+  [[ -f "$relative_mpc_prefix/lib/cmake/osqp/osqp-config.cmake" ]] ||
+    die "OSQP CMake package not found under $relative_mpc_prefix"
+  [[ -f "$relative_mpc_prefix/lib/cmake/OsqpEigen/OsqpEigenConfig.cmake" ]] ||
+    die "OsqpEigen CMake package not found under $relative_mpc_prefix"
+  export LD_LIBRARY_PATH="$relative_mpc_prefix/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 fi
 
 is_nonnegative_number() {
@@ -553,11 +558,11 @@ if [[ "$final_descent_enabled" == "true" ]]; then
     die "--enable-final-descent requires --enable-relative-descent"
   case "$scenario" in
     static | constant02 | constant | sinusoidal | heave_h1 | heave_h2 | heave_h3 | tilt_roll_pos_2deg | tilt_pitch_pos_2deg) ;;
-    *) die "--enable-final-descent currently supports static, horizontal-motion, and P8A heave profiles only, plus P8C-3 positive fixed +2 degree profiles" ;;
+    *) die "--enable-final-descent currently supports static, horizontal-motion, and heave profiles only, plus fixed-tilt touchdown positive fixed +2 degree profiles" ;;
   esac
   awk -v value="$descent_minimum_test_height_m" \
     'BEGIN {exit !(value == 0.50)}' ||
-    die "P6B final descent requires --descent-test-height 0.50"
+    die "final descent requires --descent-test-height 0.50"
   awk -v window_min="$landing_window_minimum_relative_height_m" \
     -v terminal="$final_descent_terminal_entry_height_m" \
     'BEGIN {exit !(window_min < terminal)}' ||
@@ -574,8 +579,8 @@ if [[ "$dry_run" == "true" ]]; then
   echo "terminal_contact_stabilization_enabled=$terminal_contact_stabilization_enabled"
   echo "terminal_contact_stabilization_shadow_only=$terminal_contact_stabilization_shadow_only"
   echo "terminal_contact_stabilization_rehearsal_enabled=$terminal_contact_stabilization_rehearsal_enabled"
-  if [[ "$p8c_gate_profile" != "not_p8c" ]]; then
-    echo "P8C_GATE=$p8c_gate_profile"
+  if [[ "$tilted_deck_gate_profile" != "not_tilted_deck" ]]; then
+    echo "TILTED_DECK_GATE=$tilted_deck_gate_profile"
   fi
   exit 0
 fi
@@ -767,7 +772,7 @@ start_process "ArUco detector" ros2 launch aruco_detector aruco_detector.launch.
   use_sim_time:=true
 
 if [[ "$auto_confirm_controller" != "true" ]]; then
-  [[ -t 0 ]] || die "an interactive terminal is required for the controller safety confirmation; P7 automation must pass --auto-confirm-controller explicitly"
+  [[ -t 0 ]] || die "an interactive terminal is required for the controller safety confirmation; automation must pass --auto-confirm-controller explicitly"
 fi
 echo "Waiting for PX4 ROS topics..."
 until python3 "$script_dir/check_ros_topic.py" /fmu/out/vehicle_status_v4; do
@@ -794,28 +799,28 @@ else
 fi
 
 if [[ "$record" == "true" ]]; then
-  bag_prefix="p4_${scenario}"
+  bag_prefix="horizontal_tracking_${scenario}"
   case "$scenario" in
     tilt_roll_pos_2deg | tilt_roll_neg_2deg | tilt_pitch_pos_2deg | tilt_pitch_neg_2deg)
-      bag_prefix="p8c1_${scenario}_safe_altitude"
+      bag_prefix="fixed_tilt_safe_altitude_${scenario}"
       ;;
   esac
   if [[ "$relative_descent_enabled" == "true" ]]; then
     case "$scenario" in
       tilt_roll_pos_2deg | tilt_pitch_pos_2deg)
-        bag_prefix="p8c2_${scenario}_safe_descent"
+        bag_prefix="fixed_tilt_safe_descent_${scenario}"
         ;;
       *)
-        bag_prefix="p5b_${scenario}_descent"
+        bag_prefix="relative_descent_${scenario}_descent"
         ;;
     esac
     if [[ "$final_descent_enabled" == "true" ]]; then
       case "$scenario" in
         tilt_roll_pos_2deg | tilt_pitch_pos_2deg)
-          bag_prefix="p8c3_${scenario}_touchdown"
+          bag_prefix="tilted_deck_touchdown_${scenario}"
           ;;
         *)
-          bag_prefix="p6b_${scenario}_final_descent"
+          bag_prefix="final_descent_${scenario}"
           ;;
       esac
     fi

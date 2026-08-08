@@ -1,187 +1,190 @@
 # 移动船舶无人机自主降落系统总览
 
-## 1. 系统目标与当前状态
+本文档是当前实现与验证边界的唯一事实源。未来工作见[下一步计划](../plans/NEXT_DEVELOPMENT_PLAN.md)，控制与几何推导见[控制理论](LANDING_CONTROL_THEORY.md)。
 
-`ws_aruco_landing` 使用 PX4 SITL、Gazebo Harmonic 和 ROS 2 Humble 实现移动船舶甲板自主降落传统基线：
+## 1. 系统目标
+
+系统在 PX4 SITL、Gazebo Harmonic 和 ROS 2 Humble 中完成：
 
 ```text
-船舶 GNSS / 遥测粗引导
+船舶 GNSS 粗引导
 → 移动甲板上方会合
 → ArUco 捕获与视觉接管
-→ 甲板状态估计和运动预测
-→ 移动目标水平跟踪
-→ 规则式着陆窗口
+→ 甲板状态估计和预测
+→ 水平相对跟踪
+→ 着陆窗口判断
 → 相对高度下降
-→ 最终下降与触地确认
-→ 接触后相对保持
+→ 终端接触与触地确认
+→ 接触后保持或安全恢复
 ```
 
-当前已完成：
+默认配置只保持安全高度，不下降、不发送 `NAV_LAND`、不自动 Disarm。
 
-- P8A 升沉甲板最终下降、真实接触和接触后相对保持，H1 3/3、H2 3/3 PASS；
-- P8B 四状态水平相对 MPC、约束、warm start、完整 P4.7 回退和终端安全 handoff；
-- P8C T1 甲板平面/X500 四滑橇几何、终端主轴法向整形、状态化接触锚点、受限垂直预压、HOLD 法向锁存和姿态安全保护；
-- 全工作区 340 项测试通过；P8B 安全高度 15/15、下降 6/6、真实触地 6/6 PASS；P8C T1 active touchdown roll/pitch 3+3 为 6/6 PASS。
+## 2. 软件组成
 
-P8C 状态为 `RESEARCH PASS / PLAN PASS / P8C-0 IMPLEMENTATION PASS / P8C-1 VALIDATION PASS / P8C-2 SAFE DESCENT PASS / P8C-4 VALIDATION PASS / P8C T1 VALIDATION PASS / P8C-3 DESIGN GATE CLOSED`。最终旧路径回归 static/constant02/H1/H2/RELATIVE_MPC 为 9/9 PASS，所有旧场景 terminal stabilization applied 样本为 0。P8C-3 水平机体失败 Bag 与设计门历史继续保留；负倾角和动态 roll/pitch/combined 尚未开放。
+| 包 | 当前职责 |
+| --- | --- |
+| `aruco_detector` | 读取图像与相机内参，完成多尺度 Marker 选择、PnP、甲板参考点补偿和调试图像发布。 |
+| `aruco_precision_landing_cpp` | PX4 Offboard、GNSS 会合、视觉接管、估计、预测、跟踪、下降、触地检测和接触保持。 |
+| `moving_deck_sim` | 生成甲板运动、Gazebo 姿态和评测 Ground Truth，并提供船舶 GNSS 传感器模型。 |
 
-相对下降和最终下降默认关闭。系统不会发送 `NAV_LAND`，不会自动 Disarm。
+仓库根目录脚本负责 SITL 编排、单轮/批量实验、离线评测、聚合和论文统计。
 
-## 2. 系统数据流
+## 3. 仿真与传感器
 
-```mermaid
-flowchart LR
-    DECK[Gazebo 移动甲板] --> GT[/simulation/deck/ground_truth/]
-    GT --> GNSS[deck_gnss_simulator]
-    GNSS -->|WGS84 位置与 ENU 速度| CTRL[px4_aruco_landing_node]
+### 3.1 甲板运动
 
-    CAM[Gazebo 下视相机] --> BR[ros_gz_bridge]
-    BR --> DET[aruco_detector_node]
-    DET -->|Marker camera_optical 位姿| CTRL
+`moving_deck_sim` 支持：
 
-    PX4[PX4 uXRCE-DDS] -->|状态、位置、速度、姿态、land detector| CTRL
-    CTRL -->|OffboardControlMode| PX4
-    CTRL -->|TrajectorySetpoint| PX4
-    CTRL -->|VehicleCommand| PX4
+- 静止。
+- 水平匀速和 XY 正弦运动。
+- 升沉。
+- 固定正负 `2°` roll 或 pitch。
+- 低频动态 `rollpitch`。
+- 同时包含水平运动、升沉和姿态运动的 `combined`。
 
-    CTRL --> EST[甲板状态估计与预测]
-    EST --> P47[P4.7 跟踪]
-    EST --> MPC[可选 P8B MPC]
-    P47 --> CTRL
-    MPC -->|失败或终端阶段回退 P4.7| CTRL
+运动控制器支持确定性 reset、固定更新频率和固定随机种子。Ground Truth 发布完整位置、姿态、线速度和角速度，只能供传感器仿真与离线评测使用。
 
-    CTRL --> DIAG[/landing/* 诊断话题/]
-    GT --> EVAL[离线评测]
-    DIAG --> EVAL
-```
+### 3.2 船舶 GNSS
 
-Ground Truth 只能进入仿真传感器和离线评测器。控制器与 ArUco 检测器禁止订阅：
+传感器节点发布：
 
 ```text
-/simulation/deck/ground_truth
+/deck/gps/fix       sensor_msgs/msg/NavSatFix
+/deck/gps/velocity  geometry_msgs/msg/Vector3Stamped
 ```
 
-## 3. ROS 2 包职责
+支持理想/含噪配置、采样频率、固定延迟、丢包、固定种子和 reset 后确定性复现。速度语义为 world ENU；控制器统一转换到 local NED。
 
-| 包 | 职责 |
-| --- | --- |
-| `aruco_detector` | 图像同步、四尺度 Marker 检测、有状态选择、PnP 完整位姿、统一甲板中心补偿和调试图像。 |
-| `moving_deck_sim` | 水平、升沉、横摇/纵摇和组合甲板运动，确定性 reset，船舶 GNSS 传感器模型和评测 Ground Truth。 |
-| `aruco_precision_landing_cpp` | PX4 Offboard、GNSS 会合、视觉接管、状态估计、P4.7/MPC 跟踪、着陆窗口、下降和触地保持。 |
+### 3.3 ArUco
 
-控制器中的主要纯逻辑模块：
-
-| 模块 | 职责 |
-| --- | --- |
-| `coordinate_transform` | ENU/NED 与三维刚体变换。 |
-| `geodetic_converter` | WGS84、ECEF 和局部 ENU 转换。 |
-| `vehicle_pose_history` | PX4→ROS 时间映射和图像采样时刻机体位姿插值。 |
-| `gnss_rendezvous_guidance` | GNSS 稳定性、跳变、超时、目标限幅和移动中心搜索。 |
-| `visual_handover_guidance` | GNSS—视觉一致性、平滑接管、测量过滤和丢失恢复。 |
-| `target_state_estimator` | 三维常速度 Kalman Filter、离群处理和长时重初始化。 |
-| `motion_predictor` | 基于观测年龄的受限短时位置预测。 |
-| `adaptive_relative_velocity_gain` | 基于估计甲板加速度的 P4.7 连续增益调度。 |
-| `moving_target_tracking_controller` | 预测位置、速度前馈、相对速度阻尼和控制限幅。 |
-| `relative_mpc_controller` | 四状态二维相对双积分 MPC、约束和 warm start。 |
-| `deck_attitude_estimator`、`landing_window` | 视觉甲板倾角和规则式着陆窗口。 |
-| `deck_plane_geometry` | P8C-0 纯数学甲板平面、X500 四滑橇端点间隙、法向/切向相对运动；仅供 shadow 诊断。 |
-| `relative_descent_controller`、`vertical_state_estimator` | 相对高度分阶段下降与垂直状态估计。 |
-| `final_descent_controller`、`touchdown_detector` | 终端下降和多源触地候选/确认。 |
-| `touchdown_hold_controller` | 升沉甲板接触后的相对垂直保持。 |
-| `terminal_contact_stabilization` | 固定正 T1 终端主轴法向整形、状态化接触锚点、切向阻尼、接触顺应、受限预压和姿态安全保护。 |
-
-## 4. 坐标与时间契约
-
-统一坐标系：
+检测器发布：
 
 ```text
-camera_optical：右、下、前
-base_link_frd：前、右、下
-local_ned：北、东、下
-world_enu：东、北、上
+/aruco/pose
+/aruco/visible
+/aruco/debug_image
 ```
 
-视觉位姿链：
+四尺度 Marker 使用有状态选择，避免近距离尺寸切换抖动；PnP 位姿先补偿到统一甲板参考点，再进入坐标链。相机模型支持普通和近距配置。
+
+## 4. 坐标和时间
+
+统一坐标：
+
+- `camera_optical`：右、下、前。
+- `base_link_frd`：前、右、下。
+- `local_ned`：北、东、下。
+- Gazebo world：ENU。
+
+视觉位姿使用完整刚体链：
 
 ```text
 T_local_ned_marker
-=
-T_local_ned_body_frd
-*
-T_body_frd_camera_optical
-*
-T_camera_optical_marker
+= T_local_ned_body_frd
+* T_body_frd_camera_optical
+* T_camera_optical_marker
 ```
 
-- `T_camera_optical_marker` 来自 ArUco PnP；
-- `T_body_frd_camera_optical` 来自明确方向的 YAML 外参；
-- `T_local_ned_body_frd` 来自 PX4 `VehicleOdometry`，并检查 `pose_frame`；
-- 当前下视相机 FRD 平移为 `[0, 0, 0.14] m`。
+控制器检查 PX4 odometry `pose_frame`，使用 `VehicleLocalPosition.ref_lat/ref_lon/ref_alt` 建立 WGS84/local NED 参考。图像时间与 PX4 时间先映射到统一 ROS 时间域，再从 `VehiclePoseHistory` 插值图像采样时刻的机体位姿，避免把当前姿态错误用于历史图像。
 
-船舶 WGS84 位置使用 PX4 `VehicleLocalPosition.ref_lat/ref_lon/ref_alt` 转换为 local ENU，再统一转换为 local NED。GNSS 高度不直接控制会合或下降高度。
+## 5. 引导和视觉接管
 
-视觉估计使用图像采样时间而不是消息到达时间。控制器维护 PX4 位姿历史，将 PX4 时间映射到 ROS 仿真时间，并插值获得图像曝光时刻的机体位姿。详细约束见[坐标系与变换契约](COORDINATE_FRAMES.md)。
+GNSS 会合路径会：
 
-## 5. 主要 ROS 接口
+- 校验 WGS84 输入、年龄、跳变和速度。
+- 将船舶位置转换为 PX4 local NED。
+- 限制位置目标变化率和搜索半径。
+- 以实时船舶位置为 ArUco 搜索中心。
 
-### 5.1 传感器与 PX4 输入
+视觉接管会：
 
-| 话题 | 类型 | 语义 |
-| --- | --- | --- |
-| `/deck/gps/fix` | `sensor_msgs/msg/NavSatFix` | 船舶 WGS84 粗位置。 |
-| `/deck/gps/velocity` | `geometry_msgs/msg/TwistStamped` | 船舶 `world_enu` 速度。 |
-| `/aruco/pose` | `geometry_msgs/msg/PoseStamped` | Marker 在 `camera_optical` 中的 PnP 位姿。 |
-| `/aruco/visible` | `std_msgs/msg/Bool` | Marker 可见性。 |
-| `/fmu/out/vehicle_status` | `px4_msgs/msg/VehicleStatus` | Offboard 与 Armed 状态；启动时可 remap 到版本化话题。 |
-| `/fmu/out/vehicle_local_position` | `px4_msgs/msg/VehicleLocalPosition` | local NED 状态和地理参考。 |
-| `/fmu/out/vehicle_odometry` | `px4_msgs/msg/VehicleOdometry` | `body_frd → local_ned` 完整位姿与速度。 |
-| `/fmu/out/vehicle_land_detected` | `px4_msgs/msg/VehicleLandDetected` | 多源触地证据之一。 |
+- 校验完整外参、消息 frame、观测顺序和测量跳变。
+- 比较 GNSS 与视觉甲板位置一致性。
+- 对 GNSS 目标和视觉目标做有限时间线性混合。
+- 短时丢帧保持并衰减前馈，长时丢失恢复到 GNSS。
 
-### 5.2 PX4 输出
+## 6. 状态估计和预测
 
-| 话题 | 用途 |
-| --- | --- |
-| `/fmu/in/offboard_control_mode` | 声明 PX4 位置控制以及需要的前馈通道。 |
-| `/fmu/in/trajectory_setpoint` | local NED 位置、速度和可选水平加速度目标。 |
-| `/fmu/in/vehicle_command` | Offboard 与 Arm 命令。 |
+三维常速度 Kalman Filter 使用视觉采样时间更新甲板位置、速度和协方差，处理：
 
-### 5.3 核心诊断输出
+- 重复或倒退时间。
+- 异常时间间隔。
+- Mahalanobis 离群点。
+- 短时预测和长时重初始化。
 
-| 话题组 | 内容 |
-| --- | --- |
-| `/landing/state`、`/landing/guidance_source` | 状态机和 GNSS/视觉/恢复来源。 |
-| `/landing/deck_gnss_pose_ned`、`/landing/marker_pose_ned` | 粗引导与视觉甲板位置。 |
-| `/landing/estimated_deck_odometry`、`/landing/predicted_deck_pose` | 甲板估计状态和短时预测。 |
-| `/landing/effective_relative_velocity_gain`、`/landing/estimated_deck_acceleration` | P4.7 增益调度诊断。 |
-| `/landing/relative_mpc/*` | 求解状态、耗时、迭代数、目标值、约束、首控制和预测路径。 |
-| `/landing/deck_plane/*` | P8C-0 向上法向、机体/四滑橇间隙、首接触点、法向速度、平面内误差、Marker 法向变化率和切换跳变；仅为 shadow 诊断。 |
-| `/landing/window_*`、`/landing/relative_height*` | 着陆窗口和相对高度下降。 |
-| `/landing/touchdown_*`、`/landing/final_descent_phase` | 最终下降、触地证据与接触后保持。 |
-
-## 6. 引导、跟踪与下降
-
-远距离阶段使用船舶 GNSS，会合后切换视觉。普通 GNSS 不参与最终精确下降和低高度横向接管。
-
-默认 P4.7 水平跟踪：
+主要输出：
 
 ```text
-预测甲板位置目标
-+ 甲板速度前馈
-+ 加速度感知相对速度阻尼
+/landing/estimated_deck_odometry
+/landing/predicted_deck_pose
+/landing/vertical_state
+/landing/raw_relative_height
+/landing/relative_vertical_velocity
 ```
 
-显式选择 `tracking.mode=RELATIVE_MPC` 时，自由飞行阶段增加 MPC 水平加速度前馈。求解失败、输入非法、输出非有限或终端阶段 handoff 时使用完整 P4.7 输出。
+受限预测器限制预测时域和最大位置偏移。垂直估计独立处理低高度甲板 z、相对高度和相对垂直速度；下视相机 FRD 外参为 `[0, 0, 0.14] m`。
 
-下降使用相对甲板高度：
+## 7. 水平跟踪
 
-```text
-relative_height = deck_z_ned - uav_z_ned
-position_sp_z = predicted_deck_z_ned - height_reference
-```
+### 7.1 默认规则式控制
 
-着陆窗口只有在 Marker 新鲜、水平误差和相对速度合格、甲板倾角合格且估计有效时才会打开，并包含迟滞和连续满足时间。窗口恶化时暂停，严重失效时恢复爬升或回退 GNSS。
+默认模式使用预测甲板位置、甲板速度前馈、位置反馈和相对速度阻尼。相对速度增益根据估计甲板加速度连续调度，以兼顾匀速与换向场景。
 
-## 7. 状态机
+控制器对位置目标、速度前馈、加速度前馈和目标变化率分别限幅。观测变旧时前馈平滑衰减，严重失效时进入恢复路径。
+
+### 7.2 可选相对 MPC
+
+显式选择 `tracking.mode=RELATIVE_MPC` 后启用四状态二维相对 MPC：
+
+- 状态为水平位置误差和相对速度。
+- 输出为 `TrajectorySetpoint.acceleration[x,y]` 前馈。
+- 固定稀疏 QP 使用 OSQP `v1.0.0` 与 OsqpEigen `v0.11.2`。
+- 支持输入、速度和控制增量约束、warm start、求解耗时与状态诊断。
+
+任一输入非法、求解失败、超时或输出非有限时，本周期使用并行维护的完整规则式输出。进入接触敏感终端阶段后主动切换为 `TERMINAL_RULE_BASED_TRACKING`，该切换不是 solver failure。
+
+## 8. 着陆窗口与相对下降
+
+着陆窗口联合检查：
+
+- Marker 可见性和观测年龄。
+- 水平误差和水平相对速度。
+- 甲板倾角。
+- 状态估计与预测有效性。
+- 相对高度。
+
+窗口包含进入/退出迟滞和连续满足时间，并发布拒绝原因。相对下降使用甲板相对高度而不是固定世界高度；高、中、低三段下降速率独立限幅，甲板垂直速度默认作为前馈。
+
+窗口短时关闭时暂停下降；严重失效时恢复到更高相对高度。恢复后锁止再次下降，必须重新完成视觉接管或重启任务才能解除。
+
+## 9. 最终下降与触地
+
+最终下降必须显式启用，并要求相对下降已启用且测试高度严格为 `0.50 m`。下降参考分为接近、近接触和安全终端段，最低命令相对高度为 `0.05 m`。
+
+`TouchdownDetector` 联合：
+
+- PX4 land detector。
+- 视觉相对高度。
+- 垂直相对速度。
+- 动态平台水平相对速度。
+- 在线视觉甲板平面给出的滑橇间隙证据。
+
+视觉高度不能单独确认触地。候选必须连续满足并带迟滞；候选期间冻结下降参考，确认后进入 `TOUCHDOWN_HOLD` 并锁存。
+
+升沉甲板接触后保持甲板相对高度和相对垂直速度。固定正 `+2° roll/pitch` 还可显式启用终端接触稳定化：
+
+- 甲板法向到有限水平加速度偏置的平滑映射。
+- 接触锚点和中心顺应。
+- 切向速度阻尼。
+- 候选/保持阶段的受限参考预压与向下加速度预压。
+- 姿态与角速度安全监视器。
+
+该功能继续使用 PX4 Offboard position setpoint，不发送 attitude setpoint。
+
+## 10. 状态机与恢复
+
+主路径：
 
 ```text
 INIT
@@ -195,33 +198,43 @@ INIT
 → TRACK_TARGET
 → WAIT_LANDING_WINDOW
 → DESCEND
-→ TEST_HEIGHT_HOLD
 → FINAL_DESCENT
 → TOUCHDOWN_CANDIDATE_HOLD
 → TOUCHDOWN_HOLD
+→ DONE
 ```
 
-恢复路径：
+恢复路径包括 `RECOVER_TO_GNSS`、`RECOVER_CLIMB` 和 `ABORT`。终端触地开始后发生恢复视为本轮失败，不能用再次下降覆盖首次失败。
 
-```text
-视觉长时丢失 → RECOVER_TO_GNSS → ACQUIRE_ARUCO / RENDEZVOUS_GNSS
-下降条件严重失效 → RECOVER_CLIMB → WAIT_LANDING_WINDOW
-不可恢复的 PX4 或输入错误 → ABORT
-```
+## 11. 实验与结果
 
-恢复后会锁止再次自动下降，必须重新完成视觉接管或重启任务才解除。
+实验工具支持单轮、顺序批量、seed 展开、resume、失败分类、轻量/诊断 Bag、参数快照、离线重评测和聚合。
 
-## 8. 安全边界
+冻结数据的主要结论：
 
-- 默认 `descent.enabled=false`、`final_descent.enabled=false`、`enable_auto_land=false`；
-- PX4 状态无效时不发布有效运动目标；
-- NaN、Inf、非法四元数、过期视觉和异常时间不得进入 PX4 setpoint；
-- 位置、速度、加速度和目标变化率均限幅；
-- 观测过期时禁止继续正常速度下降；
-- `rollpitch`、`combined`、负倾角和 dynamic attitude 场景仍禁止最终下降；固定正 `+2° roll/pitch` 只在 relative descent + 严格 `0.50 m` + final descent + P8C-4 active terminal stabilization 四条件下开放；
-- 触地确认后只执行 Offboard 相对保持，不发送 `NAV_LAND` 或 Disarm；
-- SITL Ground Truth 只用于传感器模型和离线评测。
+- smoke：`20/27`，7 个失败均为 `SAFETY_GATE_FAILURE`。
+- static/constant02 正式基线：`40/40`。
+- 正式消融：`60/60`。
+- 关闭组合：`30 NOT_APPLICABLE`，不进入失败分母。
+- 正式总体观测成功率：`100/100`，Wilson 95% CI `[0.963, 1.000]`。
 
-P8C-3 失败证据继续保留，P8C-4 已完成固定 T1 验收并关闭设计门。当前方案在 Offboard position setpoint 内实现终端稳定化、接触顺应与受限预压，生产控制仍不发布 PX4 attitude setpoint。fixed T1 结论不能外推到负倾角、动态 roll/pitch 或 combined；这些能力必须另立阶段。决策与关闭结论见[独立设计门](../plans/P8C3_ATTITUDE_ALIGNMENT_DECISION_GATE.md)。
+完整论文统计和哈希见[论文结果](../results/PAPER_RESULTS.md)与[数据来源](../results/DATA_PROVENANCE.md)。
 
-运行命令和排查方式见[操作指南](../guides/OPERATIONS.md)，阶段状态与证据见[计划](../plans/)和[验收记录](../validation/)。
+## 12. 已验证范围
+
+- 静止、`0.2 m/s`、`0.4 m/s` 和 XY 正弦安全高度跟踪。
+- 静止、水平匀速和升沉相对下降及真实接触。
+- 四状态相对 MPC 的安全高度、下降、接触与规则式回退。
+- 固定正 `+2° roll/pitch` 的终端接触稳定化和 10 秒保持。
+- 全工作区最近冻结记录为 `340 tests, 0 failures, 0 skipped`。
+
+固定正倾角的成功不能外推到负倾角、动态 `rollpitch` 或 `combined`。
+
+## 13. 安全边界
+
+- 默认 `descent.enabled=false`、final descent disabled。
+- `NAV_LAND / Automatic Disarm = 0 / 0`。
+- 负固定倾角、动态姿态和 combined 禁止下降与接触。
+- Ground Truth 不得进入控制器、窗口、估计器或状态机。
+- 非有限 setpoint、非法四元数、无效 PX4 frame 和过期观测必须拒绝。
+- 实机自动解锁不属于默认配置；所有自动动作仅面向 SITL 并需显式授权。

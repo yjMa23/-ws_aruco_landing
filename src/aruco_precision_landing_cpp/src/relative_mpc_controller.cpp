@@ -130,7 +130,7 @@ const char * relative_mpc_status_name(RelativeMpcStatus status)
     case RelativeMpcStatus::kInvalidSolution:
       return "INVALID_SOLUTION";
     case RelativeMpcStatus::kTerminalPhaseDisengaged:
-      return "TERMINAL_PHASE_P47";
+      return "TERMINAL_RULE_BASED_TRACKING";
   }
   return "UNKNOWN";
 }

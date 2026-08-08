@@ -38,7 +38,7 @@ px4_aruco_landing_node:
     target_state_estimator.reinitialize_gap_s: 2.0
     target_state_estimator.innovation_gate_mahalanobis: 5.0
 
-    # P5C 并行垂直估计器当前只发布调试结果，不接管 P5B 控制。
+    # vertical estimation 并行垂直估计器当前只发布调试结果，不接管 relative descent 控制。
     vertical_state_estimator.enabled: true
     vertical_state_estimator.process_acceleration_std_mps2: 0.40
     vertical_state_estimator.measurement_std_m: 0.05
@@ -52,12 +52,12 @@ px4_aruco_landing_node:
     vertical_state_estimator.innovation_gate_mahalanobis: 5.0
     vertical_state_estimator.prediction_horizon_s: 0.10
 
-    # P5C 对照结果：gain=1.0 同时改善静止与升沉相对高度跟踪。
+    # vertical estimation 对照结果：gain=1.0 同时改善静止与升沉相对高度跟踪。
     vertical_velocity_feedforward.enabled: true
     vertical_velocity_feedforward.deck_velocity_gain: 1.0
     vertical_velocity_feedforward.max_abs_mps: 0.60
 
-    # P6A 只并行发布触地候选/确认结果，不触发状态跳转或 Land/Disarm。
+    # touchdown evidence 只并行发布触地候选/确认结果，不触发状态跳转或 Land/Disarm。
     touchdown_detector.enabled: true
     touchdown_detector.px4_status_timeout_s: 0.20
     touchdown_detector.visual_timeout_s: 0.20
@@ -75,16 +75,16 @@ px4_aruco_landing_node:
     touchdown_detector.terminal_contact_max_vertical_speed_mps: 0.05
     touchdown_detector.candidate_required_duration_s: 0.50
 
-    # P8A 触地确认后锁存甲板相对高度；估计失效时保持最后安全世界系目标。
+    # heave touchdown 触地确认后锁存甲板相对高度；估计失效时保持最后安全世界系目标。
     touchdown_hold.max_target_rate_mps: 0.60
-    # P8C-4 可选预压参考独立限速；未提供目标时旧路径完全不变。
+    # terminal contact stabilization 可选预压参考独立限速；未提供目标时旧路径完全不变。
     touchdown_hold.max_reference_preload_rate_mps: 0.05
     # 静止甲板估计噪声实测峰值约 0.030 m/s；H1 理论峰值约 0.0628 m/s。
     # 使用迟滞只在可辨识升沉时随动，避免静止甲板噪声导致离板。
     touchdown_hold.motion_enter_speed_mps: 0.04
     touchdown_hold.motion_exit_speed_mps: 0.02
 
-    # P6B 默认关闭。0.50→0.25 m 快速接近，0.25 m 以下低速接触。
+    # final descent 默认关闭。0.50→0.25 m 快速接近，0.25 m 以下低速接触。
     final_descent.enabled: false
     final_descent.entry_height_m: 0.50
     final_descent.approach_rate_mps: 0.12
@@ -118,7 +118,7 @@ px4_aruco_landing_node:
     tracking.max_velocity_feedforward_acceleration_mps2: 1.0
     tracking.max_prediction_age_s: 0.75
 
-    # P8B 显式选择 tracking.mode=RELATIVE_MPC 后启用；默认仍使用 P4.7。
+    # relative MPC 显式选择 tracking.mode=RELATIVE_MPC 后启用；默认仍使用 adaptive rule-based tracking。
     relative_mpc.sample_period_s: 0.05
     relative_mpc.horizon_steps: 20
     relative_mpc.state_weights: [8.0, 8.0, 2.0, 2.0]
@@ -140,7 +140,7 @@ px4_aruco_landing_node:
     deck_attitude.filter_gain: 0.20
     deck_attitude.minimum_upward_normal_component: 0.50
 
-    # P8C-0 仅发布 shadow 几何，禁止接入控制、状态机、窗口、触地或 hold。
+    # deck-geometry shadow 仅发布 shadow 几何，禁止接入控制、状态机、窗口、触地或 hold。
     deck_plane_geometry.enabled: true
     # 独立 shadow 法向滤波；不得替代上方 production deck_attitude 或进入 landing window。
     deck_plane_geometry.normal_filter_gain: 0.08
@@ -158,7 +158,7 @@ px4_aruco_landing_node:
     deck_plane_geometry.marker_plane_offsets_m: [0.001, 0.002, 0.003, 0.004]
     deck_plane_geometry.apply_marker_plane_offset: true
 
-    # P8C-4：默认关闭且仅 shadow。场景名只用于启动白名单，法向只能来自视觉估计。
+    # terminal contact stabilization：默认关闭且仅 shadow。场景名只用于启动白名单，法向只能来自视觉估计。
     terminal_contact_stabilization.enabled: false
     terminal_contact_stabilization.shadow_only: true
     terminal_contact_stabilization.rehearsal_enabled: false
@@ -173,7 +173,7 @@ px4_aruco_landing_node:
     terminal_contact_stabilization.acceleration_bias_slew_rate_mps3: 0.80
     terminal_contact_stabilization.activation_duration_s: 0.50
     terminal_contact_stabilization.deactivation_duration_s: 0.30
-    # 不扩大 P8B 已冻结总水平 acceleration 上限。
+    # 不扩大 relative MPC 已冻结总水平 acceleration 上限。
     terminal_contact_stabilization.total_acceleration_limit_mps2: 1.50
     terminal_contact_stabilization.rehearsal_max_duration_s: 1.0
     # 确认触地后将相对高度参考缓慢压到 0.20 m，重新加载滑橇而非继续悬停卸载。

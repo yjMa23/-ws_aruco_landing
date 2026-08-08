@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""聚合 P7/P9 episode，输出分组 JSON、CSV、Markdown 和可选 PNG。"""
+"""聚合实验 episode，输出分组 JSON、CSV、Markdown 和可选 PNG。"""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from p7_experiment_utils import (
+from experiment_utils import (
     FAILURE_TYPES,
     METRIC_FIELDS,
     atomic_write_json,
@@ -88,7 +88,7 @@ EPISODE_BASE_FIELDS = (
 
 
 def parse_arguments() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Aggregate a P7/P9 batch directory.")
+    parser = argparse.ArgumentParser(description="Aggregate an experiment batch directory.")
     parser.add_argument("batch_directory", type=Path)
     parser.add_argument(
         "--no-plots", action="store_true", help="skip optional matplotlib plots"
@@ -282,7 +282,7 @@ def write_markdown(
 ) -> None:
     overall = summary["overall"]
     lines = [
-        "# P9 Results Summary",
+        "# paper evaluation Results Summary",
         "",
         f"- Batch: `{batch_dir.name}`",
         f"- Generated: `{summary['generated_at']}`",
@@ -372,7 +372,7 @@ def write_markdown(
                 f"- `{row.get('episode_id')}`: `{row.get('failure_reason')}` — "
                 f"`{row.get('episode_directory')}`"
             )
-    (batch_dir / "P9_RESULTS_SUMMARY.md").write_text(
+    (batch_dir / "RESULTS_SUMMARY.md").write_text(
         "\n".join(lines) + "\n", encoding="utf-8"
     )
 
@@ -451,8 +451,8 @@ def generate_plots(batch_dir: Path, summary: dict[str, Any]) -> dict[str, Any]:
     )
     comparison = [key for key in ("B0", "B3") if key in summary["by_method"]]
     save_bar(
-        "mpc_vs_p47_horizontal_rmse.png",
-        "MPC vs P4.7 horizontal RMSE",
+        "mpc_vs_rule_based_horizontal_rmse.png",
+        "MPC vs adaptive rule-based tracking horizontal RMSE",
         comparison,
         [
             summary["by_method"][key]["metrics"]["horizontal_error_rmse_m"]["mean"]

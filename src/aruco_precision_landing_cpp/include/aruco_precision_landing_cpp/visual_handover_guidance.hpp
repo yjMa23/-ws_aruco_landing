@@ -40,7 +40,7 @@ struct VisualHandoverParameters
  * @brief 实现视觉测量过滤、GNSS 一致性检查、线性接管和目标限幅。
  *
  * 该类只处理 local NED 数学量和调用方提供的秒时间，不依赖 ROS 节点或消息类型。
- * 高度控制不在本类中实现，P2D 调用方必须始终保持安全会合高度。
+ * 高度控制不在本类中实现，GNSS-vision handover 调用方必须始终保持安全会合高度。
  */
 class VisualHandoverGuidance
 {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""顺序运行 legacy P7 与统一 P9 实验批次。"""
+"""顺序运行批量实验。"""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from p7_experiment_utils import (
+from experiment_utils import (
     SUPPORTED_METHODS,
     SUPPORTED_SCENARIOS,
     atomic_write_json,
@@ -58,7 +58,7 @@ MATRIX_CSV_FIELDS = (
 
 
 def parse_arguments() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run a sequential P7/P9 experiment batch.")
+    parser = argparse.ArgumentParser(description="Run a sequential experiment batch.")
     parser.add_argument("config", type=Path, help="Experiment YAML configuration")
     parser.add_argument("--batch-id", help="Explicit batch ID; required to resume a known batch")
     parser.add_argument("--resume", action="store_true", help="Resume a known batch")

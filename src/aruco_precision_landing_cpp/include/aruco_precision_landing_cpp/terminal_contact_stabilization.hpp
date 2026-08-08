@@ -15,7 +15,7 @@ namespace aruco_precision_landing_cpp
 {
 
 /**
- * @brief P8C-4 终端稳定化允许介入的离散阶段。
+ * @brief terminal contact stabilization 终端稳定化允许介入的离散阶段。
  */
 enum class TerminalStabilizationPhase
 {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""运行一轮 P7/P8A SITL 实验并保存结构化结果。"""
+"""运行一轮 SITL 实验并保存结构化结果。"""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from typing import Any, TextIO
 
 import yaml
 
-from p7_experiment_utils import (
+from experiment_utils import (
     FAILURE_TYPES,
     SUPPORTED_BAG_POLICIES,
     SUPPORTED_EVALUATORS,
@@ -114,7 +114,7 @@ def completion_requirement(
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run one P7/P8A touchdown SITL episode."
+        description="Run one SITL experiment episode."
     )
     parser.add_argument("--method", choices=SUPPORTED_METHODS, default="B0")
     parser.add_argument("--scenario", choices=SUPPORTED_SCENARIOS, required=True)
@@ -153,13 +153,13 @@ def parse_arguments() -> argparse.Namespace:
         "--experiment-profile",
         choices=EXPERIMENT_PROFILES,
         default="touchdown",
-        help="state-driven completion profile for staged P8C-4 validation",
+        help="state-driven completion profile for terminal contact stabilization validation",
     )
     parser.add_argument(
         "--terminal-stabilization-mode",
         choices=TERMINAL_STABILIZATION_MODES,
         default="disabled",
-        help="P8C-4 terminal stabilization mode represented by this episode",
+        help="terminal contact stabilization mode represented by this episode",
     )
     parser.add_argument(
         "--evaluator",
@@ -179,10 +179,10 @@ def parse_arguments() -> argparse.Namespace:
     )
     parser.add_argument("--record-camera-debug", action="store_true")
     parser.add_argument(
-        "--p8c3-touchdown",
+        "--tilted-deck-touchdown",
         action="store_true",
         help=(
-            "run the strict P8C-3 evaluator; valid for static, constant02, and "
+            "run the strict fixed-tilt touchdown evaluator; valid for static, constant02, and "
             "positive fixed +2 degree tilt profiles"
         ),
     )
@@ -423,7 +423,7 @@ class RosStateMonitor:
 
         if not rclpy.ok():
             rclpy.init(args=None)
-        self._node = rclpy.create_node(f"p7_state_monitor_{os.getpid()}")
+        self._node = rclpy.create_node(f"experiment_state_monitor_{os.getpid()}")
 
         def callback(message: String) -> None:
             state = str(message.data)
@@ -604,34 +604,34 @@ def evaluator_path_for_scenario(
     workspace_dir: Path,
     scenario: str,
     *,
-    p8c3_touchdown: bool = False,
-    use_p8c_evaluator: bool = False,
+    tilted_deck_touchdown: bool = False,
+    use_tilted_deck_evaluator: bool = False,
     experiment_profile: str = "touchdown",
     evaluator: str = "auto",
 ) -> Path:
-    """根据方法、场景和 profile 自动选择 P4/P5B/P6B/P8A/P8C evaluator。"""
+    """根据方法、场景和 profile 自动选择 horizontal tracking/relative descent/final descent/heave touchdown/tilted-deck evaluator。"""
 
     explicit = {
-        "p4": "evaluate_p4_bag.py",
-        "p5b": "evaluate_p5b_bag.py",
-        "p6b": "evaluate_p6b_touchdown.py",
-        "p8a": "evaluate_p8a_heave_touchdown.py",
-        "p8c": "evaluate_p8c_tilted_deck.py",
+        "horizontal_tracking": "evaluate_horizontal_tracking.py",
+        "relative_descent": "evaluate_relative_descent.py",
+        "final_descent_touchdown": "evaluate_final_descent_touchdown.py",
+        "heave_touchdown": "evaluate_heave_touchdown.py",
+        "tilted_deck": "evaluate_tilted_deck.py",
     }
     if evaluator != "auto":
         if evaluator not in explicit:
             raise ValueError(f"unsupported evaluator route: {evaluator}")
         filename = explicit[evaluator]
-    elif p8c3_touchdown or use_p8c_evaluator:
-        filename = "evaluate_p8c_tilted_deck.py"
+    elif tilted_deck_touchdown or use_tilted_deck_evaluator:
+        filename = "evaluate_tilted_deck.py"
     elif experiment_profile == "safe-altitude":
-        filename = "evaluate_p4_bag.py"
+        filename = "evaluate_horizontal_tracking.py"
     elif experiment_profile in {"safe-descent", "rehearsal"}:
-        filename = "evaluate_p5b_bag.py"
+        filename = "evaluate_relative_descent.py"
     elif scenario.startswith("heave_h"):
-        filename = "evaluate_p8a_heave_touchdown.py"
+        filename = "evaluate_heave_touchdown.py"
     else:
-        filename = "evaluate_p6b_touchdown.py"
+        filename = "evaluate_final_descent_touchdown.py"
     return workspace_dir / "scripts" / filename
 
 
@@ -679,7 +679,7 @@ def _execute_evaluator(
             json_path,
             require_touchdown_field=(
                 "touchdown" in label or label in {
-                    "evaluate_p6b_touchdown", "evaluate_p8a_heave_touchdown"
+                    "evaluate_final_descent_touchdown", "evaluate_heave_touchdown"
                 }
             ),
         )
@@ -696,40 +696,40 @@ def run_evaluator(
     episode_dir: Path,
     run_log: TextIO,
     *,
-    p8c3_touchdown: bool = False,
+    tilted_deck_touchdown: bool = False,
     experiment_profile: str = "touchdown",
     terminal_stabilization_mode: str = "disabled",
     evaluator_route: str = "auto",
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str | None]:
-    """运行主评测；static/constant02 触地同时执行旧 P6B 回归。"""
+    """运行主评测；static/constant02 触地同时执行旧 final descent 回归。"""
 
-    use_p8c_evaluator = bool(
-        p8c3_touchdown or terminal_stabilization_mode != "disabled"
+    use_tilted_deck_evaluator = bool(
+        tilted_deck_touchdown or terminal_stabilization_mode != "disabled"
     )
     evaluator = evaluator_path_for_scenario(
         workspace_dir,
         scenario,
-        p8c3_touchdown=p8c3_touchdown,
-        use_p8c_evaluator=use_p8c_evaluator,
+        tilted_deck_touchdown=tilted_deck_touchdown,
+        use_tilted_deck_evaluator=use_tilted_deck_evaluator,
         experiment_profile=experiment_profile,
         evaluator=evaluator_route,
     )
     base_command = [sys.executable, str(evaluator), str(bag_path)]
-    if evaluator.name == "evaluate_p8c_tilted_deck.py":
+    if evaluator.name == "evaluate_tilted_deck.py":
         base_command.extend(["--scenario", scenario, "--seed", str(seed)])
         if experiment_profile in {"safe-descent", "rehearsal"}:
-            base_command.append("--p8c2-safe-descent")
-        if p8c3_touchdown or experiment_profile == "touchdown":
-            base_command.append("--p8c3-touchdown")
+            base_command.append("--fixed-tilt-safe-descent")
+        if tilted_deck_touchdown or experiment_profile == "touchdown":
+            base_command.append("--tilted-deck-touchdown")
         if terminal_stabilization_mode != "disabled":
             base_command.extend(
                 [
-                    "--p8c4-stabilization",
-                    "--p8c4-mode",
+                    "--terminal-stabilization",
+                    "--terminal-stabilization-mode",
                     terminal_stabilization_mode,
                 ]
             )
-    elif scenario == "constant02" and evaluator.name == "evaluate_p6b_touchdown.py":
+    elif scenario == "constant02" and evaluator.name == "evaluate_final_descent_touchdown.py":
         base_command.append("--require-moving-deck")
     evaluation, error = _execute_evaluator(
         base_command,
@@ -745,10 +745,10 @@ def run_evaluator(
     if (
         experiment_profile == "touchdown"
         and scenario in {"static", "constant02"}
-        and evaluator.name != "evaluate_p6b_touchdown.py"
+        and evaluator.name != "evaluate_final_descent_touchdown.py"
     ):
         legacy = evaluator_path_for_scenario(
-            workspace_dir, scenario, experiment_profile="touchdown", evaluator="p6b"
+            workspace_dir, scenario, experiment_profile="touchdown", evaluator="final_descent_touchdown"
         )
         legacy_command = [sys.executable, str(legacy), str(bag_path)]
         if scenario == "constant02":
@@ -881,21 +881,21 @@ def run_episode(args: argparse.Namespace) -> dict[str, Any]:
         )
     if experiment_profile == "touchdown" and args.touchdown_hold < 10.0:
         raise ValueError("touchdown hold must be at least 10 seconds")
-    p8c3_touchdown = bool(getattr(args, "p8c3_touchdown", False))
-    if p8c3_touchdown and args.scenario not in {
+    tilted_deck_touchdown = bool(getattr(args, "tilted_deck_touchdown", False))
+    if tilted_deck_touchdown and args.scenario not in {
         "static",
         "constant02",
         "tilt_roll_pos_2deg",
         "tilt_pitch_pos_2deg",
     }:
-        raise ValueError("P8C-3 mode supports static, constant02, and positive fixed +2 degree tilt only")
+        raise ValueError("fixed-tilt touchdown mode supports static, constant02, and positive fixed +2 degree tilt only")
     positive_tilt = args.scenario in {
         "tilt_roll_pos_2deg",
         "tilt_pitch_pos_2deg",
     }
     if terminal_stabilization_mode != "disabled" and not positive_tilt:
         raise ValueError(
-            "P8C-4 terminal stabilization automation supports positive fixed +2 degree tilt only"
+            "terminal contact stabilization automation supports positive fixed +2 degree tilt only"
         )
     valid_profile_mode_pairs = {
         ("safe-altitude", "shadow"),
@@ -908,16 +908,16 @@ def run_episode(args: argparse.Namespace) -> dict[str, Any]:
         terminal_stabilization_mode,
     ) not in valid_profile_mode_pairs:
         raise ValueError(
-            "terminal stabilization mode does not match the staged experiment profile"
+            "terminal stabilization mode does not match the experiment profile"
         )
     if terminal_stabilization_mode == "active":
-        p8c3_touchdown = True
+        tilted_deck_touchdown = True
 
     completion_states, completion_duration_s = completion_requirement(
         experiment_profile, args.touchdown_hold
     )
 
-    batch_id = args.batch_id or make_batch_id("p9_single")
+    batch_id = args.batch_id or make_batch_id("single_experiment")
     episode_id = args.episode_id or make_episode_id(
         batch_id,
         args.scenario,
@@ -957,7 +957,7 @@ def run_episode(args: argparse.Namespace) -> dict[str, Any]:
         if method == "B4" and not vertical_ff_enabled:
             raise ValueError("B4 requires validated vertical feedforward")
         if method == "B5" and terminal_stabilization_mode == "disabled":
-            raise ValueError("B5 requires staged terminal stabilization")
+            raise ValueError("B5 requires terminal stabilization")
         if method != "B5" and terminal_stabilization_mode != "disabled":
             raise ValueError("terminal stabilization is only authorized for B5")
     start_command = build_start_command(
@@ -993,7 +993,7 @@ def run_episode(args: argparse.Namespace) -> dict[str, Any]:
             "vertical_velocity_feedforward_gain": vertical_ff_gain,
             "vertical_velocity_feedforward_max_mps": vertical_ff_max,
             "evaluator": evaluator_route,
-            "p8c3_touchdown": p8c3_touchdown,
+            "tilted_deck_touchdown": tilted_deck_touchdown,
             "experiment_profile": experiment_profile,
             "terminal_stabilization_mode": terminal_stabilization_mode,
             "completion_states": sorted(completion_states),
@@ -1047,7 +1047,7 @@ def run_episode(args: argparse.Namespace) -> dict[str, Any]:
         "success_bag_policy": success_bag_policy,
         "failure_bag_policy": failure_bag_policy,
         "record_camera_debug": args.record_camera_debug,
-        "p8c3_touchdown": p8c3_touchdown,
+        "tilted_deck_touchdown": tilted_deck_touchdown,
         "experiment_profile": experiment_profile,
         "terminal_stabilization_mode": terminal_stabilization_mode,
         "completion_states": sorted(completion_states),
@@ -1093,7 +1093,7 @@ def run_episode(args: argparse.Namespace) -> dict[str, Any]:
                 f"evaluator={evaluator_route}",
                 f"success_bag_policy={success_bag_policy}",
                 f"failure_bag_policy={failure_bag_policy}",
-                f"p8c3_touchdown={str(p8c3_touchdown).lower()}",
+                f"tilted_deck_touchdown={str(tilted_deck_touchdown).lower()}",
                 f"experiment_profile={experiment_profile}",
                 f"terminal_stabilization_mode={terminal_stabilization_mode}",
                 "relative_descent=" + str(
@@ -1257,7 +1257,7 @@ def run_episode(args: argparse.Namespace) -> dict[str, Any]:
                 bag_path,
                 episode_dir,
                 run_log,
-                p8c3_touchdown=p8c3_touchdown,
+                tilted_deck_touchdown=tilted_deck_touchdown,
                 experiment_profile=experiment_profile,
                 terminal_stabilization_mode=terminal_stabilization_mode,
                 evaluator_route=evaluator_route,

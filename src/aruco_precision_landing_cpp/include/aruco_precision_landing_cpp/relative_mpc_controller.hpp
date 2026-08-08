@@ -17,7 +17,7 @@ namespace aruco_precision_landing_cpp
 {
 
 /**
- * @brief P8B 水平相对运动 MPC 的连续时间系统矩阵。
+ * @brief relative MPC 水平相对运动 MPC 的连续时间系统矩阵。
  */
 struct RelativeMpcContinuousModel
 {
@@ -27,7 +27,7 @@ struct RelativeMpcContinuousModel
 };
 
 /**
- * @brief P8B 水平相对运动 MPC 的离散时间系统矩阵。
+ * @brief relative MPC 水平相对运动 MPC 的离散时间系统矩阵。
  */
 struct RelativeMpcDiscreteModel
 {
@@ -64,7 +64,7 @@ enum class RelativeMpcStatus
 const char * relative_mpc_status_name(RelativeMpcStatus status);
 
 /**
- * @brief P8B 水平相对运动线性 MPC 参数。
+ * @brief relative MPC 水平相对运动线性 MPC 参数。
  */
 struct RelativeMpcParameters
 {
@@ -158,7 +158,7 @@ public:
    * @brief 使用当前相对状态和可测甲板运动求解一个控制周期。
    *
    * @param input 相对状态、甲板速度、可选甲板加速度、上一控制和实际周期。
-   * @return 始终返回有限诊断；输入非法、求解失败或解无效时要求回退 P4.7。
+   * @return 始终返回有限诊断；输入非法、求解失败或解无效时要求回退 adaptive rule-based tracking。
    */
   RelativeMpcResult solve(const RelativeMpcInput & input);
 
@@ -189,7 +189,7 @@ public:
    * @brief 判定本周期是否允许向 PX4 发布 MPC 水平加速度前馈。
    *
    * FINAL_DESCENT 及后续接触候选/确认保持阶段必须停用 MPC 加速度，改用并行
-   * P4.7 指令，避免横向加速度经姿态耦合破坏已验收的 P6B/P8A 终端接触行为。
+   * adaptive rule-based tracking 指令，避免横向加速度经姿态耦合破坏已验收的 final descent/heave touchdown 终端接触行为。
    * 求解失败时同样禁止发布加速度。
    *
    * @param solver_success 本周期求解结果是否为严格 solved 且输出有限。

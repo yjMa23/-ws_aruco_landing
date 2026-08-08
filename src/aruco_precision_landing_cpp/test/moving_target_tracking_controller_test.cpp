@@ -159,28 +159,28 @@ TEST(MovingTargetTrackingControllerTest, RelativeMpcDoesNotDuplicateRelativeVelo
   EXPECT_DOUBLE_EQ(*command->effective_relative_velocity_gain, 0.0);
 }
 
-TEST(MovingTargetTrackingControllerTest, ParallelP47ControllerProvidesFullFallbackFeedback)
+TEST(MovingTargetTrackingControllerTest, ParallelRuleBasedControllerProvidesFullFallbackFeedback)
 {
   auto mpc_parameters = permissive_parameters(TrackingControlMode::kRelativeMpc);
   mpc_parameters.relative_velocity_gain = 1.0;
-  auto p47_parameters = mpc_parameters;
-  p47_parameters.mode = TrackingControlMode::kPredictedPositionVelocityFeedforward;
+  auto rule_based_parameters = mpc_parameters;
+  rule_based_parameters.mode = TrackingControlMode::kPredictedPositionVelocityFeedforward;
   MovingTargetTrackingController mpc_controller(mpc_parameters);
-  MovingTargetTrackingController p47_controller(p47_parameters);
+  MovingTargetTrackingController rule_based_controller(rule_based_parameters);
   auto input = make_input();
   input.uav_velocity_xy = Eigen::Vector2d{-1.0, 1.0};
 
   const auto mpc_command = mpc_controller.compute(input);
-  const auto p47_command = p47_controller.compute(input);
+  const auto rule_based_command = rule_based_controller.compute(input);
 
   ASSERT_TRUE(mpc_command.has_value());
-  ASSERT_TRUE(p47_command.has_value());
+  ASSERT_TRUE(rule_based_command.has_value());
   ASSERT_TRUE(mpc_command->velocity_feedforward_xy.has_value());
-  ASSERT_TRUE(p47_command->velocity_feedforward_xy.has_value());
+  ASSERT_TRUE(rule_based_command->velocity_feedforward_xy.has_value());
   EXPECT_TRUE(mpc_command->velocity_feedforward_xy->isApprox(Eigen::Vector2d{0.4, -0.2}));
-  EXPECT_TRUE(p47_command->velocity_feedforward_xy->isApprox(Eigen::Vector2d{1.8, -1.4}));
-  ASSERT_TRUE(p47_command->effective_relative_velocity_gain.has_value());
-  EXPECT_DOUBLE_EQ(*p47_command->effective_relative_velocity_gain, 1.0);
+  EXPECT_TRUE(rule_based_command->velocity_feedforward_xy->isApprox(Eigen::Vector2d{1.8, -1.4}));
+  ASSERT_TRUE(rule_based_command->effective_relative_velocity_gain.has_value());
+  EXPECT_DOUBLE_EQ(*rule_based_command->effective_relative_velocity_gain, 1.0);
 }
 
 TEST(MovingTargetTrackingControllerTest, RelativeVelocityGainDampsUavVelocityError)

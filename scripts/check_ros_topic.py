@@ -27,7 +27,7 @@ def main() -> int:
         return 2
 
     rclpy.init(args=None)
-    node = rclpy.create_node("p7_topic_readiness_probe")
+    node = rclpy.create_node("topic_readiness_probe")
     try:
         deadline = time.monotonic() + args.timeout
         while time.monotonic() < deadline:

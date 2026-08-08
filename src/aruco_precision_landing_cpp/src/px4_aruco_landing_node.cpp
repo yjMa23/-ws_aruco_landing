@@ -153,11 +153,11 @@ Px4ArucoLandingNode::Px4ArucoLandingNode()
     std::make_unique<MovingTargetTrackingController>(tracking_parameters);
 
   if (*tracking_mode == TrackingControlMode::kRelativeMpc) {
-    auto p47_fallback_parameters = tracking_parameters;
-    p47_fallback_parameters.mode =
+    auto rule_based_fallback_parameters = tracking_parameters;
+    rule_based_fallback_parameters.mode =
       TrackingControlMode::kPredictedPositionVelocityFeedforward;
-    p47_fallback_controller_ =
-      std::make_unique<MovingTargetTrackingController>(p47_fallback_parameters);
+    rule_based_fallback_controller_ =
+      std::make_unique<MovingTargetTrackingController>(rule_based_fallback_parameters);
 
     RelativeMpcParameters mpc_parameters;
     mpc_parameters.sample_period_s = relative_mpc_sample_period_s_;
@@ -189,7 +189,7 @@ Px4ArucoLandingNode::Px4ArucoLandingNode()
       RCLCPP_ERROR(
         get_logger(),
         "RELATIVE_MPC was explicitly selected but OSQP initialization failed; "
-        "P4.7 fallback will remain active");
+        "adaptive rule-based tracking fallback will remain active");
     }
   }
 
@@ -951,7 +951,7 @@ void Px4ArucoLandingNode::validate_parameters() const
 
   if (!deck_plane_geometry_shadow_only_) {
     throw std::invalid_argument(
-            "deck_plane_geometry.shadow_only must remain true during P8C-0");
+            "deck_plane_geometry.shadow_only must remain true during deck-geometry shadow");
   }
   DeckPlaneGeometryInput geometry_validation_input;
   for (std::size_t index = 0; index < geometry_validation_input.contact_points_body_frd_m.size();
@@ -1960,7 +1960,7 @@ void Px4ArucoLandingNode::control_timer_callback()
   run_state_machine(now, dt);
   update_touchdown_detection(now);
   publish_trajectory_setpoint();
-  // P8C-0 shadow 几何在控制输出发布后计算，结果不会进入本周期或后续控制输入。
+  // deck-geometry shadow 几何在控制输出发布后计算，结果不会进入本周期或后续控制输入。
   update_deck_plane_geometry_shadow(now);
   publish_landing_state();
   publish_target_pose();
@@ -2274,7 +2274,7 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
             touchdown_result_valid_ && touchdown_result_.confirmed_latched;
           if (confirmed_touchdown_hold) {
             // 已确认接触后禁止因近距遮挡重新起飞。继续发布锁存的水平目标、
-            // P8C-4 预压垂直目标和最后有效法向；不使用陈旧视觉更新顺应锚点。
+            // terminal contact stabilization 预压垂直目标和最后有效法向；不使用陈旧视觉更新顺应锚点。
             double vertical_target_z = target_valid_ ?
               target_z_ : static_cast<double>(local_position_.z);
             const auto touchdown_hold_output = update_touchdown_hold(now, dt);
@@ -2296,7 +2296,7 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
             {
               transition_to(
                 LandingState::RECOVER_CLIMB,
-                "P8C-4 terminal attitude safety monitor requested recovery");
+                "terminal stabilization attitude safety monitor requested recovery");
               break;
             }
             set_target(
@@ -2371,8 +2371,8 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
         const auto command = tracking_controller_->compute(tracking_input);
         if (!command.has_value()) {
           tracking_controller_->reset();
-          if (p47_fallback_controller_) {
-            p47_fallback_controller_->reset();
+          if (rule_based_fallback_controller_) {
+            rule_based_fallback_controller_->reset();
           }
           RCLCPP_WARN_THROTTLE(
             get_logger(), *get_clock(), 5000,
@@ -2394,9 +2394,9 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
           break;
         }
 
-        std::optional<MovingTargetTrackingCommand> p47_command;
-        if (p47_fallback_controller_) {
-          p47_command = p47_fallback_controller_->compute(tracking_input);
+        std::optional<MovingTargetTrackingCommand> rule_based_command;
+        if (rule_based_fallback_controller_) {
+          rule_based_command = rule_based_fallback_controller_->compute(tracking_input);
         }
         const MovingTargetTrackingCommand * horizontal_command = &*command;
 
@@ -2433,12 +2433,12 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
           }
         } else if (final_descent_state) {
           final_descent_output = update_final_descent(estimate, visual_valid, dt);
-          const bool p8c4_preload_state =
+          const bool terminal_stabilization_preload_state =
             terminal_contact_stabilization_enabled_ &&
             !terminal_contact_stabilization_shadow_only_ &&
             (state_ == LandingState::TOUCHDOWN_CANDIDATE_HOLD ||
             state_ == LandingState::TOUCHDOWN_HOLD);
-          if (state_ == LandingState::TOUCHDOWN_HOLD || p8c4_preload_state) {
+          if (state_ == LandingState::TOUCHDOWN_HOLD || terminal_stabilization_preload_state) {
             touchdown_hold_output = update_touchdown_hold(now, dt);
             if (touchdown_hold_output.has_value()) {
               vertical_target_z = touchdown_hold_output->vertical_target_z_ned_m;
@@ -2515,7 +2515,7 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
             relative_mpc_result_.status = RelativeMpcStatus::kTerminalPhaseDisengaged;
             relative_mpc_result_.solver_status = relative_mpc_status_name(
               relative_mpc_result_.status);
-            relative_mpc_result_.fallback_reason = "terminal_phase_p47";
+            relative_mpc_result_.fallback_reason = "terminal_rule_based_tracking";
             relative_mpc_result_.fallback_required = false;
             relative_mpc_result_.current_relative_state =
               mpc_input.relative_state.allFinite() ?
@@ -2525,8 +2525,8 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
             if (relative_mpc_controller_) {
               relative_mpc_controller_->reset();
             }
-            if (p47_command.has_value()) {
-              horizontal_command = &*p47_command;
+            if (rule_based_command.has_value()) {
+              horizontal_command = &*rule_based_command;
             }
           } else {
             relative_mpc_result_ = relative_mpc_controller_ ?
@@ -2548,12 +2548,12 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
               if (relative_mpc_controller_) {
                 relative_mpc_controller_->reset();
               }
-              if (p47_command.has_value()) {
-                horizontal_command = &*p47_command;
+              if (rule_based_command.has_value()) {
+                horizontal_command = &*rule_based_command;
               }
               RCLCPP_WARN_THROTTLE(
                 get_logger(), *get_clock(), 5000,
-                "RELATIVE_MPC fallback to P4.7: %s",
+                "RELATIVE_MPC fallback to adaptive rule-based tracking: %s",
                 relative_mpc_result_.fallback_reason.c_str());
             }
           }
@@ -2565,7 +2565,7 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
         {
           transition_to(
             LandingState::RECOVER_CLIMB,
-            "P8C-4 terminal attitude safety monitor requested recovery");
+            "terminal stabilization attitude safety monitor requested recovery");
           break;
         }
         set_target(
@@ -2574,7 +2574,7 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
           vertical_target_z,
           current_yaw_);
         // Nominal RELATIVE_MPC uses pure deck-velocity feedforward plus bounded acceleration.
-        // Solver failures and contact-sensitive phases select the continuously updated P4.7
+        // Solver failures and contact-sensitive phases select the continuously updated adaptive rule-based tracking
         // command, while the vertical reference and landing state machine remain unchanged.
         if (horizontal_command->velocity_feedforward_xy.has_value()) {
           set_velocity_feedforward(
@@ -2597,7 +2597,7 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
           if (descent_output->phase == RelativeDescentPhase::kTestHeightHold) {
             transition_to(
               LandingState::TEST_HEIGHT_HOLD,
-              "minimum P5B test height reached");
+              "minimum relative descent test height reached");
           } else if (descent_output->phase == RelativeDescentPhase::kRecovering) {
             transition_to(
               LandingState::RECOVER_CLIMB,
@@ -2611,7 +2611,7 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
         {
           transition_to(
             LandingState::FINAL_DESCENT,
-            "P6B final descent is explicitly enabled at the P5B test height");
+            "final descent is explicitly enabled at the relative descent test height");
         } else if (state_ == LandingState::TEST_HEIGHT_HOLD &&
           descent_output.has_value() &&
           descent_output->phase == RelativeDescentPhase::kRecovering)
@@ -2625,19 +2625,19 @@ void Px4ArucoLandingNode::run_state_machine(const rclcpp::Time & now, double dt)
           if (final_descent_output->phase == FinalDescentPhase::kCandidateHold) {
             transition_to(
               LandingState::TOUCHDOWN_CANDIDATE_HOLD,
-              "P6A touchdown candidate detected; freeze final descent reference");
+              "touchdown candidate detected; freeze final descent reference");
           } else if (
             final_descent_output->phase == FinalDescentPhase::kTouchdownHold)
           {
             transition_to(
               LandingState::TOUCHDOWN_HOLD,
-              "P6A touchdown confirmation latched");
+              "touchdown confirmation latched");
           } else if (
             final_descent_output->phase == FinalDescentPhase::kRecoveryRequested)
           {
             transition_to(
               LandingState::RECOVER_CLIMB,
-              "P6B final descent requested recovery");
+              "final descent requested recovery");
           }
         } else if (state_ == LandingState::TOUCHDOWN_CANDIDATE_HOLD &&
           final_descent_output.has_value())
@@ -2874,8 +2874,8 @@ void Px4ArucoLandingNode::transition_to(
   if (!preserve_visual_tracking_history) {
     clear_velocity_feedforward();
     tracking_controller_->reset();
-    if (p47_fallback_controller_) {
-      p47_fallback_controller_->reset();
+    if (rule_based_fallback_controller_) {
+      rule_based_fallback_controller_->reset();
     }
     if (relative_mpc_controller_) {
       relative_mpc_controller_->reset();
@@ -3450,7 +3450,7 @@ void Px4ArucoLandingNode::update_deck_plane_geometry_shadow(const rclcpp::Time &
   if (uav_angular_velocity_body_frd.allFinite()) {
     input.uav_angular_velocity_body_frd_radps = uav_angular_velocity_body_frd;
   }
-  // P8C-0 不在线估计甲板角速度，也不以零值冒充；端点动态速度因此显式无效。
+  // deck-geometry shadow 不在线估计甲板角速度，也不以零值冒充；端点动态速度因此显式无效。
 
   deck_plane_geometry_result_ = DeckPlaneGeometry::compute(
     input,
@@ -3768,7 +3768,7 @@ void Px4ArucoLandingNode::update_touchdown_detection(const rclcpp::Time & now)
   input.relative_height_reference_m = final_descent_controller_->initialized() ?
     final_descent_output_.relative_height_reference_m :
     std::numeric_limits<double>::quiet_NaN();
-  // 仅 active、非 shadow 的 P8C-4 可将在线视觉甲板平面几何用于提前冻结下降；
+  // 仅 active、非 shadow 的 terminal contact stabilization 可将在线视觉甲板平面几何用于提前冻结下降；
   // 默认、shadow、rehearsal 和 legacy 场景保持原触地语义。该结果来自上一控制周期，
   // 仍受本周期 visual_fresh 与运动兼容门约束，不读取 Ground Truth。
   input.terminal_contact_geometry_valid =
@@ -4892,7 +4892,7 @@ void Px4ArucoLandingNode::publish_guidance_source()
           break;
         case TrackingControlMode::kRelativeMpc:
           msg.data = relative_mpc_result_.success ?
-            "VISION_RELATIVE_MPC" : "VISION_RELATIVE_MPC_P47_FALLBACK";
+            "VISION_RELATIVE_MPC" : "VISION_RELATIVE_MPC_RULE_BASED_FALLBACK";
           break;
       }
       break;

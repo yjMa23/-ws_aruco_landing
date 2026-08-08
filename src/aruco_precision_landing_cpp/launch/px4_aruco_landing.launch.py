@@ -84,7 +84,7 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "vertical_velocity_feedforward_enabled",
                 default_value="true",
-                description="Enable P5C deck vertical-velocity feedforward during relative descent.",
+                description="Enable deck vertical-velocity feedforward during relative descent.",
             ),
             DeclareLaunchArgument(
                 "vertical_velocity_feedforward_gain",
@@ -99,7 +99,7 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "touchdown_detector_enabled",
                 default_value="true",
-                description="Enable P6A parallel touchdown evidence evaluation.",
+                description="Enable parallel touchdown evidence evaluation.",
             ),
             DeclareLaunchArgument(
                 "touchdown_px4_status_timeout_s",
@@ -147,27 +147,27 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "final_descent_enabled",
                 default_value="false",
-                description="Explicitly enable P6B final descent below the P5B test height.",
+                description="Explicitly enable final descent below the relative descent test height.",
             ),
             DeclareLaunchArgument(
                 "final_descent_entry_height_m",
                 default_value="0.50",
-                description="Relative height at which P6B final descent is allowed to start.",
+                description="Relative height at which final descent is allowed to start.",
             ),
             DeclareLaunchArgument(
                 "final_descent_approach_rate_mps",
                 default_value="0.12",
-                description="P6B approach rate above the near-contact slowdown height.",
+                description="final descent approach rate above the near-contact slowdown height.",
             ),
             DeclareLaunchArgument(
                 "final_descent_contact_rate_mps",
                 default_value="0.03",
-                description="P6B low-speed descent rate in the near-contact segment.",
+                description="final descent low-speed descent rate in the near-contact segment.",
             ),
             DeclareLaunchArgument(
                 "final_descent_contact_slowdown_height_m",
                 default_value="0.25",
-                description="Relative height at which P6B switches to the contact rate.",
+                description="Relative height at which final descent switches to the contact rate.",
             ),
             DeclareLaunchArgument(
                 "final_descent_terminal_entry_height_m",
@@ -187,27 +187,27 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "relative_descent_enabled",
                 default_value="false",
-                description="Explicitly enable P5B relative-height descent to the test height.",
+                description="Explicitly enable relative-height descent to the test height.",
             ),
             DeclareLaunchArgument(
                 "descent_minimum_test_height_m",
                 default_value="0.50",
-                description="Minimum relative-height reference allowed before P6B.",
+                description="Minimum relative-height reference allowed before final descent.",
             ),
             DeclareLaunchArgument(
                 "descent_fast_rate_mps",
                 default_value="0.50",
-                description="P5B descent rate above the fast-height threshold.",
+                description="relative descent rate above the fast-height threshold.",
             ),
             DeclareLaunchArgument(
                 "descent_medium_rate_mps",
                 default_value="0.30",
-                description="P5B descent rate in the middle-height segment.",
+                description="relative descent rate in the middle-height segment.",
             ),
             DeclareLaunchArgument(
                 "descent_slow_rate_mps",
                 default_value="0.12",
-                description="P5B descent rate immediately above the P6B entry height.",
+                description="relative descent rate immediately above the final descent entry height.",
             ),
             DeclareLaunchArgument(
                 "landing_window_minimum_relative_height_m",
@@ -217,12 +217,12 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "terminal_contact_stabilization_enabled",
                 default_value="false",
-                description="Explicitly enable P8C-4 terminal contact stabilization.",
+                description="Explicitly enable terminal contact stabilization.",
             ),
             DeclareLaunchArgument(
                 "terminal_contact_stabilization_shadow_only",
                 default_value="true",
-                description="Compute P8C-4 diagnostics without applying terminal output.",
+                description="Compute terminal contact stabilization diagnostics without applying terminal output.",
             ),
             DeclareLaunchArgument(
                 "terminal_contact_stabilization_rehearsal_enabled",

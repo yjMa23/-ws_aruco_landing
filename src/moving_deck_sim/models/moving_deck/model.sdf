@@ -7,7 +7,7 @@
     <self_collide>false</self_collide>
 
     <link name="moving_deck">
-      <!-- P1 只研究水平运动；禁用重力，水平接触仍由物理引擎处理。 -->
+      <!-- moving-deck simulation 只研究水平运动；禁用重力，水平接触仍由物理引擎处理。 -->
       <gravity>false</gravity>
       <inertial>
         <pose>0 0 -0.05 0 0 0</pose>

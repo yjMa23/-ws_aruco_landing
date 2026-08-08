@@ -112,7 +112,7 @@ def generate_launch_description():
             SetEnvironmentVariable("GZ_SIM_RESOURCE_PATH", resource_path),
             # 当前桌面会话为 X11，显式使用 xcb，避免 Qt 自动平台探测导致视口输入失效。
             SetEnvironmentVariable("QT_QPA_PLATFORM", "xcb"),
-            # ponytail: P1 仅支持同主机 PX4；需要远程 SITL 时再开放地址参数。
+            # ponytail: moving-deck simulation 仅支持同主机 PX4；需要远程 SITL 时再开放地址参数。
             SetEnvironmentVariable("GZ_IP", "127.0.0.1"),
             gazebo_gui,
             gazebo_headless,

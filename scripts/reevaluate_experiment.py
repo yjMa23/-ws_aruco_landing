@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Re-run only the offline evaluator for a completed P9 episode.
+"""Re-run only the offline evaluator for a completed paper evaluation episode.
 
 This preserves the original Bag, logs, manifest failure evidence and previous
 assessment files. It is intended for evaluator-only fixes; it never starts SITL.
@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from p7_experiment_utils import atomic_write_json, read_json, utc_now_iso
+from experiment_utils import atomic_write_json, read_json, utc_now_iso
 from run_single_experiment import evaluators_passed, git_state, run_evaluator
 
 
@@ -119,7 +119,7 @@ def re_evaluate_episode(
     profile = str(manifest.get("profile", manifest.get("experiment_profile", "touchdown")))
     terminal_mode = str(manifest.get("terminal_stabilization_mode", "disabled"))
     evaluator_route = str(manifest.get("evaluator", "auto"))
-    p8c3_touchdown = bool(manifest.get("p8c3_touchdown", False))
+    tilted_deck_touchdown = bool(manifest.get("tilted_deck_touchdown", False))
 
     archived = archive_evaluation_files(episode_dir)
     run_log_path = episode_dir / "run.log"
@@ -132,7 +132,7 @@ def re_evaluate_episode(
             bag_path,
             episode_dir,
             run_log,
-            p8c3_touchdown=p8c3_touchdown,
+            tilted_deck_touchdown=tilted_deck_touchdown,
             experiment_profile=profile,
             terminal_stabilization_mode=terminal_mode,
             evaluator_route=evaluator_route,

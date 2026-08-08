@@ -1,0 +1,11 @@
+name: heave_h2_smoke
+output_root: results
+episode_timeout_s: 600
+startup_timeout_s: 120
+touchdown_hold_s: 10
+camera_model: close-range
+record_camera_debug: false
+scenarios:
+  - scenario: heave_h2
+    repetitions: 3
+    seeds: [201, 202, 203]

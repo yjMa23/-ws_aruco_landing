@@ -1,0 +1,55 @@
+name: paper_evaluation_smoke
+output_root: results
+episode_timeout_s: 600
+startup_timeout_s: 120
+touchdown_hold_s: 10
+camera_model: close-range
+record_camera_debug: false
+success_bag_policy: lightweight
+failure_bag_policy: diagnostic
+experiments:
+  - method: B1
+    scenario: static
+    profile: safe-altitude
+    repetitions: 3
+    seeds: [3101, 3102, 3103]
+  - method: B1
+    scenario: constant02
+    profile: safe-altitude
+    repetitions: 3
+    seeds: [3201, 3202, 3203]
+  - method: B2
+    scenario: static
+    profile: safe-altitude
+    repetitions: 3
+    seeds: [3301, 3302, 3303]
+  - method: B2
+    scenario: constant02
+    profile: safe-altitude
+    repetitions: 3
+    seeds: [3401, 3402, 3403]
+  - method: B3
+    scenario: constant02
+    profile: touchdown
+    repetitions: 3
+    seeds: [3501, 3502, 3503]
+  - method: B3
+    scenario: sinusoidal
+    profile: safe-altitude
+    repetitions: 3
+    seeds: [3601, 3602, 3603]
+  - method: B4
+    scenario: heave_h1
+    profile: touchdown
+    repetitions: 3
+    seeds: [3701, 3702, 3703]
+  - method: B5
+    scenario: tilt_roll_pos_2deg
+    profile: touchdown
+    repetitions: 3
+    seeds: [3801, 3802, 3803]
+  - method: B5
+    scenario: tilt_pitch_pos_2deg
+    profile: touchdown
+    repetitions: 3
+    seeds: [3901, 3902, 3903]

@@ -64,7 +64,7 @@ TEST(RelativeMpcControllerTest, AccelerationFeedforwardIsDisabledForFailureAndCo
   EXPECT_FALSE(RelativeMpcController::acceleration_feedforward_allowed(false, true));
   EXPECT_STREQ(
     relative_mpc_status_name(RelativeMpcStatus::kTerminalPhaseDisengaged),
-    "TERMINAL_PHASE_P47");
+    "TERMINAL_RULE_BASED_TRACKING");
 }
 
 TEST(RelativeMpcControllerTest, ContinuousModelHasRequiredSignsAndDimensions)

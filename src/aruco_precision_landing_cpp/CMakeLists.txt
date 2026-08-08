@@ -226,38 +226,38 @@ if(BUILD_TESTING)
   ament_target_dependencies(time_source_guard_test rclcpp)
 
   add_test(
-    NAME p7_experiment_tests
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_p7_experiments.py
+    NAME experiment_tests
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_experiments.py
   )
   set_tests_properties(
-    p7_experiment_tests
+    experiment_tests
     PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../..
   )
 
   add_test(
-    NAME p8a_heave_touchdown_tests
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_p8a_heave_touchdown.py
+    NAME heave_touchdown_tests
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_heave_touchdown.py
   )
   set_tests_properties(
-    p8a_heave_touchdown_tests
+    heave_touchdown_tests
     PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../..
   )
 
   add_test(
-    NAME p8c_tilted_deck_tests
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_p8c_tilted_deck.py
+    NAME tilted_deck_tests
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_tilted_deck.py
   )
   set_tests_properties(
-    p8c_tilted_deck_tests
+    tilted_deck_tests
     PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../..
   )
 
   add_test(
-    NAME p10_paper_results_tests
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_p10_paper_results.py
+    NAME paper_results_tests
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_paper_results.py
   )
   set_tests_properties(
-    p10_paper_results_tests
+    paper_results_tests
     PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../..
   )
 endif()

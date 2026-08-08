@@ -562,7 +562,7 @@ private:
   std::unique_ptr<VerticalStateEstimator> vertical_state_estimator_;
   std::unique_ptr<MotionPredictor> motion_predictor_;
   std::unique_ptr<MovingTargetTrackingController> tracking_controller_;
-  std::unique_ptr<MovingTargetTrackingController> p47_fallback_controller_;
+  std::unique_ptr<MovingTargetTrackingController> rule_based_fallback_controller_;
   std::unique_ptr<RelativeMpcController> relative_mpc_controller_;
   std::unique_ptr<VehiclePoseHistory> vehicle_pose_history_;
   std::unique_ptr<DeckAttitudeEstimator> deck_attitude_estimator_;
