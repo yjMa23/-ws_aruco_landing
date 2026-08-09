@@ -88,7 +88,38 @@ colcon build --symlink-install \
 
 动态 `rollpitch`、`combined` 和 `rigid_body_motion` 的下降、最终下降与主动接触控制会在启动前被拒绝。
 
-### 3.1 甲板 6-DoF Shadow
+### 3.1 Legacy 与 Marine 环境
+
+默认环境是 legacy：
+
+```bash
+./scripts/start_sitl.sh --environment legacy --scenario static
+```
+
+它继续使用 `aruco_moving_deck.sdf`、`moving_deck` 和历史 UAV spawn，不改变 P9/P10 复现路径。
+
+Marine 第一版需要显式选择：
+
+```bash
+./scripts/start_sitl.sh --environment marine --scenario static
+./scripts/start_sitl.sh --environment marine --scenario rigid_body_motion \
+  --rendezvous-altitude 7.0
+```
+
+marine 使用 `aruco_marine_vessel.sdf`、`landing_vessel/vessel_body`、固定 `landing_deck` frame 和独立 `x≈-12 m` UAV launch platform。launch 会把既有 scenario 的 neutral z 从 deck `2 m` 转成 vessel reference `0 m`，并用固定 `[0,0,2] m` 杠杆臂恢复 `/simulation/deck/ground_truth` 的 deck-center 语义。
+
+marine 只允许 GNSS rendezvous、视觉捕获、安全高度跟踪和 deck-motion shadow。以下命令必须在启动前失败：
+
+```bash
+./scripts/start_sitl.sh --environment marine --scenario static \
+  --enable-relative-descent --dry-run
+./scripts/start_sitl.sh --environment marine --scenario static \
+  --terminal-contact-stabilization-shadow --dry-run
+```
+
+本阶段没有 VRX、wave、RAO、Buoyancy、Hydrodynamics、wind 或 current。构建与 SDF 验证见 [Marine Scene 构建说明](MARINE_SCENE_BUILD.md)。
+
+### 3.2 甲板 6-DoF Shadow
 
 默认参数启用独立 shadow，但不改变飞行控制。检查话题：
 
@@ -186,7 +217,7 @@ MPC 求解失败或进入接触敏感终端阶段时自动使用规则式跟踪�
   --enable-terminal-contact-stabilization
 ```
 
-该命令仅限已经白名单的正固定倾角。负倾角、`rollpitch` 和 `combined` 会被拒绝。
+该命令仅限已经白名单的正固定倾角。负倾角、`rollpitch` 和 `combined` 会被拒绝；`--environment marine` 对所有 scenario 都额外拒绝 relative descent、final descent 和任何 terminal-contact stabilization 模式。
 
 以下行为始终保持关闭，除非未来有独立授权：
 

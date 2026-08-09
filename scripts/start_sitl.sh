@@ -7,6 +7,7 @@ usage() {
 Usage: ./scripts/start_sitl.sh [options]
 
 Options:
+  --environment legacy|marine             Simulation environment (default: legacy)
   --scenario static|constant02|constant|sinusoidal|heave|heave_h1|heave_h2|heave_h3|rollpitch|combined|rigid_body_motion
              |tilt_roll_pos_2deg|tilt_roll_neg_2deg|tilt_pitch_pos_2deg|tilt_pitch_neg_2deg
                                          Deck scenario (default: static)
@@ -73,6 +74,7 @@ die() {
   exit 1
 }
 
+environment="legacy"
 scenario="static"
 headless="false"
 dry_run="false"
@@ -118,6 +120,11 @@ tuning_override="false"
 
 while (($#)); do
   case "$1" in
+    --environment)
+      (($# >= 2)) || die "--environment requires a value"
+      environment="$2"
+      shift 2
+      ;;
     --scenario)
       (($# >= 2)) || die "--scenario requires a value"
       scenario="$2"
@@ -362,6 +369,11 @@ while (($#)); do
   esac
 done
 
+case "$environment" in
+  legacy | marine) ;;
+  *) die "invalid environment '$environment' (expected legacy or marine)" ;;
+esac
+
 case "$scenario" in
   static) scenario_config="static.yaml" ;;
   constant02) scenario_config="constant_velocity_0p2.yaml" ;;
@@ -380,6 +392,14 @@ case "$scenario" in
   tilt_pitch_neg_2deg) scenario_config="tilt_pitch_neg_2deg.yaml" ;;
   *) die "invalid scenario '$scenario' (expected static, constant02, constant, sinusoidal, heave, heave_h1, heave_h2, heave_h3, rollpitch, combined, rigid_body_motion, or a tilted-deck fixed tilt_*_2deg profile)" ;;
 esac
+
+if [[ "$environment" == "marine" ]]; then
+  if [[ "$relative_descent_enabled" == "true" || "$final_descent_enabled" == "true" ||
+    "$terminal_contact_stabilization_mode" != "disabled" ]]
+  then
+    die "marine environment currently supports safe-altitude validation only; descent, final descent, terminal contact stabilization, NAV_LAND and automatic disarm are forbidden"
+  fi
+fi
 
 if [[ "$scenario" == "rollpitch" || "$scenario" == "combined" || "$scenario" == "rigid_body_motion" ]]; then
   [[ "$relative_descent_enabled" == "false" ]] ||
@@ -588,6 +608,7 @@ fi
 
 if [[ "$dry_run" == "true" ]]; then
   echo "DRY_RUN validation passed"
+  echo "environment=$environment"
   echo "scenario=$scenario"
   echo "rendezvous_altitude_m=$rendezvous_altitude_m"
   echo "relative_descent_enabled=$relative_descent_enabled"
@@ -754,6 +775,11 @@ start_process() {
   child_pids+=("$!")
 }
 
+px4_spawn_pose="-4,0,0.2"
+if [[ "$environment" == "marine" ]]; then
+  px4_spawn_pose="-12,0,0.4"
+fi
+
 start_px4() {
   echo "Starting PX4 SITL..."
   # PX4 控制台在 stdin 为 EOF 时会循环刷新提示符，使用不产生数据的常开管道避免占用用户终端。
@@ -761,7 +787,7 @@ start_px4() {
     env \
     PX4_GZ_STANDALONE=1 \
     PX4_GZ_WORLD=aruco \
-    PX4_GZ_MODEL_POSE=-4,0,0.2 \
+    PX4_GZ_MODEL_POSE="$px4_spawn_pose" \
     make -C "$px4_dir" px4_sitl gz_x500_mono_cam_down &
   child_pids+=("$!")
 }
@@ -777,8 +803,9 @@ start_px4
 # heartbeat so automated runs do not depend on an accidentally running QGroundControl.
 start_process "local GCS heartbeat" python3 "$heartbeat_script" \
   --host 127.0.0.1 --port 18570 --rate-hz 1.0
-start_process "moving deck ($scenario)" ros2 launch \
+start_process "moving deck ($environment/$scenario)" ros2 launch \
   moving_deck_sim moving_deck_sim.launch.py \
+  "environment:=$environment" \
   "config_file:=$scenario_path" \
   "gnss_config_file:=$gnss_config_path" \
   "headless:=$headless" \

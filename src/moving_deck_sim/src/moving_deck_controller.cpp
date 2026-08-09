@@ -1,4 +1,5 @@
 #include "moving_deck_sim/motion_profile.hpp"
+#include "moving_deck_sim/rigid_body_kinematics.hpp"
 
 #include <gz/msgs/boolean.pb.h>
 #include <gz/msgs/pose.pb.h>
@@ -108,6 +109,19 @@ public:
       declare_parameter<std::string>("scenario", "S1_CONSTANT_XY");
     const auto initial_position = declare_parameter<std::vector<double>>(
       "initial_position_enu", {0.0, 0.0, 2.0});
+    const auto initial_position_offset = to_array<3>(
+      declare_parameter<std::vector<double>>(
+        "initial_position_offset_enu", {0.0, 0.0, 0.0}),
+      "initial_position_offset_enu");
+    deck_transform_.translation_body = to_array<3>(
+      declare_parameter<std::vector<double>>(
+        "deck_offset_body", {0.0, 0.0, 0.0}),
+      "deck_offset_body");
+    deck_transform_.rotation_wxyz = to_array<4>(
+      declare_parameter<std::vector<double>>(
+        "deck_rotation_wxyz", {1.0, 0.0, 0.0, 0.0}),
+      "deck_rotation_wxyz");
+    deck_frame_id_ = declare_parameter<std::string>("deck_frame_id", "");
     const auto velocity_xy = declare_parameter<std::vector<double>>(
       "velocity_xy", {0.4, 0.0});
     const auto amplitude_xy = declare_parameter<std::vector<double>>(
@@ -138,6 +152,9 @@ public:
     MotionParameters parameters;
     parameters.scenario = MotionProfile::parse_scenario(scenario_name);
     parameters.initial_position_enu = to_array<3>(initial_position, "initial_position_enu");
+    for (std::size_t index = 0; index < parameters.initial_position_enu.size(); ++index) {
+      parameters.initial_position_enu[index] += initial_position_offset[index];
+    }
     parameters.velocity_xy = to_array<2>(velocity_xy, "velocity_xy");
     parameters.amplitude_xy = to_array<2>(amplitude_xy, "amplitude_xy");
     parameters.period_xy = to_array<2>(period_xy, "period_xy");
@@ -152,6 +169,11 @@ public:
     initial_position_enu_ = parameters.initial_position_enu;
     initial_rpy_rad_ = parameters.initial_rpy_rad;
     motion_profile_ = std::make_unique<MotionProfile>(parameters);
+    if (deck_frame_id_.empty()) {
+      deck_frame_id_ = model_name_;
+    }
+    // 构造阶段先触发 fixed transform 的有限性和四元数校验，避免运行后才出现坏 GT。
+    (void)transform_rigid_body_state(RigidBodyState{}, deck_transform_);
 
     velocity_publisher_ = gz_node_.Advertise<gz::msgs::Twist>(
       "/model/" + model_name_ + "/cmd_vel");
@@ -272,27 +294,42 @@ private:
     }
   }
 
+  RigidBodyState deck_state_from_sample(const MotionSample & sample) const
+  {
+    RigidBodyState vessel_state;
+    vessel_state.position_world = sample.position_enu;
+    vessel_state.orientation_wxyz = quaternion_wxyz_from_rpy(sample.orientation_rpy_enu);
+    vessel_state.linear_velocity_world = sample.velocity_enu;
+    vessel_state.angular_velocity_body = sample.angular_velocity_body;
+    return transform_rigid_body_state(vessel_state, deck_transform_);
+  }
+
+  void fill_deck_ground_truth(
+    nav_msgs::msg::Odometry & message, const RigidBodyState & deck_state) const
+  {
+    message.header.frame_id = "world";
+    message.child_frame_id = deck_frame_id_;
+    message.pose.pose.position.x = deck_state.position_world[0];
+    message.pose.pose.position.y = deck_state.position_world[1];
+    message.pose.pose.position.z = deck_state.position_world[2];
+    message.pose.pose.orientation.w = deck_state.orientation_wxyz[0];
+    message.pose.pose.orientation.x = deck_state.orientation_wxyz[1];
+    message.pose.pose.orientation.y = deck_state.orientation_wxyz[2];
+    message.pose.pose.orientation.z = deck_state.orientation_wxyz[3];
+    message.twist.twist.linear.x = deck_state.linear_velocity_world[0];
+    message.twist.twist.linear.y = deck_state.linear_velocity_world[1];
+    message.twist.twist.linear.z = deck_state.linear_velocity_world[2];
+    message.twist.twist.angular.x = deck_state.angular_velocity_body[0];
+    message.twist.twist.angular.y = deck_state.angular_velocity_body[1];
+    message.twist.twist.angular.z = deck_state.angular_velocity_body[2];
+  }
+
   void publish_initial_ground_truth()
   {
     const MotionSample sample = motion_profile_->sample(0.0);
     nav_msgs::msg::Odometry ground_truth;
     ground_truth.header.stamp = trajectory_start_;
-    ground_truth.header.frame_id = "world";
-    ground_truth.child_frame_id = model_name_;
-    ground_truth.pose.pose.position.x = sample.position_enu[0];
-    ground_truth.pose.pose.position.y = sample.position_enu[1];
-    ground_truth.pose.pose.position.z = sample.position_enu[2];
-    const auto orientation = quaternion_wxyz_from_rpy(sample.orientation_rpy_enu);
-    ground_truth.pose.pose.orientation.w = orientation[0];
-    ground_truth.pose.pose.orientation.x = orientation[1];
-    ground_truth.pose.pose.orientation.y = orientation[2];
-    ground_truth.pose.pose.orientation.z = orientation[3];
-    ground_truth.twist.twist.linear.x = sample.velocity_enu[0];
-    ground_truth.twist.twist.linear.y = sample.velocity_enu[1];
-    ground_truth.twist.twist.linear.z = sample.velocity_enu[2];
-    ground_truth.twist.twist.angular.x = sample.angular_velocity_body[0];
-    ground_truth.twist.twist.angular.y = sample.angular_velocity_body[1];
-    ground_truth.twist.twist.angular.z = sample.angular_velocity_body[2];
+    fill_deck_ground_truth(ground_truth, deck_state_from_sample(sample));
     ground_truth_publisher_->publish(ground_truth);
   }
 
@@ -352,19 +389,38 @@ private:
       return;
     }
 
-    nav_msgs::msg::Odometry ground_truth = *message;
+    RigidBodyState vessel_state;
+    vessel_state.position_world = {
+      message->pose.pose.position.x,
+      message->pose.pose.position.y,
+      message->pose.pose.position.z};
+    vessel_state.orientation_wxyz = {
+      message->pose.pose.orientation.w,
+      message->pose.pose.orientation.x,
+      message->pose.pose.orientation.y,
+      message->pose.pose.orientation.z};
+    vessel_state.linear_velocity_world = {
+      message->twist.twist.linear.x,
+      message->twist.twist.linear.y,
+      message->twist.twist.linear.z};
+    vessel_state.angular_velocity_body = {
+      message->twist.twist.angular.x,
+      message->twist.twist.angular.y,
+      message->twist.twist.angular.z};
+
     const double elapsed_s = (sample_time - trajectory_start_).seconds();
     if (elapsed_s <= kResetOdometryGuardDurationS) {
-      // Gazebo OdometryPublisher 使用 10 个位姿差分样本计算速度；teleport
-      // 后短时使用同一解析轨迹速度，避免旧位姿污染 reset 后的 Ground Truth。
+      // Gazebo OdometryPublisher 使用历史位姿差分计算速度；teleport 后短时改用同一解析
+      // vessel 轨迹速度，再统一经过 lever-arm 转换，避免旧位姿污染 deck Ground Truth。
       const MotionSample sample = motion_profile_->sample(elapsed_s);
-      ground_truth.twist.twist.linear.x = sample.velocity_enu[0];
-      ground_truth.twist.twist.linear.y = sample.velocity_enu[1];
-      ground_truth.twist.twist.linear.z = sample.velocity_enu[2];
-      ground_truth.twist.twist.angular.x = sample.angular_velocity_body[0];
-      ground_truth.twist.twist.angular.y = sample.angular_velocity_body[1];
-      ground_truth.twist.twist.angular.z = sample.angular_velocity_body[2];
+      vessel_state.linear_velocity_world = sample.velocity_enu;
+      vessel_state.angular_velocity_body = sample.angular_velocity_body;
     }
+
+    nav_msgs::msg::Odometry ground_truth;
+    ground_truth.header.stamp = message->header.stamp;
+    fill_deck_ground_truth(
+      ground_truth, transform_rigid_body_state(vessel_state, deck_transform_));
     ground_truth_publisher_->publish(ground_truth);
   }
 
@@ -376,6 +432,8 @@ private:
   std::array<double, 3> initial_position_enu_{};
   std::array<double, 3> initial_rpy_rad_{};
   std::array<double, 3> uav_body_offset_model_{};
+  FixedRigidTransform deck_transform_{};
+  std::string deck_frame_id_;
   std::unique_ptr<MotionProfile> motion_profile_;
 
   gz::transport::Node gz_node_;

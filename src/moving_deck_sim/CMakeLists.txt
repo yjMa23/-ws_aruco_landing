@@ -25,6 +25,15 @@ target_include_directories(
     $<INSTALL_INTERFACE:include>
 )
 
+add_library(rigid_body_kinematics src/rigid_body_kinematics.cpp)
+target_compile_features(rigid_body_kinematics PUBLIC cxx_std_17)
+target_include_directories(
+  rigid_body_kinematics
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+)
+
 add_library(deck_gnss_model src/gnss_sensor_model.cpp)
 target_compile_features(deck_gnss_model PUBLIC cxx_std_17)
 target_include_directories(
@@ -40,6 +49,7 @@ target_compile_features(moving_deck_controller PUBLIC cxx_std_17)
 target_link_libraries(
   moving_deck_controller
   moving_deck_motion
+  rigid_body_kinematics
   gz-math7::gz-math7
   gz-msgs10::gz-msgs10
   gz-transport13::gz-transport13
@@ -59,7 +69,7 @@ ament_target_dependencies(
 )
 
 install(
-  TARGETS moving_deck_motion deck_gnss_model moving_deck_controller deck_gnss_simulator
+  TARGETS moving_deck_motion rigid_body_kinematics deck_gnss_model moving_deck_controller deck_gnss_simulator
   EXPORT export_moving_deck_motion
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
@@ -75,6 +85,19 @@ if(BUILD_TESTING)
 
   ament_add_gtest(gnss_sensor_model_test test/gnss_sensor_model_test.cpp)
   target_link_libraries(gnss_sensor_model_test deck_gnss_model)
+
+  ament_add_gtest(rigid_body_kinematics_test test/rigid_body_kinematics_test.cpp)
+  target_link_libraries(rigid_body_kinematics_test rigid_body_kinematics)
+
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_test(
+    NAME marine_environment_tests
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_marine_environment.py
+  )
+  set_tests_properties(
+    marine_environment_tests
+    PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../..
+  )
 endif()
 
 ament_export_include_directories(include)

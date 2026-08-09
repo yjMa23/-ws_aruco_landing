@@ -26,7 +26,7 @@
 | --- | --- |
 | [`aruco_detector`](src/aruco_detector/README.md) | 多尺度 ArUco 检测、完整 PnP 位姿和调试图像。 |
 | [`aruco_precision_landing_cpp`](src/aruco_precision_landing_cpp/README.md) | PX4 Offboard、GNSS—视觉接管、估计、跟踪、下降和触地确认。 |
-| [`moving_deck_sim`](src/moving_deck_sim/README.md) | 移动甲板、船舶 GNSS 传感器模型和离线评测 Ground Truth。 |
+| [`moving_deck_sim`](src/moving_deck_sim/README.md) | legacy 移动甲板、marine 船体/固定着陆甲板、船舶 GNSS 传感器模型和离线评测 Ground Truth。 |
 
 控制器禁止订阅 `/simulation/deck/ground_truth`；该话题只允许用于仿真传感器和离线评测。
 
@@ -58,7 +58,14 @@ source install/setup.bash
 ./scripts/start_sitl.sh
 ```
 
-默认只跟踪静止甲板并保持安全高度。相对下降、最终下降、`NAV_LAND` 和自动 Disarm 均关闭；确认 PX4/QGroundControl 正常后，控制器才允许切换 Offboard 并 Arm。
+默认环境仍为 `legacy`，保持历史 `aruco_moving_deck.sdf`、`moving_deck` 和 UAV spawn 行为不变。Marine 第一版需要显式选择：
+
+```bash
+./scripts/start_sitl.sh --environment marine --scenario static
+./scripts/start_sitl.sh --environment marine --scenario rigid_body_motion --rendezvous-altitude 7.0
+```
+
+marine 使用 primitive-only `landing_vessel`、无碰撞视觉海面和独立 UAV 起飞台；`MotionProfile` 驱动 `vessel_body`，固定 `T_vessel_deck` 将船体状态转换成 landing deck center Ground Truth。默认只保持安全高度；marine 会在启动前拒绝相对下降、最终下降和全部 terminal-contact 模式，`NAV_LAND` 与自动 Disarm 仍未启用。
 
 常用安全检查：
 
@@ -77,6 +84,7 @@ source install/setup.bash
 - 统一评测记录为 smoke `20/27`、正式基线 `40/40`、正式消融 `60/60`，另有 `30` 个 `NOT_APPLICABLE` 槽位。有限样本全成功不代表真实成功概率为 100%。
 - 6-DoF 相对 shadow 的约 `5 m` 正式矩阵为安全 `12/12`、全性能硬门
   `2/12`；剩余限制是 ArUco-only 动态甲板 `0.5 s` 未来 twist 可观测性。
+- marine M1 只建立场景和 `vessel_body → landing deck` 刚体语义，不包含 VRX、JONSWAP/PM、RAO、浮力、水动力、洋流或风载；它不改变上述 Future Twist 核心算法限制。
 - 所有正式实验保持 `NAV_LAND / Disarm = 0 / 0`。
 
 ## 文档
@@ -85,7 +93,9 @@ source install/setup.bash
 - [当前实现](docs/reference/SYSTEM_OVERVIEW.md)
 - [控制理论](docs/reference/LANDING_CONTROL_THEORY.md)
 - [坐标与时间契约](docs/reference/COORDINATE_FRAMES.md)
+- [Marine vessel 刚体运动学](docs/reference/MARINE_VESSEL_KINEMATICS.md)
 - [操作指南](docs/guides/OPERATIONS.md)
+- [Marine scene 构建与验证](docs/guides/MARINE_SCENE_BUILD.md)
 - [论文结果](docs/results/PAPER_RESULTS.md)
 - [数据来源与哈希](docs/results/DATA_PROVENANCE.md)
 - [下一步计划](docs/plans/NEXT_DEVELOPMENT_PLAN.md)

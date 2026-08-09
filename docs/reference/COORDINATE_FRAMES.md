@@ -12,6 +12,8 @@
 | `uav_centered_ned` | 状态采样时刻位于无人机参考点，三轴平行 `local_ned` | ArUco shadow 当前相对位姿。 |
 | `uav_origin_ned` | 轨迹发布时冻结在无人机参考点，三轴平行 `local_ned` | 甲板预测轨迹与未来相对 MPC 输入。 |
 | `deck_landing_up` | x 甲板前、y 甲板左、z 甲板上 | 统一 Marker 后的甲板着陆参考系和 6-DoF shadow。 |
+| `vessel_body` | marine 船体刚体参考系；第一版与 deck 轴平行 | marine `MotionProfile` 驱动参考点，neutral world z≈0。 |
+| `landing_deck` | x 甲板前、y 甲板左、z 甲板上 | marine Gazebo 固定甲板 frame，原点为着陆平面中心。 |
 | Gazebo world ENU | x 东、y 北、z 上 | Gazebo 模型和 Ground Truth。 |
 | WGS84 | 纬度、经度、椭球高 | 船舶 GNSS 和 PX4 地理参考。 |
 
@@ -117,7 +119,38 @@ n_{up}^N = R_N^D [0,0,1]^T
 均为 `0.75 m`。板式 PnP 直接输出
 `T_C^D`，因此不再追加单 Marker 的中心平移补偿。
 
-## 5. ENU 与 NED
+## 5. Marine vessel → landing deck
+
+legacy `moving_deck` 的模型原点就是甲板中心，因此仿真 raw GT 与 deck GT 重合。marine 则明确分离：
+
+```text
+T_world_vessel
+* T_vessel_deck
+= T_world_deck
+```
+
+第一版固定：
+
+```text
+T_vessel_deck.translation = [0, 0, 2] m
+T_vessel_deck.rotation = I
+```
+
+若 `r_{VD}^V` 为 vessel body 中的 deck offset，输入线速度在 world ENU、角速度在 vessel body 中，则：
+
+```math
+p_D^W=p_V^W+R_W^V r_{VD}^V
+```
+
+```math
+v_D^W=v_V^W+R_W^V(\omega_V^V\times r_{VD}^V)
+```
+
+因此 roll/pitch 会产生 deck center 的 lever-arm 位移和速度；不能只把 vessel 姿态复制到 deck 而保持 deck 位置不动。该转换集中在 `moving_deck_sim/rigid_body_kinematics`，不得散落在 ROS callback 中。marine `/simulation/deck/ground_truth_raw` 表示 vessel raw state，最终 `/simulation/deck/ground_truth` 始终表示 landing deck center。
+
+完整公式、有限性检查和 fixed rotation 语义见 [MARINE_VESSEL_KINEMATICS.md](MARINE_VESSEL_KINEMATICS.md)。
+
+## 6. ENU 与 NED
 
 位置和线速度使用同一线性映射：
 
@@ -142,7 +175,7 @@ D = -ENU.z
 
 姿态必须通过完整旋转矩阵或四元数基变换，禁止只交换 Euler 角或手写 roll/pitch 正负号。
 
-## 6. WGS84 与本地坐标
+## 7. WGS84 与本地坐标
 
 控制器使用 PX4 `VehicleLocalPosition` 的：
 
@@ -170,7 +203,7 @@ WGS84 → ECEF → local ENU → local NED
 
 船舶 GNSS 速度已经是 ENU，不执行 WGS84 转换，只做 ENU/NED 轴变换。
 
-## 7. 相对高度
+## 8. 相对高度
 
 NED z 向下，因此无人机在甲板上方时：
 
@@ -186,7 +219,7 @@ z_{sp}^{NED}=z_{deck,pred}^{NED}-h_{ref}
 
 该量是世界竖直方向的相对高度。水平或纯升沉甲板上它与法向距离一致；倾斜甲板上只作为现有生产通道，甲板平面与滑橇法向间隙另行诊断，不能混为同一量。
 
-## 8. 甲板平面
+## 9. 甲板平面
 
 甲板参考点为 `p_d^N`，向上法向为 `n^N`。平面方程：
 
@@ -202,7 +235,7 @@ h(p)=(n^N)^T(p^N-p_d^N)
 
 无人机四个滑橇端点从 FRD 通过机体姿态变换到 NED 后分别计算 `h_i`。`min(h_i)` 表示最近接触端点；Ground Truth 平面只允许在 evaluator 中计算误差，控制器使用视觉法向与内部估计甲板位置。
 
-## 9. 时间域
+## 10. 时间域
 
 系统同时存在：
 
@@ -220,9 +253,10 @@ h(p)=(n^N)^T(p^N-p_d^N)
 
 超出历史范围、时间间隔过大或映射未稳定时拒绝观测，不能退化为使用当前位姿。
 
-## 10. 模块边界
+## 11. 模块边界
 
-- `coordinate_transform`：刚体组合、逆变换、ENU/NED 和姿态基变换。
+- `coordinate_transform`：生产视觉链的刚体组合、逆变换、ENU/NED 和姿态基变换。
+- `moving_deck_sim/rigid_body_kinematics`：仿真 vessel reference 到 landing deck 固定点的 pose/twist 转换和 lever-arm 速度。
 - `geodetic_converter`：WGS84、ECEF、ENU 和 NED。
 - `VehiclePoseHistory`：时间有序位姿与速度缓存和插值；相对 shadow 消费其姿态和 NED 速度。
 - `DeckPlaneGeometry`：视觉甲板平面、滑橇间隙和法向/切向分解。

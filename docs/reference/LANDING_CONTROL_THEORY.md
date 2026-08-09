@@ -521,6 +521,24 @@ a_{bias,xy}\approx-g\frac{[b_{z,N},b_{z,E}]^T}{b_{z,D}}
 
 姿态偏差或角速度连续超过安全门时请求恢复；恢复、Abort 或任务 reset 清空偏置、锚点和预压。
 
-## 12. 动态姿态限制
+## 12. Marine vessel 刚体几何（仅仿真语义）
 
-动态 `rollpitch` 和 `combined` 与固定倾角不同：法向随时间变化，存在视觉滤波相位延迟，甲板局部接触点速度还需要可靠角速度。当前尚未完成法向变化率/角速度可观测性验证，因此这些场景只允许约 `5 m` 安全高度 shadow，不允许下降、真实接触或使用 Ground Truth 驱动控制。
+Marine 第一版把解析运动参考点从甲板中心改为 `vessel_body`，控制目标仍然是 landing deck。固定变换为 `T_V_D`，其中第一版 `r_{VD}^V=[0,0,2]^T m`、`R_V_D=I`。Gazebo world ENU 中：
+
+```math
+p_D^W=p_V^W+R_W^V r_{VD}^V
+```
+
+输入线速度在 world 表达、角速度在 vessel body 表达时：
+
+```math
+v_D^W=v_V^W+R_W^V(\omega_V^V\times r_{VD}^V)
+```
+
+这一步只在 `moving_deck_sim` 中把 vessel raw Ground Truth 转换成 deck-center Ground Truth，确保 roll/pitch 的甲板中心位置包含杠杆臂运动。它**不是**控制器可用的状态来源；生产控制仍只使用 PX4 state、模拟 GNSS、camera/ArUco 与内部 estimator。
+
+Marker 的 `T_deck_marker_i` 保持 legacy 标定不变，marine 只是把整个 landing deck 作为 `vessel_body` 的固定刚体子 frame。完整仿真契约见 [MARINE_VESSEL_KINEMATICS.md](MARINE_VESSEL_KINEMATICS.md)。
+
+## 13. 动态姿态限制
+
+动态 `rollpitch` 和 `combined` 与固定倾角不同：法向随时间变化，存在视觉滤波相位延迟，甲板局部接触点速度还需要可靠角速度。当前尚未完成法向变化率/角速度可观测性验证，因此这些场景只允许约 `5 m` 安全高度 shadow，不允许下降、真实接触或使用 Ground Truth 驱动控制。Marine 环境对所有 scenario 进一步限制为 safe-altitude only，不能借由静态或固定倾角 profile 绕过下降/接触安全门。

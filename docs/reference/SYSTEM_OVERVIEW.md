@@ -26,7 +26,7 @@
 | --- | --- |
 | `aruco_detector` | 读取图像与相机内参，完成多尺度 Marker 选择、非共面远距联合 PnP、单 Marker 回退和调试图像发布。 |
 | `aruco_precision_landing_cpp` | PX4 Offboard、GNSS 会合、视觉接管、估计、预测、跟踪、下降、触地检测和接触保持。 |
-| `moving_deck_sim` | 生成甲板运动、Gazebo 姿态和评测 Ground Truth，并提供船舶 GNSS 传感器模型。 |
+| `moving_deck_sim` | 生成 legacy 甲板或 marine vessel 刚体运动、deck-center Ground Truth，并提供船舶 GNSS 传感器模型。 |
 
 仓库根目录脚本负责 SITL 编排、单轮/批量实验、离线评测、聚合和论文统计。
 
@@ -45,6 +45,12 @@
 - 在 `combined` 基础上增加小幅周期 yaw 的 `rigid_body_motion`。
 
 运动控制器支持确定性 reset、固定更新频率和固定随机种子。Ground Truth 发布完整位置、姿态、线速度和角速度，只能供传感器仿真与离线评测使用。
+
+Marine 第一版已经增加独立 `aruco_marine_vessel.sdf` 和 primitive-only `landing_vessel`。world 仍名为 `aruco`，保持 ENU、球面坐标和 250 Hz 物理更新；场景包含约 `300×300 m` 无碰撞视觉海面、独立静态 UAV launch platform，以及 `vessel_body` + 固定 `landing_deck`。legacy `aruco_moving_deck.sdf` 和 `models/moving_deck` 保持独立且仍是默认环境。
+
+marine 中同一 `MotionProfile` 改为驱动 `vessel_body`，neutral reference 为 world z≈0；固定 `T_vessel_deck=[0,0,2] m` 把 raw vessel state 转为 landing deck center。`rigid_body_kinematics` 显式加入 `R(ω×r)` lever-arm 线速度，因此 roll/pitch 同时改变 deck orientation 与 deck-center position/velocity。`/simulation/deck/ground_truth_raw` 在 marine 表示 vessel raw state，最终 `/simulation/deck/ground_truth` 仍表示 deck center。
+
+新增 model/world 已通过 `gz sdf -k` 静态解析；全仓构建与测试为 `372 tests, 0 errors, 0 failures, 0 skipped`。Marine `static` 与 `rigid_body_motion` 各完成一轮 headless PX4 SITL smoke：两轮都完成 GNSS rendezvous、4-marker 非共面 ArUco 捕获并停留在安全高度 `WAIT_LANDING_WINDOW`，shadow 为 `UPDATED:TRUSTED`，未进入下降/触地状态。static 中 raw `vessel_body z=0`、最终 `landing_deck z=2.0 m`；rigid-body 同步样本的 deck-vessel offset 范数为 `2.0 m`，位置与 `R·r` 的最大误差约 `2.2e-16 m`，线速度杠杆臂项与 `R(ω×r)` 的最大误差约 `1.4e-17 m/s`。运行时 `descent.enabled=false`、`final_descent.enabled=false`、`enable_auto_land=false`、terminal stabilization disabled，PX4 contact/landed 均为 false。当前验证 shell 无 DISPLAY/Wayland，因此未做 GUI 人工视觉验收。
 
 ### 3.2 船舶 GNSS
 
@@ -82,6 +88,8 @@ ID 4/5/6 为 `0.75 m`、分别沿两个甲板轴正负倾斜 `45°` 的副 Marke
 - `base_link_frd`：前、右、下。
 - `local_ned`：北、东、下。
 - `deck_landing_up`：x 甲板前、y 甲板左、z 甲板上。
+- `vessel_body`：marine 船体解析运动参考系，neutral world z≈0。
+- `landing_deck`：marine 固定甲板中心 frame，相对 `vessel_body` z=+2 m。
 - Gazebo world：ENU。
 
 视觉位姿使用完整刚体链：
@@ -289,5 +297,8 @@ INIT
 - `NAV_LAND / Automatic Disarm = 0 / 0`。
 - 负固定倾角、动态姿态、combined 和 rigid_body_motion 禁止下降与接触。
 - Ground Truth 不得进入控制器、窗口、估计器或状态机。
+- `--environment legacy` 仍是默认路径；`--environment marine` 必须显式选择。
+- Marine 第一版只允许 GNSS rendezvous、视觉捕获、安全高度跟踪和 deck-motion shadow；相对下降、最终下降和任意 terminal-contact stabilization 会在启动前拒绝。
+- Marine 第一版未引入 VRX、WAM-V、Wavefield/WaveVisual、JONSWAP/PM、RAO、Buoyancy、Hydrodynamics、wind、current 或 CFD。
 - 非有限 setpoint、非法四元数、无效 PX4 frame 和过期观测必须拒绝。
 - 实机自动解锁不属于默认配置；所有自动动作仅面向 SITL 并需显式授权。
