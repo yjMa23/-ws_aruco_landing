@@ -66,6 +66,23 @@ std::optional<Pose3d> transform_marker_to_local_ned(
   const Pose3d & camera_marker_pose);
 
 /**
+ * @brief 将 ArUco Marker 位姿转换到以无人机为原点、轴平行 local NED 的坐标系。
+ *
+ * 平移为 `p_marker_ned - p_uav_ned`，姿态仍表示 Marker 到 local NED 的旋转。
+ * 该转换只使用图像时刻的机体姿态和相机外参，不使用无人机绝对位置。
+ *
+ * @param body_to_ned_rotation 图像时刻从 `body_frd` 到 `local_ned` 的旋转。
+ * @param body_camera_pose `camera_optical` 在 `body_frd` 中的外参。
+ * @param camera_marker_pose Marker 在 `camera_optical` 中的 PnP 位姿。
+ * @return Marker 在 `uav_centered_ned` 中的位姿；任一输入无效时返回
+ *         `std::nullopt`。
+ */
+std::optional<Pose3d> transform_marker_to_uav_centered_ned(
+  const Eigen::Quaterniond & body_to_ned_rotation,
+  const Pose3d & body_camera_pose,
+  const Pose3d & camera_marker_pose);
+
+/**
  * @brief 将 Gazebo / ROS ENU 向量转换为 PX4 NED 向量。
  *
  * @param vector_enu ENU 向量，分量依次为 East、North、Up，单位由调用方保持一致。

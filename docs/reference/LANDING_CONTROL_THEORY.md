@@ -10,12 +10,39 @@ ArUco PnP 位姿通过完整刚体链转换到 local NED。甲板位置观测记
 z_k=[p_x,p_y,p_z]^T
 ```
 
-测量必须满足：时间单调、frame 合法、有限、与 GNSS 粗位置一致，并通过位置跳变和创新门。多尺度 Marker 的平移统一到甲板参考点。
-
-甲板向上法向由 Marker +Z 旋转到 local NED：
+测量必须满足：时间单调、frame 合法、有限、与 GNSS 粗位置一致，并通过位置跳变和创新门。
+多尺度 Marker 的完整刚体位姿统一到甲板着陆参考系 `deck_landing_up`。令该参考系为
+`D`，Marker 为 `M`，则：
 
 ```math
-n_{up}^N=R_N^M[0,0,1]^T
+T_N^D=T_N^B T_B^C T_C^M T_M^D
+```
+
+原多尺度 ID 0/1/2/3 共面、方向一致，检测器用 `T_M^D` 的平移把位置补偿到甲板
+中心。后续实物若改变 Marker 朝向，必须标定完整 `T_M^D`，不能在估计器中按 Marker
+ID 临时翻转符号。
+
+远距三维目标由一个 `0.50 m` 主 Marker 和三个 `0.75 m` 副 Marker 组成：ID 0
+保持甲板共面，中心 `[+0.45,0,0]^T m`；ID 4 中心
+`[-0.75,0,+0.2852]^T m`、绕 `D` 系 `+Y` 旋转 `+45°`；ID 5 中心
+`[0,+0.75,+0.2852]^T m`、绕 `+X` 旋转 `+45°`；ID 6 中心
+`[0,-0.75,+0.2852]^T m`、绕 `+X` 旋转 `-45°`。三个倾斜 Marker
+的最低边约高于甲板 `0.02 m`。同帧检测到 ID 0/4/5/6 时，把十六个角点先通过
+各自 `T_D^M` 表达到 `D`，再一次求解：
+
+```math
+u_i=\pi\left(K,T_C^D p_i^D\right),\qquad i=1,\ldots,16
+```
+
+三组互相独立的倾斜方向同时约束 roll/pitch 深度可观性，不依靠预知甲板运动。
+副 Marker 短时漏检时，只要当前可见的已标定角点仍构成非共面集合，就继续联合 PnP；
+退化为共面集合时才保留现有单 Marker 位姿用于兼容诊断，且不得把回退解标记为已验收
+的三维目标观测。
+
+甲板向上法向由统一甲板系 +Z 旋转到 local NED：
+
+```math
+n_{up}^N=R_N^D[0,0,1]^T
 ```
 
 低通前先统一法向半球，低通后归一化。法向范数过小、向上分量不足或时间无效时不更新。
@@ -68,6 +95,219 @@ p_{deck,pred}=p_{deck}+\tau v_{deck}
 
 以及单轴/平面最大位移。估计过期、协方差异常或结果非有限时预测无效，不把上次值伪装成新预测。
 
+### 3.1 ArUco 相对 6-DoF shadow 状态
+
+独立 shadow 不替换上述生产估计器。令 `B=base_link_frd`、`C=camera_optical`、
+`D=deck_landing_up`，图像采样时刻的直接视觉链为：
+
+```math
+T_B^D=T_B^C T_C^M T_M^D
+```
+
+定义 `U_k=uav_centered_ned`：其原点位于第 `k` 个图像时刻的无人机参考点，三轴
+平行 `local_ned`。只使用同一图像时刻的 PX4 姿态 `R_N^B`，得到：
+
+```math
+r^N=t_U^D=R_N^B t_B^D=p_D^N-p_B^N,
+\qquad
+R_N^D=R_N^B R_B^D
+```
+
+shadow 估计：
+
+```math
+x_s=(r^N,v_D^N,a_D^N,R_N^D,\omega_D^N,\alpha_D^N)
+```
+
+平移量单位依次为 `m`、`m/s`、`m/s²`，角运动量单位依次为 `rad/s`、
+`rad/s²`。`r^N` 是当前 `deck-uav` 相对位移，不是甲板绝对位置；`v_D^N/a_D^N`
+是甲板自身的 NED 速度和加速度。相对 MPC 在运行时用 `v_D^N-v_B^N` 构造相对
+速度，不要求 shadow 猜测无人机未来闭环响应。`R_N^D` 把
+`deck_landing_up` 向量旋转到 NED；因为 `U` 的轴不随无人机旋转，角速度和角加速度
+仍是甲板相对 NED 的绝对角运动，并在 NED 轴表达。
+
+该链禁止使用 PX4 绝对位置、甲板 GNSS 或 Ground Truth。PX4 绝对位置仍只服务现有
+生产链；shadow 只额外使用图像时刻插值后的 PX4 NED 速度补偿相邻观测原点变化。
+Ground Truth 只进入离线 evaluator。
+
+平移误差状态为：
+
+```math
+\delta x_s=[\delta r^T,\delta v_D^T,\delta a_D^T]^T
+```
+
+采用白噪声 jerk 驱动的常加速度模型：
+
+```math
+F_{ca}(\Delta t)=
+\begin{bmatrix}
+I_3&\Delta tI_3&\frac12\Delta t^2I_3\\
+0&I_3&\Delta tI_3\\
+0&0&I_3
+\end{bmatrix}
+```
+
+若单轴 jerk 白噪声谱密度为 `q_j`，单轴离散过程噪声为：
+
+```math
+Q_{ca}=q_j
+\begin{bmatrix}
+\frac{\Delta t^5}{20}&\frac{\Delta t^4}{8}&\frac{\Delta t^3}{6}\\
+\frac{\Delta t^4}{8}&\frac{\Delta t^3}{3}&\frac{\Delta t^2}{2}\\
+\frac{\Delta t^3}{6}&\frac{\Delta t^2}{2}&\Delta t
+\end{bmatrix}
+\otimes I_3
+```
+
+相邻样本间无人机位移使用时间对齐速度的梯形积分：
+
+```math
+\Delta p_B^N\approx\frac12(v_{B,k-1}^N+v_{B,k}^N)\Delta t
+```
+
+名义平移传播为：
+
+```math
+x_{s,k}^-=F_{ca}(\Delta t)x_{s,k-1}^+
+-[\Delta p_B^{N,T},0,0]^T
+```
+
+补偿量作为已知输入，当前不把 PX4 速度不确定性重复加入 `Q_ca`。相对位置观测
+矩阵为 `H_r=[I_3\ 0\ 0]`。对平移和后述旋转误差状态，协方差更新统一为：
+
+```math
+P_k^-=F_kP_{k-1}^+F_k^T+Q_k,
+\qquad
+S_k=H_kP_k^-H_k^T+R_k
+```
+
+```math
+d_k^2=y_k^TS_k^{-1}y_k,
+\qquad
+K_k=P_k^-H_k^TS_k^{-1}
+```
+
+只有 `d_k^2\le\gamma^2` 时注入误差。协方差使用 Joseph 形式：
+
+```math
+P_k^+=(I-K_kH_k)P_k^-(I-K_kH_k)^T+K_kR_kK_k^T
+```
+
+PX4 速度无效、frame 不是 NED、创新
+非有限、时间不递增或 Mahalanobis 超门时拒绝更新。
+
+为避免单帧差分放大位置噪声，接受观测后另对最近 `0.30 s` 的滤波相对位置加
+已积分无人机位移做局部常加速度最小二乘拟合；至少六个样本时才用拟合的
+`v_D^N/a_D^N` 发布和外推，否则保留误差状态滤波值。该拟合不使用周期、场景或未来
+真值先验。导数协方差由正规矩阵逆与残差方差给出，残差方差不得低于冻结的
+位置测量方差；拟合导数与名义位置的交叉协方差保守地置零。
+
+姿态不能直接对 Euler 角做差。名义姿态预测为 `R_{pred}`、观测为 `R_{meas}` 时，
+NED 中的最小旋转创新为：
+
+```math
+\delta\theta=\operatorname{Log}(R_{meas}R_{pred}^T)
+```
+
+旋转误差状态为：
+
+```math
+\delta x_R=[\delta\theta^T,\delta\omega^T,\delta\alpha^T]^T
+```
+
+其小误差协方差使用与 `F_ca/Q_ca` 同形的常角加速度模型。校正后左乘名义姿态：
+
+```math
+R^+=\operatorname{Exp}([\delta\theta]_{\times})R^-
+```
+
+误差注入名义姿态后，协方差使用一阶 reset Jacobian
+`G_{\theta}=I-\frac12[\delta\theta]_{\times}` 变换，随后再次对称化。四元数只作为
+`R` 的数值载体；更新前归一化并统一半球，但不掩盖真实大角度创新。
+重复或倒退时间戳不改变已验收状态；普通长 `dt` 分段传播，超过重初始化间隔则
+以新观测重建 `r/R`，清空旧的导数和样本窗。Marker 切换先通过 `T_M^D`
+归一到同一甲板系，再使用同一创新门，不在估计器内为 ID 切换引入姿态或平移跳变。
+
+### 3.2 冻结无人机原点的甲板轨迹预测
+
+在轨迹发布时刻 `t` 冻结 `O_t=uav_origin_ned` 原点。先用最近 PX4 速度将最后
+图像状态传播到 `t`，得到当前 `r(t)`；再只传播甲板运动：
+
+```math
+p_{D/O_t}^N(t+\tau)=r^N(t)+v_D^N(t)\tau+\frac12a_D^N(t)\tau^2
+```
+
+```math
+v_D^N(t+\tau)=v_D^N(t)+a_D^N(t)\tau
+```
+
+姿态以 `0.05 s` 步长用中点角速度积分：
+
+```math
+\omega_{k+\frac12}=\omega_k+\frac12\alpha_k\Delta t
+```
+
+```math
+R_{k+1}=\operatorname{Exp}([\omega_{k+\frac12}]_{\times}\Delta t)R_k,
+\qquad
+\omega_{k+1}=\omega_k+\alpha_k\Delta t
+```
+
+当前状态使用 `uav_centered_ned`，预测轨迹使用 `uav_origin_ned`，从发布时刻起按
+`0.05 s` 采样并固定发布到 `1.0 s`。每个轨迹点表示甲板相对发布时刻无人机原点的
+未来状态；未来 MPC 用自身状态和控制输入形成相对动力学，不得把 shadow 轨迹直接
+当成控制指令。设最后有效视觉样本年龄为 `t_age`、轨迹点
+相对当前发布时刻为 `\tau`，只有满足：
+
+```math
+t_{age}+\tau\le0.5\ \text{s}
+```
+
+的点属于可信 shadow；`0.5～1.0 s` 只提供低置信度诊断。时间倒退、非有限状态、
+协方差非法、创新离群或视觉年龄超过最大诊断时间时不发布可信轨迹。超过重初始化间隔
+后，下一帧有效观测重新初始化，速度和加速度不得沿用旧值。
+
+### 3.3 相对离线误差定义
+
+预测点按目标时间 `t+\tau` 与甲板 Ground Truth 对齐，同时按轨迹 header 时刻 `t`
+与无人机 Ground Truth 对齐。Bag 末尾缺少未来甲板真值或 header 时刻无人机真值的
+点排除，不记为失败。Gazebo world ENU 位置必须先
+通过 PX4 `VehicleLocalPosition.ref_*` 地理参考转换到同一 `local_ned`，不能只交换
+ENU/NED 分量。先构造：
+
+```math
+p_{D/O_t,gt}^N(t+\tau)=p_{deck,gt}^N(t+\tau)-p_{uav,gt}^N(t),
+\qquad
+v_{gt}^N=v_{deck,gt}^N(t+\tau)
+```
+
+水平和垂直相对位置误差为：
+
+```math
+e_{xy}=\lVert(r_{pred}-r_{gt})_{xy}\rVert_2,
+\qquad
+e_z=|r_{pred,z}-r_{gt,z}|
+```
+
+完整旋转、法向和 yaw 误差分别为：
+
+```math
+e_R=\cos^{-1}\left(\frac{\operatorname{tr}(R_{pred}^TR_{gt})-1}{2}\right)
+```
+
+```math
+e_n=\cos^{-1}(\operatorname{clamp}(n_{pred}^Tn_{gt},-1,1))
+```
+
+```math
+e_\psi=|\operatorname{wrap}_{[-\pi,\pi)}(\psi_{pred}-\psi_{gt})|
+```
+
+甲板线速度误差按水平范数和垂直绝对值统计，甲板角速度误差为
+`\lVert\omega_{D,pred}^N-\omega_{D,gt}^N\rVert_2`。加速度与角加速度完整报告但
+不设本轮硬门。原数值门限保持不变；位置门使用冻结原点的相对位置，twist 门使用
+甲板自身 twist。Ground Truth 只能由 evaluator 读取，禁止订阅回控制器。
+
 ## 4. 默认水平控制
 
 水平位置目标来自受限预测位置：
@@ -103,12 +343,12 @@ v_{ff,xy}=v_{deck,xy}+k_v(v_{deck,xy}-v_{uav,xy})
 x_k=[e_x,e_y,v_{rel,x},v_{rel,y}]^T
 ```
 
-定义：
+定义以代码实际契约为准：
 
 ```math
-e=p_{uav}-p_{deck},
+e=p_{deck}-p_{uav},
 \qquad
-v_{rel}=v_{uav}-v_{deck}
+v_{rel}=v_{deck}-v_{uav}
 ```
 
 控制量 `u` 是 UAV 水平加速度前馈，`d` 是由视觉估计得到的甲板水平加速度。离散双积分模型：
@@ -126,11 +366,15 @@ I_2&T_sI_2\\
 \quad
 B=
 \begin{bmatrix}
-\frac12T_s^2I_2\\
-T_sI_2
+-\frac12T_s^2I_2\\
+-T_sI_2
 \end{bmatrix},
 \quad
-E=-B
+E=
+\begin{bmatrix}
+\frac12T_s^2I_2\\
+T_sI_2
+\end{bmatrix}
 ```
 
 甲板加速度在有限预测时域内保持当前估计值；不可用时置零并输出诊断，禁止使用仿真轨迹或 Ground Truth。

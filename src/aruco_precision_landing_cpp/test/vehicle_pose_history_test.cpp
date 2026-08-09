@@ -75,6 +75,27 @@ TEST(VehiclePoseHistoryTest, InterpolatesOrientationWithShortestPathSlerp)
   expect_quaternion_equivalent(result->rotation, expected, 1.0e-8);
 }
 
+TEST(VehiclePoseHistoryTest, InterpolatesNedVelocityWithPose)
+{
+  VehiclePoseHistory history({2.0, 0.03});
+  ASSERT_TRUE(history.add_sample(
+    VehicleKinematicState{
+      make_pose(Eigen::Vector3d::Zero()), Eigen::Vector3d{1.0, -2.0, 0.5}},
+    1.0));
+  ASSERT_TRUE(history.add_sample(
+    VehicleKinematicState{
+      make_pose(Eigen::Vector3d::Ones()), Eigen::Vector3d{3.0, 2.0, -0.5}},
+    2.0));
+
+  const auto result = history.lookup_state(1.25);
+
+  ASSERT_TRUE(result.has_value());
+  EXPECT_TRUE(result->pose.translation.isApprox(
+    Eigen::Vector3d::Constant(0.25), 1.0e-12));
+  EXPECT_TRUE(result->velocity_ned_mps.isApprox(
+    Eigen::Vector3d{1.5, -1.0, 0.25}, 1.0e-12));
+}
+
 TEST(VehiclePoseHistoryTest, HandlesEquivalentQuaternionWithOppositeSign)
 {
   VehiclePoseHistory history({2.0, 0.03});

@@ -7,7 +7,7 @@ usage() {
 Usage: ./scripts/start_sitl.sh [options]
 
 Options:
-  --scenario static|constant02|constant|sinusoidal|heave|heave_h1|heave_h2|heave_h3|rollpitch|combined
+  --scenario static|constant02|constant|sinusoidal|heave|heave_h1|heave_h2|heave_h3|rollpitch|combined|rigid_body_motion
              |tilt_roll_pos_2deg|tilt_roll_neg_2deg|tilt_pitch_pos_2deg|tilt_pitch_neg_2deg
                                          Deck scenario (default: static)
                                          constant02 = 0.2 m/s, constant = 0.4 m/s
@@ -21,6 +21,7 @@ Options:
   --record-camera-debug                  Record a bag and additionally include raw camera topics
   --bag-output PATH                      Write rosbag to this exact directory (implies --record)
   --seed SEED                            Deterministic deck/GNSS seed (default: 1)
+  --rendezvous-altitude METERS           PX4 local altitude target (default: 5.0; 7.0 gives about 5 m above this deck)
   --auto-confirm-controller              Skip the interactive SITL controller confirmation
   --camera-model px4-default|close-range Select camera near clip profile (default: close-range)
   --tracking-mode MODE                   Override tracking.mode
@@ -79,6 +80,7 @@ record="false"
 record_camera_debug="false"
 bag_output=""
 random_seed="1"
+rendezvous_altitude_m="5.0"
 auto_confirm_controller="false"
 camera_model_profile="close-range"
 tracking_mode="PREDICTED_POSITION_VELOCITY_FF"
@@ -147,6 +149,11 @@ while (($#)); do
     --seed)
       (($# >= 2)) || die "--seed requires a value"
       random_seed="$2"
+      shift 2
+      ;;
+    --rendezvous-altitude)
+      (($# >= 2)) || die "--rendezvous-altitude requires a value"
+      rendezvous_altitude_m="$2"
       shift 2
       ;;
     --auto-confirm-controller)
@@ -366,16 +373,21 @@ case "$scenario" in
   heave_h3) scenario_config="heave_h3.yaml" ;;
   rollpitch) scenario_config="roll_pitch.yaml" ;;
   combined) scenario_config="combined.yaml" ;;
+  rigid_body_motion) scenario_config="rigid_body_motion.yaml" ;;
   tilt_roll_pos_2deg) scenario_config="tilt_roll_pos_2deg.yaml" ;;
   tilt_roll_neg_2deg) scenario_config="tilt_roll_neg_2deg.yaml" ;;
   tilt_pitch_pos_2deg) scenario_config="tilt_pitch_pos_2deg.yaml" ;;
   tilt_pitch_neg_2deg) scenario_config="tilt_pitch_neg_2deg.yaml" ;;
-  *) die "invalid scenario '$scenario' (expected static, constant02, constant, sinusoidal, heave, heave_h1, heave_h2, heave_h3, rollpitch, combined, or a tilted-deck fixed tilt_*_2deg profile)" ;;
+  *) die "invalid scenario '$scenario' (expected static, constant02, constant, sinusoidal, heave, heave_h1, heave_h2, heave_h3, rollpitch, combined, rigid_body_motion, or a tilted-deck fixed tilt_*_2deg profile)" ;;
 esac
 
-if [[ "$scenario" == "rollpitch" || "$scenario" == "combined" ]]; then
+if [[ "$scenario" == "rollpitch" || "$scenario" == "combined" || "$scenario" == "rigid_body_motion" ]]; then
   [[ "$relative_descent_enabled" == "false" ]] ||
     die "dynamic roll/pitch and combined scenarios are restricted to safe-altitude shadow validation"
+  [[ "$final_descent_enabled" == "false" ]] ||
+    die "dynamic attitude scenarios forbid final descent"
+  [[ "$terminal_contact_stabilization_mode" == "disabled" || "$terminal_contact_stabilization_mode" == "shadow" ]] ||
+    die "dynamic attitude scenarios forbid active terminal contact stabilization"
 fi
 
 tilted_deck_gate_profile="not_tilted_deck"
@@ -481,6 +493,7 @@ awk -v value="$random_seed" 'BEGIN {exit !(value >= 0 && value <= 4294967295)}' 
 
 for value_name in \
   prediction_horizon_s \
+  rendezvous_altitude_m \
   velocity_feedforward_gain \
   relative_velocity_gain \
   adaptive_gain_min \
@@ -505,6 +518,10 @@ for value_name in \
   value="${!value_name}"
   is_nonnegative_number "$value" || die "$value_name must be a non-negative decimal number"
 done
+
+awk -v value="$rendezvous_altitude_m" \
+  'BEGIN {exit !(value == 3.0 || value == 5.0 || value == 7.0)}' ||
+  die "rendezvous_altitude_m must be exactly 3.0, 5.0, or 7.0"
 
 awk -v value="$prediction_horizon_s" 'BEGIN {exit !(value <= 0.50)}' ||
   die "prediction_horizon_s must not exceed 0.50"
@@ -572,6 +589,7 @@ fi
 if [[ "$dry_run" == "true" ]]; then
   echo "DRY_RUN validation passed"
   echo "scenario=$scenario"
+  echo "rendezvous_altitude_m=$rendezvous_altitude_m"
   echo "relative_descent_enabled=$relative_descent_enabled"
   echo "descent_minimum_test_height_m=$descent_minimum_test_height_m"
   echo "final_descent_enabled=$final_descent_enabled"
@@ -910,6 +928,10 @@ if [[ "$record" == "true" ]]; then
     /landing/effective_relative_velocity_gain
     /landing/estimated_deck_acceleration
     /landing/estimated_deck_attitude
+    /landing/deck_motion_shadow/state
+    /landing/deck_motion_shadow/trajectory
+    /landing/deck_motion_shadow/status
+    /landing/deck_motion_shadow/trusted_horizon_s
     /landing/deck_plane/upward_normal_ned
     /landing/deck_plane/body_clearance
     /landing/deck_plane/skid_clearances
@@ -945,6 +967,7 @@ if [[ "$record" == "true" ]]; then
     /landing/relative_height_reference
     /landing/descent_phase
     /simulation/deck/ground_truth
+    /simulation/uav/ground_truth_pose
     /aruco/visible
     /aruco/id
     /aruco/pose
@@ -971,6 +994,7 @@ fi
 start_process "landing controller" ros2 launch \
   aruco_precision_landing_cpp px4_aruco_landing.launch.py \
   use_sim_time:=true \
+  "rendezvous_altitude_m:=$rendezvous_altitude_m" \
   "tracking_mode:=$tracking_mode" \
   "prediction_horizon_s:=$prediction_horizon_s" \
   "velocity_feedforward_gain:=$velocity_feedforward_gain" \

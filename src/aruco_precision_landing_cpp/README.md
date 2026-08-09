@@ -18,6 +18,8 @@ ROS 2 C++17 精准降落控制包，负责 PX4 Offboard、船舶 GNSS 会合、A
 - 触地证据、候选持续时间和确认状态。
 - MPC 求解状态、耗时、约束和回退诊断。
 - 甲板平面、滑橇间隙和终端接触稳定化诊断。
+- 独立 6-DoF shadow 状态、轨迹、状态字符串和可信时域：
+  `/landing/deck_motion_shadow/{state,trajectory,status,trusted_horizon_s}`。
 
 ## 控制模式
 
@@ -40,7 +42,18 @@ automatic Disarm: disabled
 terminal contact stabilization: disabled
 ```
 
-负固定倾角、动态 `rollpitch` 和 `combined` 不允许下降或真实接触。
+负固定倾角、动态 `rollpitch`、`combined` 和 `rigid_body_motion` 不允许下降或真实接触。6-DoF shadow 在控制 setpoint 发布后运行，不修改状态机、窗口、MPC 或下降参考。
+
+6-DoF 参数统一位于 `deck_motion_shadow.*`：jerk/角 jerk、位置/姿态测量噪声、
+初始协方差、采样与重初始化时间门、位置/姿态 Mahalanobis 门、向上法向门、
+`0.30 s` 局部导数拟合窗，以及冻结的 `0.05 / 0.50 / 1.00 s` 采样/可信/最大输出
+时域。完整默认值见 `config/px4_aruco_landing.yaml`。
+
+当前 state 位姿使用 `uav_centered_ned`，trajectory 使用每条消息冻结的
+`uav_origin_ned`；两者的 twist 均为甲板自身 NED twist。约 `5 m` 的
+`static/rollpitch/combined/rigid_body_motion × seed 1/2/3` 正式矩阵已完成：
+安全隔离 `12/12`，冻结全性能硬门 `2/12`。Shadow 仍仅用于诊断，不授权 NMPC
+或动态姿态下降。
 
 ## 主要状态
 
@@ -78,6 +91,7 @@ python3 scripts/evaluate_horizontal_tracking.py bags/<bag>
 python3 scripts/evaluate_relative_descent.py bags/<bag>
 python3 scripts/evaluate_final_descent_touchdown.py bags/<bag>
 python3 scripts/evaluate_tilted_deck.py bags/<bag> --scenario tilt_roll_pos_2deg
+python3 scripts/evaluate_deck_motion_shadow.py bags/<bag>
 ```
 
 完整架构、参数语义和安全边界见：

@@ -14,8 +14,16 @@ Gazebo Harmonic/ROS 2 移动甲板和船舶 GNSS 仿真包。
 | `tilt_*_2deg` | 固定正负 `2°` roll/pitch。 |
 | `rollpitch` | 低频动态 roll/pitch。 |
 | `combined` | XY、升沉和动态姿态组合。 |
+| `rigid_body_motion` | `combined` 加小幅周期 yaw，供 6-DoF shadow 评测。 |
 
-`rollpitch` 与 `combined` 当前只用于安全高度观察和离线评测，不授权下降或接触。
+`rollpitch`、`combined` 与 `rigid_body_motion` 当前只用于安全高度观察和离线评测，不授权下降或接触。
+
+## 视觉目标
+
+甲板保留 ID 0/1/2/3 多尺度共面 Marker，并增加远距非共面副 Marker：ID 4/5/6
+边长均为 `0.75 m`，分别绕甲板 `+Y/+X/+X` 旋转 `+45°/+45°/-45°`，最低边约
+高于甲板 `0.02 m`。副 Marker 使用 `120×120` 无损放大纹理，避免斜视时低分辨率
+纹理插值破坏码元。该几何只提供相机观测，不包含运动真值或未来轨迹。
 
 ## 输出
 
@@ -44,6 +52,7 @@ Ground Truth 包含甲板位置、姿态、线速度和角速度。它只能进�
 
 ```bash
 ./scripts/start_sitl.sh --scenario sinusoidal
+./scripts/start_sitl.sh --scenario rigid_body_motion
 ```
 
 仅启动甲板仿真：

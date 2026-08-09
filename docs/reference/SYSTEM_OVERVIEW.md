@@ -24,7 +24,7 @@
 
 | 包 | 当前职责 |
 | --- | --- |
-| `aruco_detector` | 读取图像与相机内参，完成多尺度 Marker 选择、PnP、甲板参考点补偿和调试图像发布。 |
+| `aruco_detector` | 读取图像与相机内参，完成多尺度 Marker 选择、非共面远距联合 PnP、单 Marker 回退和调试图像发布。 |
 | `aruco_precision_landing_cpp` | PX4 Offboard、GNSS 会合、视觉接管、估计、预测、跟踪、下降、触地检测和接触保持。 |
 | `moving_deck_sim` | 生成甲板运动、Gazebo 姿态和评测 Ground Truth，并提供船舶 GNSS 传感器模型。 |
 
@@ -42,6 +42,7 @@
 - 固定正负 `2°` roll 或 pitch。
 - 低频动态 `rollpitch`。
 - 同时包含水平运动、升沉和姿态运动的 `combined`。
+- 在 `combined` 基础上增加小幅周期 yaw 的 `rigid_body_motion`。
 
 运动控制器支持确定性 reset、固定更新频率和固定随机种子。Ground Truth 发布完整位置、姿态、线速度和角速度，只能供传感器仿真与离线评测使用。
 
@@ -68,6 +69,11 @@
 
 四尺度 Marker 使用有状态选择，避免近距离尺寸切换抖动；PnP 位姿先补偿到统一甲板参考点，再进入坐标链。相机模型支持普通和近距配置。
 
+约 `5 m` 远距目标另有 ID 0/4/5/6 非共面板：ID 0 为 `0.50 m` 共面主 Marker，
+ID 4/5/6 为 `0.75 m`、分别沿两个甲板轴正负倾斜 `45°` 的副 Marker。检测器把当前
+可见的已标定角点一次联合求解到 `deck_landing_up`；只有角点集合退化为共面时才回退
+单 Marker。三个倾斜纹理为 `120×120`，避免 Gazebo 斜视采样把码元插值成灰块。
+
 ## 4. 坐标和时间
 
 统一坐标：
@@ -75,15 +81,17 @@
 - `camera_optical`：右、下、前。
 - `base_link_frd`：前、右、下。
 - `local_ned`：北、东、下。
+- `deck_landing_up`：x 甲板前、y 甲板左、z 甲板上。
 - Gazebo world：ENU。
 
 视觉位姿使用完整刚体链：
 
 ```text
-T_local_ned_marker
+T_local_ned_deck_landing_up
 = T_local_ned_body_frd
 * T_body_frd_camera_optical
 * T_camera_optical_marker
+* T_marker_deck_landing_up
 ```
 
 控制器检查 PX4 odometry `pose_frame`，使用 `VehicleLocalPosition.ref_lat/ref_lon/ref_alt` 建立 WGS84/local NED 参考。图像时间与 PX4 时间先映射到统一 ROS 时间域，再从 `VehiclePoseHistory` 插值图像采样时刻的机体位姿，避免把当前姿态错误用于历史图像。
@@ -124,6 +132,31 @@ GNSS 会合路径会：
 ```
 
 受限预测器限制预测时域和最大位置偏移。垂直估计独立处理低高度甲板 z、相对高度和相对垂直速度；下视相机 FRD 外参为 `[0, 0, 0.14] m`。
+
+节点还实现独立的甲板 6-DoF shadow 误差状态估计器。当前平移是
+`uav_centered_ned` 中的 `deck-uav` 相对位移，线速度/加速度是甲板自身
+NED 导数；姿态状态为 `R/ω/α`。输入只使用完成图像时间对齐和 Marker
+坐标统一后的 ArUco 甲板中心相对位姿，以及同时刻 PX4 NED 速度用于补偿
+无人机观测原点移动；不使用 PX4 绝对位置、甲板 GNSS 或 Ground Truth。
+
+名义平移使用白噪声 jerk 常加速度模型，接受观测的最近 `0.30 s` 滤波
+位置另做局部常加速度拟合以发布线导数；姿态创新使用 SO(3) 旋转对数，
+预测使用中点角速度积分。误差状态和拟合导数都发布有限、半正定协方差。
+
+Shadow 输出为：
+
+```text
+/landing/deck_motion_shadow/state              nav_msgs/msg/Odometry
+/landing/deck_motion_shadow/trajectory         trajectory_msgs/msg/MultiDOFJointTrajectory
+/landing/deck_motion_shadow/status             std_msgs/msg/String
+/landing/deck_motion_shadow/trusted_horizon_s  std_msgs/msg/Float64
+```
+
+轨迹在每条消息发布时把无人机原点冻结为 `uav_origin_ned`，以 `0.05 s`
+采样到最后视觉样本后的 `1.0 s`；累计外推不超过 `0.5 s` 的区间由独立
+可信时域话题标记。非法输入、时间倒退、离群、翻转姿态和长期丢失不会刷新可信
+时域。该 shadow 在 `TrajectorySetpoint` 发布后运行，未接入 MPC、生产位置估计、
+着陆窗口、下降参考、触地或状态机。
 
 ## 7. 水平跟踪
 
@@ -210,6 +243,25 @@ INIT
 
 实验工具支持单轮、顺序批量、seed 展开、resume、失败分类、轻量/诊断 Bag、参数快照、离线重评测和聚合。
 
+6-DoF shadow 另有专用 evaluator 与冻结的
+`static/rollpitch/combined/rigid_body_motion × seed 1/2/3` 顺序运行脚本。
+相对方案约 `5 m` 正式矩阵见
+[`results/deck_motion_shadow_relative_5m_20260809`](../../results/deck_motion_shadow_relative_5m_20260809/manifest.json)，
+实际相对高度 RMSE 为 `5.175–5.346 m`：
+
+- `12/12` 均保持 `DESCEND/contact/penetration/NAV_LAND/Disarm = 0`；时间同步错误、
+  Ground Truth 无效样本和非有限输出也均为 `0`。
+- 有效覆盖率全部为 `100%`。当前法向 RMSE/P95 范围为
+  `0.122°–0.249° / 0.200°–0.403°`，对应门为 `12/12`。
+- `0.5 s` 预测水平/垂直位置 P95 为 `0.029–0.142 m / 0.037–0.045 m`，
+  法向 P95 为 `0.457°–1.145°`，三项门均为 `12/12`；wrapped yaw 为 `11/12`。
+- `0.5 s` 水平速度、垂直速度和角速度 P95 范围为
+  `0.081–0.364 m/s`、`0.088–0.124 m/s`、`0.856°/s–2.930°/s`，门通过数分别为
+  `6/12`、`2/12`、`3/12`。
+- 全部硬门总结果为 `2/12`（static seed1/3）。失败集中在未来 twist，而不是
+  约 `5 m` 的当前位姿或未来位置，因此本轮未触发约 `3 m` 像素分辨率对照。
+  结果不授权 NMPC、动态姿态下降或真实接触。
+
 冻结数据的主要结论：
 
 - smoke：`20/27`，7 个失败均为 `SAFETY_GATE_FAILURE`。
@@ -226,7 +278,8 @@ INIT
 - 静止、水平匀速和升沉相对下降及真实接触。
 - 四状态相对 MPC 的安全高度、下降、接触与规则式回退。
 - 固定正 `+2° roll/pitch` 的终端接触稳定化和 10 秒保持。
-- 全工作区最近冻结记录为 `340 tests, 0 failures, 0 skipped`。
+- 全工作区当前实现记录为 `361 tests, 0 failures, 0 skipped`；相对 shadow
+  正式 12 轮的安全隔离为 `12/12`，全性能硬门为 `2/12`。
 
 固定正倾角的成功不能外推到负倾角、动态 `rollpitch` 或 `combined`。
 
@@ -234,7 +287,7 @@ INIT
 
 - 默认 `descent.enabled=false`、final descent disabled。
 - `NAV_LAND / Automatic Disarm = 0 / 0`。
-- 负固定倾角、动态姿态和 combined 禁止下降与接触。
+- 负固定倾角、动态姿态、combined 和 rigid_body_motion 禁止下降与接触。
 - Ground Truth 不得进入控制器、窗口、估计器或状态机。
 - 非有限 setpoint、非法四元数、无效 PX4 frame 和过期观测必须拒绝。
 - 实机自动解锁不属于默认配置；所有自动动作仅面向 SITL 并需显式授权。

@@ -94,6 +94,9 @@ Px4ArucoLandingNode::Px4ArucoLandingNode()
   target_state_estimator_ =
     std::make_unique<TargetStateEstimator>(estimator_parameters);
 
+  deck_motion_estimator_ =
+    std::make_unique<DeckMotionEstimator>(deck_motion_shadow_parameters_);
+
   VerticalStateEstimatorParameters vertical_parameters;
   vertical_parameters.process_acceleration_std_mps2 =
     vertical_process_acceleration_std_mps2_;
@@ -432,6 +435,54 @@ void Px4ArucoLandingNode::declare_and_load_parameters()
     "target_state_estimator.reinitialize_gap_s", 2.0);
   estimator_innovation_gate_mahalanobis_ = declare_parameter<double>(
     "target_state_estimator.innovation_gate_mahalanobis", 5.0);
+  deck_motion_shadow_enabled_ = declare_parameter<bool>(
+    "deck_motion_shadow.enabled", true);
+  deck_motion_shadow_parameters_.linear_jerk_std_mps3 = declare_parameter<double>(
+    "deck_motion_shadow.linear_jerk_std_mps3", 1.0);
+  deck_motion_shadow_parameters_.angular_jerk_std_radps3 = declare_parameter<double>(
+    "deck_motion_shadow.angular_jerk_std_radps3", 0.20);
+  deck_motion_shadow_parameters_.measurement_horizontal_std_m = declare_parameter<double>(
+    "deck_motion_shadow.measurement_horizontal_std_m", 0.08);
+  deck_motion_shadow_parameters_.measurement_vertical_std_m = declare_parameter<double>(
+    "deck_motion_shadow.measurement_vertical_std_m", 0.12);
+  deck_motion_shadow_parameters_.measurement_orientation_std_rad = declare_parameter<double>(
+    "deck_motion_shadow.measurement_orientation_std_rad", 0.02617993877991494);
+  deck_motion_shadow_parameters_.initial_position_std_m = declare_parameter<double>(
+    "deck_motion_shadow.initial_position_std_m", 0.20);
+  deck_motion_shadow_parameters_.initial_velocity_std_mps = declare_parameter<double>(
+    "deck_motion_shadow.initial_velocity_std_mps", 1.0);
+  deck_motion_shadow_parameters_.initial_acceleration_std_mps2 = declare_parameter<double>(
+    "deck_motion_shadow.initial_acceleration_std_mps2", 1.0);
+  deck_motion_shadow_parameters_.initial_orientation_std_rad = declare_parameter<double>(
+    "deck_motion_shadow.initial_orientation_std_rad", 0.05235987755982988);
+  deck_motion_shadow_parameters_.initial_angular_velocity_std_radps =
+    declare_parameter<double>(
+    "deck_motion_shadow.initial_angular_velocity_std_radps", 0.17453292519943295);
+  deck_motion_shadow_parameters_.initial_angular_acceleration_std_radps2 =
+    declare_parameter<double>(
+    "deck_motion_shadow.initial_angular_acceleration_std_radps2", 0.17453292519943295);
+  deck_motion_shadow_parameters_.minimum_sample_dt_s = declare_parameter<double>(
+    "deck_motion_shadow.minimum_sample_dt_s", 0.001);
+  deck_motion_shadow_parameters_.maximum_sample_dt_s = declare_parameter<double>(
+    "deck_motion_shadow.maximum_sample_dt_s", 0.25);
+  deck_motion_shadow_parameters_.reinitialize_gap_s = declare_parameter<double>(
+    "deck_motion_shadow.reinitialize_gap_s", 2.0);
+  deck_motion_shadow_parameters_.position_innovation_gate_mahalanobis =
+    declare_parameter<double>(
+    "deck_motion_shadow.position_innovation_gate_mahalanobis", 5.0);
+  deck_motion_shadow_parameters_.orientation_innovation_gate_mahalanobis =
+    declare_parameter<double>(
+    "deck_motion_shadow.orientation_innovation_gate_mahalanobis", 5.0);
+  deck_motion_shadow_parameters_.minimum_upward_normal_component = declare_parameter<double>(
+    "deck_motion_shadow.minimum_upward_normal_component", 0.50);
+  deck_motion_shadow_parameters_.prediction_sample_period_s = declare_parameter<double>(
+    "deck_motion_shadow.prediction_sample_period_s", 0.05);
+  deck_motion_shadow_parameters_.trusted_prediction_horizon_s = declare_parameter<double>(
+    "deck_motion_shadow.trusted_prediction_horizon_s", 0.50);
+  deck_motion_shadow_parameters_.maximum_prediction_horizon_s = declare_parameter<double>(
+    "deck_motion_shadow.maximum_prediction_horizon_s", 1.00);
+  deck_motion_shadow_parameters_.kinematic_fit_window_s = declare_parameter<double>(
+    "deck_motion_shadow.kinematic_fit_window_s", 0.30);
   vertical_state_estimator_enabled_ = declare_parameter<bool>(
     "vertical_state_estimator.enabled", true);
   vertical_process_acceleration_std_mps2_ = declare_parameter<double>(
@@ -816,6 +867,7 @@ void Px4ArucoLandingNode::validate_parameters() const
   require_positive(
     "target_state_estimator.innovation_gate_mahalanobis",
     estimator_innovation_gate_mahalanobis_);
+  (void)DeckMotionEstimator{deck_motion_shadow_parameters_};
   require_positive(
     "vertical_state_estimator.process_acceleration_std_mps2",
     vertical_process_acceleration_std_mps2_);
@@ -1438,6 +1490,19 @@ void Px4ArucoLandingNode::create_ros_interfaces()
     create_publisher<geometry_msgs::msg::Vector3Stamped>(
     "/landing/estimated_deck_attitude",
     rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  deck_motion_shadow_state_pub_ = create_publisher<nav_msgs::msg::Odometry>(
+    "/landing/deck_motion_shadow/state",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  deck_motion_shadow_trajectory_pub_ =
+    create_publisher<trajectory_msgs::msg::MultiDOFJointTrajectory>(
+    "/landing/deck_motion_shadow/trajectory",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  deck_motion_shadow_status_pub_ = create_publisher<std_msgs::msg::String>(
+    "/landing/deck_motion_shadow/status",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
+  deck_motion_shadow_trusted_horizon_pub_ = create_publisher<std_msgs::msg::Float64>(
+    "/landing/deck_motion_shadow/trusted_horizon_s",
+    rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
   deck_plane_upward_normal_pub_ =
     create_publisher<geometry_msgs::msg::Vector3Stamped>(
     "/landing/deck_plane/upward_normal_ned",
@@ -1682,6 +1747,47 @@ void Px4ArucoLandingNode::aruco_pose_callback(
 
   update_estimated_deck_attitude(marker_pose_ned.rotation, receipt_time);
 
+  if (deck_motion_shadow_enabled_) {
+    Pose3d relative_deck_pose_ned;
+    Eigen::Vector3d uav_velocity_ned_mps;
+    const bool relative_pose_valid =
+      compute_relative_deck_pose_ned(
+        sample_time_s, relative_deck_pose_ned, uav_velocity_ned_mps);
+    if (!relative_pose_valid) {
+      deck_motion_shadow_status_ = "REJECTED_INVALID_INPUT";
+    } else {
+      const int32_t marker_id = have_aruco_id_ ? aruco_id_ : -1;
+      const DeckMotionUpdateResult shadow_result =
+        deck_motion_estimator_->update(
+          relative_deck_pose_ned, uav_velocity_ned_mps, marker_id, sample_time_s);
+      switch (shadow_result.status) {
+        case DeckMotionUpdateStatus::kInitialized:
+          deck_motion_shadow_status_ = "INITIALIZED";
+          break;
+        case DeckMotionUpdateStatus::kUpdated:
+          deck_motion_shadow_status_ = "UPDATED";
+          break;
+        case DeckMotionUpdateStatus::kReinitialized:
+          deck_motion_shadow_status_ = "REINITIALIZED";
+          break;
+        case DeckMotionUpdateStatus::kRejectedInvalidInput:
+          deck_motion_shadow_status_ = "REJECTED_INVALID_INPUT";
+          break;
+        case DeckMotionUpdateStatus::kRejectedNonMonotonicTime:
+          deck_motion_shadow_status_ = "REJECTED_NON_MONOTONIC_TIME";
+          break;
+        case DeckMotionUpdateStatus::kRejectedOutlier:
+          deck_motion_shadow_status_ = "REJECTED_OUTLIER";
+          RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 5000,
+            "Rejected deck-motion shadow outlier with position/orientation NIS %.3f/%.3f",
+            shadow_result.position_normalized_innovation_squared,
+            shadow_result.orientation_normalized_innovation_squared);
+          break;
+      }
+    }
+  }
+
   const TargetStateUpdateResult estimator_result =
     target_state_estimator_->update(marker_pose_ned.translation, sample_time_s);
   switch (estimator_result.status) {
@@ -1923,7 +2029,21 @@ void Px4ArucoLandingNode::vehicle_odometry_callback(
       vehicle_odometry_.q[1],
       vehicle_odometry_.q[2],
       vehicle_odometry_.q[3]}};
-  if (!vehicle_pose_history_->add_sample(local_body_pose, *sample_time_s)) {
+  const bool velocity_valid =
+    vehicle_odometry_.velocity_frame ==
+    px4_msgs::msg::VehicleOdometry::VELOCITY_FRAME_NED &&
+    std::isfinite(vehicle_odometry_.velocity[0]) &&
+    std::isfinite(vehicle_odometry_.velocity[1]) &&
+    std::isfinite(vehicle_odometry_.velocity[2]);
+  const VehicleKinematicState kinematic_state{
+    local_body_pose,
+    velocity_valid ?
+    Eigen::Vector3d{
+      vehicle_odometry_.velocity[0],
+      vehicle_odometry_.velocity[1],
+      vehicle_odometry_.velocity[2]} : Eigen::Vector3d::Zero(),
+    velocity_valid};
+  if (!vehicle_pose_history_->add_sample(kinematic_state, *sample_time_s)) {
     RCLCPP_WARN_THROTTLE(
       get_logger(), *get_clock(), 5000,
       "Rejected PX4 odometry sample because pose history insertion failed");
@@ -1960,6 +2080,8 @@ void Px4ArucoLandingNode::control_timer_callback()
   run_state_machine(now, dt);
   update_touchdown_detection(now);
   publish_trajectory_setpoint();
+  // 6-DoF shadow 只在控制输出发布后读取自身状态并发布诊断，不能影响当前控制周期。
+  publish_deck_motion_shadow(now);
   // deck-geometry shadow 几何在控制输出发布后计算，结果不会进入本周期或后续控制输入。
   update_deck_plane_geometry_shadow(now);
   publish_landing_state();
@@ -2942,6 +3064,8 @@ void Px4ArucoLandingNode::transition_to(
       marker_normal_valid_mask_ = 0U;
       visual_guidance_->reset();
       target_state_estimator_->reset();
+      deck_motion_estimator_->reset();
+      deck_motion_shadow_status_ = "NOT_INITIALIZED";
       vertical_state_estimator_->reset();
       touchdown_detector_->reset();
       touchdown_result_valid_ = false;
@@ -2985,6 +3109,8 @@ void Px4ArucoLandingNode::transition_to(
       marker_normal_valid_mask_ = 0U;
       visual_guidance_->reset();
       target_state_estimator_->reset();
+      deck_motion_estimator_->reset();
+      deck_motion_shadow_status_ = "NOT_INITIALIZED";
       vertical_state_estimator_->reset();
       touchdown_detector_->reset();
       touchdown_result_valid_ = false;
@@ -3088,6 +3214,8 @@ void Px4ArucoLandingNode::transition_to(
       marker_normal_valid_mask_ = 0U;
       visual_guidance_->reset();
       target_state_estimator_->reset();
+      deck_motion_estimator_->reset();
+      deck_motion_shadow_status_ = "NOT_INITIALIZED";
       vertical_state_estimator_->reset();
       deck_attitude_estimator_->reset();
       deck_plane_shadow_attitude_estimator_->reset();
@@ -3134,6 +3262,8 @@ void Px4ArucoLandingNode::transition_to(
       previous_deck_normal_marker_id_ = -1;
       marker_normal_valid_mask_ = 0U;
       target_state_estimator_->reset();
+      deck_motion_estimator_->reset();
+      deck_motion_shadow_status_ = "NOT_INITIALIZED";
       vertical_state_estimator_->reset();
       deck_attitude_estimator_->reset();
       deck_plane_shadow_attitude_estimator_->reset();
@@ -3295,6 +3425,40 @@ bool Px4ArucoLandingNode::compute_marker_pose_ned(
     return false;
   }
   marker_pose_ned = *transformed;
+  return true;
+}
+
+bool Px4ArucoLandingNode::compute_relative_deck_pose_ned(
+  double image_sample_time_s,
+  Pose3d & relative_deck_pose_ned,
+  Eigen::Vector3d & uav_velocity_ned_mps) const
+{
+  if (!have_aruco_pose_ || !std::isfinite(image_sample_time_s)) {
+    return false;
+  }
+
+  const auto local_body_state = vehicle_pose_history_->lookup_state(image_sample_time_s);
+  if (!local_body_state.has_value() || !local_body_state->velocity_valid) {
+    return false;
+  }
+
+  const Pose3d camera_marker_pose{
+    Eigen::Vector3d{
+      aruco_pose_.pose.position.x,
+      aruco_pose_.pose.position.y,
+      aruco_pose_.pose.position.z},
+    Eigen::Quaterniond{
+      aruco_pose_.pose.orientation.w,
+      aruco_pose_.pose.orientation.x,
+      aruco_pose_.pose.orientation.y,
+      aruco_pose_.pose.orientation.z}};
+  const auto transformed = transform_marker_to_uav_centered_ned(
+    local_body_state->pose.rotation, body_camera_pose_, camera_marker_pose);
+  if (!transformed.has_value()) {
+    return false;
+  }
+  relative_deck_pose_ned = *transformed;
+  uav_velocity_ned_mps = local_body_state->velocity_ned_mps;
   return true;
 }
 
@@ -4474,6 +4638,110 @@ void Px4ArucoLandingNode::publish_estimated_deck_attitude()
   msg.vector.y = estimated_deck_attitude_.pitch_rad;
   msg.vector.z = estimated_deck_attitude_.tilt_rad;
   estimated_deck_attitude_pub_->publish(msg);
+}
+
+void Px4ArucoLandingNode::publish_deck_motion_shadow(const rclcpp::Time & now)
+{
+  std_msgs::msg::String status_msg;
+  std_msgs::msg::Float64 trusted_horizon_msg;
+  if (!deck_motion_shadow_enabled_) {
+    status_msg.data = "DISABLED";
+    trusted_horizon_msg.data = 0.0;
+    deck_motion_shadow_status_pub_->publish(status_msg);
+    deck_motion_shadow_trusted_horizon_pub_->publish(trusted_horizon_msg);
+    return;
+  }
+
+  const auto estimate = deck_motion_estimator_->estimate();
+  const auto prediction = deck_motion_estimator_->predict(now.seconds());
+  if (!estimate.has_value() || !prediction.has_value()) {
+    status_msg.data = estimate.has_value() ? "STALE" : deck_motion_shadow_status_;
+    trusted_horizon_msg.data = 0.0;
+    deck_motion_shadow_status_pub_->publish(status_msg);
+    deck_motion_shadow_trusted_horizon_pub_->publish(trusted_horizon_msg);
+    return;
+  }
+
+  status_msg.data = deck_motion_shadow_status_ +
+    (prediction->trusted_horizon_s > 0.0 ? ":TRUSTED" : ":LOW_CONFIDENCE");
+  trusted_horizon_msg.data = prediction->trusted_horizon_s;
+  deck_motion_shadow_status_pub_->publish(status_msg);
+  deck_motion_shadow_trusted_horizon_pub_->publish(trusted_horizon_msg);
+
+  nav_msgs::msg::Odometry state_msg;
+  const rclcpp::Time sample_time{
+    static_cast<int64_t>(estimate->sample_time_s * 1.0e9), now.get_clock_type()};
+  state_msg.header.stamp = sample_time;
+  state_msg.header.frame_id = "uav_centered_ned";
+  state_msg.child_frame_id = "deck_landing_up";
+  state_msg.pose.pose.position.x = estimate->position_ned_m.x();
+  state_msg.pose.pose.position.y = estimate->position_ned_m.y();
+  state_msg.pose.pose.position.z = estimate->position_ned_m.z();
+  state_msg.pose.pose.orientation.w = estimate->orientation_deck_to_ned.w();
+  state_msg.pose.pose.orientation.x = estimate->orientation_deck_to_ned.x();
+  state_msg.pose.pose.orientation.y = estimate->orientation_deck_to_ned.y();
+  state_msg.pose.pose.orientation.z = estimate->orientation_deck_to_ned.z();
+  state_msg.twist.twist.linear.x = estimate->velocity_ned_mps.x();
+  state_msg.twist.twist.linear.y = estimate->velocity_ned_mps.y();
+  state_msg.twist.twist.linear.z = estimate->velocity_ned_mps.z();
+  state_msg.twist.twist.angular.x = estimate->angular_velocity_ned_radps.x();
+  state_msg.twist.twist.angular.y = estimate->angular_velocity_ned_radps.y();
+  state_msg.twist.twist.angular.z = estimate->angular_velocity_ned_radps.z();
+  state_msg.pose.covariance.fill(0.0);
+  state_msg.twist.covariance.fill(0.0);
+  for (int row = 0; row < 3; ++row) {
+    for (int column = 0; column < 3; ++column) {
+      state_msg.pose.covariance[row * 6 + column] =
+        estimate->translation_covariance(row, column);
+      state_msg.pose.covariance[(row + 3) * 6 + column + 3] =
+        estimate->rotation_covariance(row, column);
+      state_msg.twist.covariance[row * 6 + column] =
+        estimate->translation_covariance(row + 3, column + 3);
+      state_msg.twist.covariance[(row + 3) * 6 + column + 3] =
+        estimate->rotation_covariance(row + 3, column + 3);
+    }
+  }
+  deck_motion_shadow_state_pub_->publish(state_msg);
+
+  trajectory_msgs::msg::MultiDOFJointTrajectory trajectory_msg;
+  trajectory_msg.header.stamp = now;
+  trajectory_msg.header.frame_id = "uav_origin_ned";
+  trajectory_msg.joint_names = {"deck_landing_up"};
+  trajectory_msg.points.reserve(prediction->points.size());
+  for (const auto & point : prediction->points) {
+    trajectory_msgs::msg::MultiDOFJointTrajectoryPoint trajectory_point;
+    geometry_msgs::msg::Transform transform;
+    transform.translation.x = point.position_ned_m.x();
+    transform.translation.y = point.position_ned_m.y();
+    transform.translation.z = point.position_ned_m.z();
+    transform.rotation.w = point.orientation_deck_to_ned.w();
+    transform.rotation.x = point.orientation_deck_to_ned.x();
+    transform.rotation.y = point.orientation_deck_to_ned.y();
+    transform.rotation.z = point.orientation_deck_to_ned.z();
+    trajectory_point.transforms.push_back(transform);
+
+    geometry_msgs::msg::Twist twist;
+    twist.linear.x = point.velocity_ned_mps.x();
+    twist.linear.y = point.velocity_ned_mps.y();
+    twist.linear.z = point.velocity_ned_mps.z();
+    twist.angular.x = point.angular_velocity_ned_radps.x();
+    twist.angular.y = point.angular_velocity_ned_radps.y();
+    twist.angular.z = point.angular_velocity_ned_radps.z();
+    trajectory_point.velocities.push_back(twist);
+
+    geometry_msgs::msg::Twist acceleration;
+    acceleration.linear.x = point.acceleration_ned_mps2.x();
+    acceleration.linear.y = point.acceleration_ned_mps2.y();
+    acceleration.linear.z = point.acceleration_ned_mps2.z();
+    acceleration.angular.x = point.angular_acceleration_ned_radps2.x();
+    acceleration.angular.y = point.angular_acceleration_ned_radps2.y();
+    acceleration.angular.z = point.angular_acceleration_ned_radps2.z();
+    trajectory_point.accelerations.push_back(acceleration);
+    trajectory_point.time_from_start =
+      rclcpp::Duration::from_seconds(point.relative_time_s);
+    trajectory_msg.points.push_back(std::move(trajectory_point));
+  }
+  deck_motion_shadow_trajectory_pub_->publish(trajectory_msg);
 }
 
 void Px4ArucoLandingNode::publish_deck_plane_geometry_shadow(const rclcpp::Time & now)

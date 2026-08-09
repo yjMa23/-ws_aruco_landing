@@ -167,6 +167,37 @@ TEST(CoordinateTransformTest, RollPitchYawAndMarkerRotationAreComposed)
   expect_same_rotation(result->rotation, expected_rotation, 1.0e-8);
 }
 
+TEST(CoordinateTransformTest, UavCenteredNedUsesBodyAttitudeButNotAbsolutePosition)
+{
+  const Eigen::Quaterniond body_to_ned{
+    Eigen::AngleAxisd(kPi / 2.0, Eigen::Vector3d::UnitZ())};
+  Pose3d body_camera;
+  body_camera.translation = Eigen::Vector3d(0.2, 0.0, 0.1);
+  Pose3d camera_deck;
+  camera_deck.translation = Eigen::Vector3d(1.0, 2.0, 3.0);
+  camera_deck.rotation = Eigen::Quaterniond{
+    Eigen::AngleAxisd(0.2, Eigen::Vector3d::UnitY())};
+
+  const auto result = transform_marker_to_uav_centered_ned(
+    body_to_ned, body_camera, camera_deck);
+
+  ASSERT_TRUE(result.has_value());
+  const Eigen::Vector3d expected_body_translation =
+    body_camera.translation + body_camera.rotation * camera_deck.translation;
+  expect_vector_near(
+    result->translation, body_to_ned * expected_body_translation, 1.0e-8);
+  expect_same_rotation(
+    result->rotation,
+    body_to_ned * body_camera.rotation * camera_deck.rotation,
+    1.0e-8);
+}
+
+TEST(CoordinateTransformTest, UavCenteredNedRejectsInvalidAttitude)
+{
+  EXPECT_FALSE(transform_marker_to_uav_centered_ned(
+    Eigen::Quaterniond{0.0, 0.0, 0.0, 0.0}, Pose3d{}, Pose3d{}).has_value());
+}
+
 TEST(CoordinateTransformTest, FiniteUnnormalizedQuaternionIsNormalized)
 {
   Pose3d local_body;

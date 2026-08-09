@@ -9,6 +9,9 @@
 | `camera_optical` | x 右、y 下、z 前 | OpenCV、ArUco PnP。 |
 | `base_link_frd` | x 前、y 右、z 下 | PX4 机体坐标。 |
 | `local_ned` | x 北、y 东、z 下 | PX4 本地位置、速度和 setpoint。 |
+| `uav_centered_ned` | 状态采样时刻位于无人机参考点，三轴平行 `local_ned` | ArUco shadow 当前相对位姿。 |
+| `uav_origin_ned` | 轨迹发布时冻结在无人机参考点，三轴平行 `local_ned` | 甲板预测轨迹与未来相对 MPC 输入。 |
+| `deck_landing_up` | x 甲板前、y 甲板左、z 甲板上 | 统一 Marker 后的甲板着陆参考系和 6-DoF shadow。 |
 | Gazebo world ENU | x 东、y 北、z 上 | Gazebo 模型和 Ground Truth。 |
 | WGS84 | 纬度、经度、椭球高 | 船舶 GNSS 和 PX4 地理参考。 |
 
@@ -37,7 +40,7 @@ t_B^A = -(R_A^B)^T t_A^B
 
 四元数统一归一化并检查有限性。范数过小、旋转矩阵非正交或输入含 NaN/Inf 时返回失败，不自动修补。
 
-## 3. Marker 到 local NED
+## 3. Marker 和甲板着陆系到 local NED
 
 ArUco PnP 提供：
 
@@ -57,23 +60,43 @@ PX4 `VehicleOdometry` 提供：
 T_local_ned_body_frd
 ```
 
-最终链路：
+每个 Marker 的标定提供 `T_marker_deck_landing_up`。当前仿真四个 Marker 共面、方向
+一致，检测器只需用各自平移把原点补偿到甲板中心，旋转为单位旋转。最终链路：
 
 ```text
-T_local_ned_marker
+T_local_ned_deck_landing_up
 = T_local_ned_body_frd
 * T_body_frd_camera_optical
 * T_camera_optical_marker
+* T_marker_deck_landing_up
 ```
+
+相对 shadow 不使用 `T_local_ned_body_frd` 的平移。定义 `U=uav_centered_ned`，则：
+
+```math
+t_U^D=R_N^B t_B^D=p_D^N-p_B^N,
+\qquad
+R_U^D=R_N^B R_B^D=R_N^D
+```
+
+其中 `T_B^D=T_B^C T_C^M T_M^D`。`U` 的原点位于图像采样时刻的无人机参考点，
+轴与 `local_ned` 平行，因此当前平移表示 `deck-uav`，不是甲板绝对位置。相邻
+样本的原点不同，估计器必须用时间对齐的 PX4 NED 速度积分补偿无人机自运动；禁止
+把 PX4 绝对位置加回 shadow。
+
+预测发布时另定义 `O_t=uav_origin_ned`：原点固定在发布时刻 `t` 的无人机参考点，
+在该条轨迹的整个 `0–1.0 s` 时域内不再随无人机移动。因此轨迹点平移为
+`p_D(t+τ)-p_B(t)`，twist 为甲板自身相对 NED 的 twist。`O_t` 只在单条消息内有
+意义，消息 header 时间戳给出其冻结时刻。
 
 实现前必须确认 `VehicleOdometry.pose_frame` 是 NED；不支持的 frame 直接拒绝。相机外参参数表达机体到相机的明确方向，不得根据结果“看起来正确”临时取逆。
 
 ## 4. Marker 坐标和甲板法向
 
-Marker 的 +Z 为甲板上方法向。旋转到 local NED 后得到单位向量：
+`deck_landing_up` 的 +Z 为甲板上方法向。旋转到 local NED 后得到单位向量：
 
 ```math
-n_{up}^N = R_N^M [0,0,1]^T
+n_{up}^N = R_N^D [0,0,1]^T
 ```
 
 有效向上法向应满足：
@@ -83,7 +106,16 @@ n_{up}^N = R_N^M [0,0,1]^T
 \qquad n_D < 0
 ```
 
-多尺度 Marker 切换时，位置先补偿到统一甲板参考点。法向来自当前 Marker 完整旋转，先与上一有效法向统一半球，再低通并归一化；向上分量不足时输出无效。
+多尺度 Marker 切换前必须先应用完整 `T_M^D`，使位置、朝向和 yaw 都属于同一甲板
+参考系。当前仿真 Marker 朝向相同；若实物安装朝向不同，必须标定旋转，不能只补偿平移。
+法向先与上一有效法向统一半球，再低通并归一化；向上分量不足时输出无效。
+
+远距非共面目标中，ID 0 的 `T_D^M` 为单位旋转和平移
+`[+0.45,0,0]^T m`；ID 4 为绕 `D` 系 `+Y` 旋转 `+45°`和平移
+`[-0.75,0,+0.2852]^T m`；ID 5/6 分别绕 `+X` 旋转 `+45°/-45°`，平移为
+`[0,+0.75,+0.2852]^T m` 和 `[0,-0.75,+0.2852]^T m`。ID 4/5/6 的边长
+均为 `0.75 m`。板式 PnP 直接输出
+`T_C^D`，因此不再追加单 Marker 的中心平移补偿。
 
 ## 5. ENU 与 NED
 
@@ -183,7 +215,8 @@ h(p)=(n^N)^T(p^N-p_d^N)
 1. 校验图像时间有限且不倒退。
 2. 将目标采样时间映射到 PX4/ROS 一致时间域。
 3. 在相邻机体位姿间线性插值位置、SLERP 插值姿态。
-4. 使用插值位姿完成 Marker 变换。
+4. 生产绝对位置链使用完整插值位姿；相对 shadow 使用同一插值姿态和 NED
+   速度，将 `base_link_frd` 相对位姿旋转到 `uav_centered_ned` 并补偿观测原点移动。
 
 超出历史范围、时间间隔过大或映射未稳定时拒绝观测，不能退化为使用当前位姿。
 
@@ -191,7 +224,7 @@ h(p)=(n^N)^T(p^N-p_d^N)
 
 - `coordinate_transform`：刚体组合、逆变换、ENU/NED 和姿态基变换。
 - `geodetic_converter`：WGS84、ECEF、ENU 和 NED。
-- `VehiclePoseHistory`：时间有序位姿缓存和插值。
+- `VehiclePoseHistory`：时间有序位姿与速度缓存和插值；相对 shadow 消费其姿态和 NED 速度。
 - `DeckPlaneGeometry`：视觉甲板平面、滑橇间隙和法向/切向分解。
 
 新增坐标或时间逻辑必须进入上述共享模块，并覆盖单位、方向、异常输入和已知数值例测试。

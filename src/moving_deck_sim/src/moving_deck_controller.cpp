@@ -2,8 +2,10 @@
 
 #include <gz/msgs/boolean.pb.h>
 #include <gz/msgs/pose.pb.h>
+#include <gz/msgs/pose_v.pb.h>
 #include <gz/msgs/twist.pb.h>
 #include <gz/msgs/world_control.pb.h>
+#include <gz/math/Quaternion.hh>
 #include <gz/transport/Node.hh>
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -96,6 +98,12 @@ public:
   {
     world_name_ = declare_parameter<std::string>("world_name", "aruco");
     model_name_ = declare_parameter<std::string>("model_name", "moving_deck");
+    uav_model_name_ = declare_parameter<std::string>(
+      "uav_model_name", "x500_mono_cam_down_0");
+    uav_body_offset_model_ = to_array<3>(
+      declare_parameter<std::vector<double>>(
+        "uav_body_offset_model", {0.0, 0.0, 0.24}),
+      "uav_body_offset_model");
     const std::string scenario_name =
       declare_parameter<std::string>("scenario", "S1_CONSTANT_XY");
     const auto initial_position = declare_parameter<std::vector<double>>(
@@ -117,8 +125,8 @@ public:
     update_rate_hz_ = declare_parameter<double>("update_rate_hz", 50.0);
     const std::int64_t random_seed = declare_parameter<std::int64_t>("random_seed", 1);
 
-    if (world_name_.empty() || model_name_.empty()) {
-      throw std::invalid_argument("world_name and model_name must not be empty");
+    if (world_name_.empty() || model_name_.empty() || uav_model_name_.empty()) {
+      throw std::invalid_argument("world_name and model names must not be empty");
     }
     if (random_seed < 0 ||
       random_seed > static_cast<std::int64_t>(std::numeric_limits<std::uint32_t>::max()))
@@ -149,6 +157,14 @@ public:
       "/model/" + model_name_ + "/cmd_vel");
     ground_truth_publisher_ = create_publisher<nav_msgs::msg::Odometry>(
       "/simulation/deck/ground_truth", 10);
+    uav_ground_truth_publisher_ = create_publisher<nav_msgs::msg::Odometry>(
+      "/simulation/uav/ground_truth_pose", 10);
+    if (!gz_node_.Subscribe(
+        "/world/" + world_name_ + "/pose/info",
+        &MovingDeckController::on_world_pose, this))
+    {
+      throw std::runtime_error("failed to subscribe to Gazebo world poses");
+    }
     auto reset_count_qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local();
     reset_count_publisher_ = create_publisher<std_msgs::msg::UInt32>(
       "/simulation/episode/reset_count", reset_count_qos);
@@ -175,6 +191,40 @@ public:
   }
 
 private:
+  /**
+   * @brief 从 Gazebo 世界位姿中只发布指定无人机模型的离线评测真值。
+   *
+   * 输出不被控制节点订阅；线速度由 evaluator 对该无噪声位姿离线差分。
+   */
+  void on_world_pose(const gz::msgs::Pose_V & poses)
+  {
+    for (const auto & pose : poses.pose()) {
+      if (pose.name() == uav_model_name_) {
+        nav_msgs::msg::Odometry ground_truth;
+        ground_truth.header.stamp = now();
+        ground_truth.header.frame_id = "world";
+        ground_truth.child_frame_id = uav_model_name_ + "/base_link";
+        const gz::math::Quaterniond orientation{
+          pose.orientation().w(), pose.orientation().x(),
+          pose.orientation().y(), pose.orientation().z()};
+        const gz::math::Vector3d body_offset = orientation.RotateVector(
+          gz::math::Vector3d{
+            uav_body_offset_model_[0],
+            uav_body_offset_model_[1],
+            uav_body_offset_model_[2]});
+        ground_truth.pose.pose.position.x = pose.position().x() + body_offset.X();
+        ground_truth.pose.pose.position.y = pose.position().y() + body_offset.Y();
+        ground_truth.pose.pose.position.z = pose.position().z() + body_offset.Z();
+        ground_truth.pose.pose.orientation.w = pose.orientation().w();
+        ground_truth.pose.pose.orientation.x = pose.orientation().x();
+        ground_truth.pose.pose.orientation.y = pose.orientation().y();
+        ground_truth.pose.pose.orientation.z = pose.orientation().z();
+        uav_ground_truth_publisher_->publish(ground_truth);
+        return;
+      }
+    }
+  }
+
   bool request_seed()
   {
     gz::msgs::WorldControl request;
@@ -320,15 +370,18 @@ private:
 
   std::string world_name_;
   std::string model_name_;
+  std::string uav_model_name_;
   double update_rate_hz_{50.0};
   std::uint32_t random_seed_{1};
   std::array<double, 3> initial_position_enu_{};
   std::array<double, 3> initial_rpy_rad_{};
+  std::array<double, 3> uav_body_offset_model_{};
   std::unique_ptr<MotionProfile> motion_profile_;
 
   gz::transport::Node gz_node_;
   gz::transport::Node::Publisher velocity_publisher_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr ground_truth_publisher_;
+  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr uav_ground_truth_publisher_;
   rclcpp::Publisher<std_msgs::msg::UInt32>::SharedPtr reset_count_publisher_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr raw_ground_truth_subscription_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reset_service_;

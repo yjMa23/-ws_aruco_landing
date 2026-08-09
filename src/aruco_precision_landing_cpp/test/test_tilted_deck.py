@@ -86,6 +86,20 @@ class TiltedDeckTests(unittest.TestCase):
         }
         self.assertEqual(len(set(serialized.values())), len(serialized))
 
+    def test_rigid_body_motion_extends_combined_with_periodic_yaw(self) -> None:
+        config_dir = WORKSPACE_DIR / "src" / "moving_deck_sim" / "config"
+        combined = yaml.safe_load(
+            (config_dir / "combined.yaml").read_text(encoding="utf-8")
+        )["moving_deck_controller"]["ros__parameters"]
+        rigid = yaml.safe_load(
+            (config_dir / "rigid_body_motion.yaml").read_text(encoding="utf-8")
+        )["moving_deck_controller"]["ros__parameters"]
+        self.assertEqual(rigid["scenario"], "S5_COMBINED")
+        for key in ("amplitude_xy", "period_xy", "amplitude_z_m", "period_z_s"):
+            self.assertEqual(rigid[key], combined[key])
+        self.assertEqual(rigid["amplitude_rpy_deg"][:2], combined["amplitude_rpy_deg"][:2])
+        self.assertGreater(rigid["amplitude_rpy_deg"][2], 0.0)
+
     def test_fixed_tilt_scenario_theoretical_contact_order_is_frozen(self) -> None:
         half_length_m = 0.125
         half_width_m = 0.132
@@ -212,7 +226,7 @@ class TiltedDeckTests(unittest.TestCase):
             self.assertIn("fixed-tilt safe altitude", completed.stdout)
 
     def test_dynamic_tilt_profiles_keep_final_descent_closed(self) -> None:
-        for scenario in ("rollpitch", "combined"):
+        for scenario in ("rollpitch", "combined", "rigid_body_motion"):
             completed = self._run_start_gate(
                 "--scenario",
                 scenario,
@@ -237,6 +251,7 @@ class TiltedDeckTests(unittest.TestCase):
             "tilt_pitch_neg_2deg",
             "rollpitch",
             "combined",
+            "rigid_body_motion",
         ):
             completed = self._run_start_gate(
                 "--scenario", scenario, "--terminal-contact-stabilization-shadow"
@@ -1008,11 +1023,19 @@ class TiltedDeckTests(unittest.TestCase):
             timer.index("publish_trajectory_setpoint();"),
             timer.index("update_deck_plane_geometry_shadow(now);")
         )
+        self.assertLess(
+            timer.index("publish_trajectory_setpoint();"),
+            timer.index("publish_deck_motion_shadow(now);")
+        )
         state_machine_end = source.index(
             "void Px4ArucoLandingNode::transition_to", state_machine_start
         )
         state_machine = source[state_machine_start:state_machine_end]
         self.assertNotIn("deck_plane_geometry", state_machine)
+        self.assertNotIn("deck_motion_shadow", state_machine)
+        setpoint_start = source.index("void Px4ArucoLandingNode::publish_trajectory_setpoint")
+        setpoint_end = source.index("void Px4ArucoLandingNode::publish_vehicle_command", setpoint_start)
+        self.assertNotIn("deck_motion", source[setpoint_start:setpoint_end])
         ground_truth_topic = "/simulation/deck/" + "ground_truth"
         self.assertNotIn(ground_truth_topic, source)
 

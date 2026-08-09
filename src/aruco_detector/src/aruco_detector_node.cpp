@@ -1,4 +1,5 @@
 #include "aruco_detector/marker_selector.hpp"
+#include "aruco_detector/noncoplanar_board_pose.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -245,6 +246,18 @@ public:
       declare_parameter<int>("switch_required_consecutive_frames", 5);
     const int active_missing_grace_frames =
       declare_parameter<int>("active_missing_grace_frames", 2);
+    far_board_enabled_ = declare_parameter<bool>("far_board.enabled", false);
+    const auto far_board_ids = declare_parameter<std::vector<int64_t>>(
+      "far_board.marker_ids", std::vector<int64_t>{0, 4, 5, 6});
+    const auto far_board_lengths = declare_parameter<std::vector<double>>(
+      "far_board.marker_lengths_m", std::vector<double>{0.50, 0.75, 0.75, 0.75});
+    const auto far_board_poses = declare_parameter<std::vector<double>>(
+      "far_board.marker_poses_deck_xyz_rpy",
+      std::vector<double>{
+        0.45, 0.0, 0.0, 0.0, 0.0, 0.0,
+        -0.75, 0.0, 0.2851650429449553, 0.0, 0.7853981633974483, 0.0,
+        0.0, 0.75, 0.2851650429449553, 0.7853981633974483, 0.0, 0.0,
+        0.0, -0.75, 0.2851650429449553, -0.7853981633974483, 0.0, 0.0});
     sync_queue_size_ = declare_parameter<int>("sync_queue_size", 10);
 
     const bool use_legacy_marker =
@@ -279,6 +292,38 @@ public:
     }
     aruco_detector::validate_marker_configurations(marker_configurations_);
 
+    if (far_board_enabled_) {
+      if (far_board_ids.size() != far_board_lengths.size() ||
+        far_board_poses.size() != far_board_ids.size() * 6U)
+      {
+        throw std::invalid_argument(
+                "far_board marker_ids, marker_lengths_m, and marker_poses_deck_xyz_rpy sizes are inconsistent");
+      }
+      far_board_calibrations_.reserve(far_board_ids.size());
+      for (std::size_t index = 0; index < far_board_ids.size(); ++index) {
+        far_board_calibrations_.push_back(
+          aruco_detector::BoardMarkerCalibration{
+            static_cast<int>(far_board_ids[index]),
+            far_board_lengths[index],
+            {far_board_poses[index * 6U], far_board_poses[index * 6U + 1U],
+              far_board_poses[index * 6U + 2U]},
+            {far_board_poses[index * 6U + 3U], far_board_poses[index * 6U + 4U],
+              far_board_poses[index * 6U + 5U]}});
+      }
+      if (!aruco_detector::is_valid_noncoplanar_board_calibration(
+          far_board_calibrations_))
+      {
+        throw std::invalid_argument("far_board marker calibration must form a finite noncoplanar target");
+      }
+      const int primary_id = far_board_calibrations_.front().id;
+      const bool primary_is_selectable = std::any_of(
+        marker_configurations_.begin(), marker_configurations_.end(),
+        [primary_id](const auto & configuration) {return configuration.id == primary_id;});
+      if (!primary_is_selectable) {
+        throw std::invalid_argument("far_board primary marker must also be present in marker_ids");
+      }
+    }
+
     aruco_detector::MarkerSelectorParameters selector_parameters;
     selector_parameters.marker_min_switch_areas_px2 = marker_min_switch_areas;
     selector_parameters.active_hold_area_ratio = active_hold_area_ratio;
@@ -298,6 +343,7 @@ public:
 
     dictionary_ = makeDictionary(dictionary_name_, get_logger());
     detector_params_ = cv::aruco::DetectorParameters::create();
+    detector_params_->cornerRefinementMethod = cv::aruco::CORNER_REFINE_SUBPIX;
 
     pose_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("/aruco/pose", 10);
     id_pub_ = create_publisher<std_msgs::msg::Int32>("/aruco/id", 10);
@@ -423,54 +469,84 @@ private:
       publishDebugImage(debug_image, *image_msg);
       return;
     }
-    // OpenCV 接口接收多 Marker 数组，这里只传选中角点，并使用该 ID 的真实物理边长。
-    const std::vector<std::vector<cv::Point2f>> target_corners = {corners[target_index]};
-    std::vector<cv::Vec3d> rvecs;
-    std::vector<cv::Vec3d> tvecs;
-
     const cv::Mat camera_matrix = cameraMatrixFromInfo(*camera_info_msg);
     const cv::Mat dist_coeffs = distortionFromInfo(*camera_info_msg);
+    cv::Vec3d target_rvec;
+    cv::Vec3d target_tvec;
+    bool used_far_board = false;
+    if (far_board_enabled_ &&
+      selected->configuration.id == far_board_calibrations_.front().id)
+    {
+      ++far_board_attempt_count_;
+      const auto board_pose = aruco_detector::estimate_noncoplanar_board_pose(
+        ids, corners, far_board_calibrations_, camera_matrix, dist_coeffs);
+      if (board_pose.has_value()) {
+        ++far_board_success_count_;
+        target_rvec = board_pose->rvec_camera_deck;
+        target_tvec = board_pose->tvec_camera_deck;
+        used_far_board = true;
+        RCLCPP_INFO_THROTTLE(
+          get_logger(), *get_clock(), 5000,
+          "Using %zu-marker noncoplanar far-board pose (RMSE %.3f px, success %llu/%llu)",
+          board_pose->marker_count, board_pose->reprojection_rmse_px,
+          static_cast<unsigned long long>(far_board_success_count_),
+          static_cast<unsigned long long>(far_board_attempt_count_));
+      } else {
+        RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 5000,
+          "Noncoplanar far-board pose unavailable (success %llu/%llu); using single-marker fallback",
+          static_cast<unsigned long long>(far_board_success_count_),
+          static_cast<unsigned long long>(far_board_attempt_count_));
+      }
+    }
 
-    cv::aruco::estimatePoseSingleMarkers(
-      target_corners,
-      selected->configuration.length_m,
-      camera_matrix,
-      dist_coeffs,
-      rvecs,
-      tvecs);
+    if (!used_far_board) {
+      // 副 Marker 缺失时保留现有单 Marker 位姿，供兼容诊断和安全恢复使用。
+      const std::vector<std::vector<cv::Point2f>> target_corners = {corners[target_index]};
+      std::vector<cv::Vec3d> rvecs;
+      std::vector<cv::Vec3d> tvecs;
+      cv::aruco::estimatePoseSingleMarkers(
+        target_corners,
+        selected->configuration.length_m,
+        camera_matrix,
+        dist_coeffs,
+        rvecs,
+        tvecs);
 
-    // 估计结果不完整时不发布新位姿，避免将无效结果标记为当前可用。
-    if (rvecs.empty() || tvecs.empty()) {
-      publishVisible(false);
-      publishDebugImage(debug_image, *image_msg);
-      return;
+      // 估计结果不完整时不发布新位姿，避免将无效结果标记为当前可用。
+      if (rvecs.empty() || tvecs.empty()) {
+        publishVisible(false);
+        publishDebugImage(debug_image, *image_msg);
+        return;
+      }
+
+      target_rvec = rvecs.front();
+      cv::Mat rotation_matrix;
+      cv::Rodrigues(target_rvec, rotation_matrix);
+      const auto & offset = selected->configuration.target_offset_marker_m;
+      const cv::Vec3d target_offset_camera{
+        rotation_matrix.at<double>(0, 0) * offset[0] +
+        rotation_matrix.at<double>(0, 1) * offset[1] +
+        rotation_matrix.at<double>(0, 2) * offset[2],
+        rotation_matrix.at<double>(1, 0) * offset[0] +
+        rotation_matrix.at<double>(1, 1) * offset[1] +
+        rotation_matrix.at<double>(1, 2) * offset[2],
+        rotation_matrix.at<double>(2, 0) * offset[0] +
+        rotation_matrix.at<double>(2, 1) * offset[1] +
+        rotation_matrix.at<double>(2, 2) * offset[2]};
+      target_tvec = tvecs.front() + target_offset_camera;
     }
 
     cv::aruco::drawAxis(
       debug_image,
       camera_matrix,
       dist_coeffs,
-      rvecs.front(),
-      tvecs.front(),
+      target_rvec,
+      target_tvec,
       selected->configuration.length_m * 0.5);
 
-    cv::Mat rotation_matrix;
-    cv::Rodrigues(rvecs.front(), rotation_matrix);
-    const auto & offset = selected->configuration.target_offset_marker_m;
-    const cv::Vec3d target_offset_camera{
-      rotation_matrix.at<double>(0, 0) * offset[0] +
-      rotation_matrix.at<double>(0, 1) * offset[1] +
-      rotation_matrix.at<double>(0, 2) * offset[2],
-      rotation_matrix.at<double>(1, 0) * offset[0] +
-      rotation_matrix.at<double>(1, 1) * offset[1] +
-      rotation_matrix.at<double>(1, 2) * offset[2],
-      rotation_matrix.at<double>(2, 0) * offset[0] +
-      rotation_matrix.at<double>(2, 1) * offset[1] +
-      rotation_matrix.at<double>(2, 2) * offset[2]};
-    const cv::Vec3d target_tvec = tvecs.front() + target_offset_camera;
-
     publishId(selected->configuration.id);
-    publishPose(rvecs.front(), target_tvec, *image_msg);
+    publishPose(target_rvec, target_tvec, *image_msg);
     publishVisible(true);
     publishDebugImage(debug_image, *image_msg);
   }
@@ -635,6 +711,10 @@ private:
   int sync_queue_size_;
   std::vector<aruco_detector::MarkerConfiguration> marker_configurations_;
   std::unique_ptr<aruco_detector::MarkerSelector> marker_selector_;
+  bool far_board_enabled_{false};
+  std::vector<aruco_detector::BoardMarkerCalibration> far_board_calibrations_;
+  std::uint64_t far_board_attempt_count_{0U};
+  std::uint64_t far_board_success_count_{0U};
 
   cv::Ptr<cv::aruco::Dictionary> dictionary_;
   cv::Ptr<cv::aruco::DetectorParameters> detector_params_;

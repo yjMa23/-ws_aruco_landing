@@ -84,6 +84,20 @@ std::optional<Pose3d> transform_marker_to_local_ned(
   return local_marker_pose;
 }
 
+std::optional<Pose3d> transform_marker_to_uav_centered_ned(
+  const Eigen::Quaterniond & body_to_ned_rotation,
+  const Pose3d & body_camera_pose,
+  const Pose3d & camera_marker_pose)
+{
+  Pose3d centered_body_pose;
+  centered_body_pose.rotation = body_to_ned_rotation;
+  return transform_marker_to_local_ned(
+    centered_body_pose,
+    PoseReferenceFrame::kLocalNed,
+    body_camera_pose,
+    camera_marker_pose);
+}
+
 std::optional<Eigen::Vector3d> enu_to_ned(const Eigen::Vector3d & vector_enu)
 {
   if (!vector_is_finite(vector_enu)) {

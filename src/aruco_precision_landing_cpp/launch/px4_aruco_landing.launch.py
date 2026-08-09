@@ -32,6 +32,11 @@ def generate_launch_description():
                 description="Moving-target tracking control mode.",
             ),
             DeclareLaunchArgument(
+                "rendezvous_altitude_m",
+                default_value="5.0",
+                description="GNSS rendezvous and safe-altitude visual tracking height.",
+            ),
+            DeclareLaunchArgument(
                 "prediction_horizon_s",
                 default_value="0.10",
                 description="Additional constant-velocity prediction horizon in seconds.",
@@ -272,6 +277,9 @@ def generate_launch_description():
                         ),
                         "tracking.mode": ParameterValue(
                             LaunchConfiguration("tracking_mode"), value_type=str
+                        ),
+                        "rendezvous_altitude_m": ParameterValue(
+                            LaunchConfiguration("rendezvous_altitude_m"), value_type=float
                         ),
                         "motion_predictor.additional_prediction_horizon_s": ParameterValue(
                             LaunchConfiguration("prediction_horizon_s"), value_type=float

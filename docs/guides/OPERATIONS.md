@@ -68,6 +68,7 @@ colcon build --symlink-install \
 ./scripts/start_sitl.sh --scenario tilt_roll_pos_2deg
 ./scripts/start_sitl.sh --scenario rollpitch
 ./scripts/start_sitl.sh --scenario combined
+./scripts/start_sitl.sh --scenario rigid_body_motion
 ```
 
 无 GUI：
@@ -82,9 +83,57 @@ colcon build --symlink-install \
 ./scripts/start_sitl.sh --scenario static --dry-run
 ./scripts/start_sitl.sh --scenario rollpitch --dry-run
 ./scripts/start_sitl.sh --scenario combined --dry-run
+./scripts/start_sitl.sh --scenario rigid_body_motion --dry-run
 ```
 
-动态 `rollpitch` 和 `combined` 的下降与最终接触会在启动前被拒绝。
+动态 `rollpitch`、`combined` 和 `rigid_body_motion` 的下降、最终下降与主动接触控制会在启动前被拒绝。
+
+### 3.1 甲板 6-DoF Shadow
+
+默认参数启用独立 shadow，但不改变飞行控制。检查话题：
+
+```bash
+ros2 topic echo /landing/deck_motion_shadow/state
+ros2 topic echo /landing/deck_motion_shadow/trajectory
+ros2 topic echo /landing/deck_motion_shadow/status
+ros2 topic echo /landing/deck_motion_shadow/trusted_horizon_s
+```
+
+约 `5 m` 时还应在 `/aruco/debug_image` 中确认 ID 0/4/5/6 同帧可见；检测器日志
+`Using 4-marker noncoplanar far-board pose` 表示本帧使用联合 PnP。若日志显示
+`single-marker fallback`，先检查倾斜 Marker 纹理、标定数组和视场，不要调 shadow
+创新门掩盖视觉退化。
+
+正式约 `5 m` 甲板相对高度的 12 轮矩阵（runner 固定
+`rendezvous_altitude_m=7.0`，因为甲板表面位于 world `z=2.0 m`）：
+
+```bash
+python3 scripts/run_deck_motion_shadow_experiments.py \
+  --output results/deck_motion_shadow_relative_5m_<date>
+```
+
+当前相对方案冻结矩阵位于
+`results/deck_motion_shadow_relative_5m_20260809`，结果为安全隔离 `12/12`、全性能
+硬门 `2/12`。新运行必须使用新目录，不得覆盖现有正式 Bag。
+
+单 Bag 重新评测：
+
+```bash
+python3 scripts/evaluate_deck_motion_shadow.py \
+  results/deck_motion_shadow_relative_5m_20260809/static_s1/bag \
+  --output results/deck_motion_shadow_relative_5m_20260809/static_s1/evaluation.json
+```
+
+`rendezvous_altitude_m` 是 PX4 local NED 原点上的高度目标，不是相机到甲板的直接距离；实际相对高度由 evaluator 报告。只有约 `5 m` 正式结果失败且证据明确指向视觉分辨率时，才以本地高度 `5.0 m` 运行同 seed 的约 `3 m` 无下降诊断：
+
+```bash
+./scripts/start_sitl.sh --scenario <scenario> --seed <seed> \
+  --rendezvous-altitude 5.0 --headless --record
+```
+
+`3 m` 不替代 `5 m` 失败。当前相对方案在 `5 m` 的当前位姿和未来位置门已
+`12/12` 通过，失败集中在未来 twist，因此没有触发新的 `3 m` 分辨率对照。
+不要修改 `deck_motion_shadow.*` 门限后重跑正式 Bag。
 
 ## 4. 跟踪模式
 
@@ -280,4 +329,4 @@ ros2 topic list | rg '^/fmu/'
 
 ### 动态场景无法下降
 
-这是当前安全门的预期行为。`rollpitch` 和 `combined` 只允许安全高度 shadow，见[下一步计划](../plans/NEXT_DEVELOPMENT_PLAN.md)。
+这是当前安全门的预期行为。`rollpitch`、`combined` 和 `rigid_body_motion` 只允许安全高度 shadow，见[下一步计划](../plans/NEXT_DEVELOPMENT_PLAN.md)。

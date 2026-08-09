@@ -205,11 +205,19 @@ ROS_LOG_DIR=/tmp/ros_logs ros2 topic echo /aruco/pose
 | `minimum_border_margin_px` | `12.0` | 挑战者进入门限及 active 靠近边界判定距离 |
 | `switch_required_consecutive_frames` | `5` | 同一挑战者完成切换前需要连续可靠的帧数 |
 | `active_missing_grace_frames` | `2` | 短时漏检时仅保留内部 active 状态的帧数 |
+| `far_board.enabled` | `true` | ID 0 为 active 时启用远距非共面联合 PnP |
+| `far_board.marker_ids` | `[0, 4, 5, 6]` | 联合 PnP 使用的已标定 Marker ID |
+| `far_board.marker_lengths_m` | `[0.50, 0.75, 0.75, 0.75]` | 非共面目标各 Marker 边长 |
+| `far_board.marker_poses_deck_xyz_rpy` | 见 YAML | 各 Marker 在 `deck_landing_up` 中的 `[x,y,z,roll,pitch,yaw]` 标定 |
 | `sync_queue_size` | `10` | 图像和相机内参同步队列长度 |
 
 多尺度模式采用有状态选择：当前 active Marker 面积与边界质量可靠时始终保持；只有 active 接近边界、面积不足或丢失后，满足进入门限的挑战者才开始累计，并在连续稳定达到配置帧数后切换。初次捕获优先选择物理边长最大的可靠 Marker。单 Marker 模式仍接受任意有限正面积检测，不受多尺度切换门限影响。
 
 `active_missing_grace_frames` 只保留选择器内部状态。漏检帧不会复用上一帧位姿，`/aruco/visible` 仍为 `false`，`/aruco/id` 也不会发布陈旧 ID。
+
+远距模式把本帧可见且已标定的 ID 0/4/5/6 角点统一表达在
+`deck_landing_up`，只有角点集合确实非共面时才用一次 `solvePnP` 输出甲板中心完整位姿。
+当前集合退化为共面时自动回退现有单 Marker PnP；回退不影响选择器或安全恢复。
 
 ## 输出话题
 
@@ -230,7 +238,7 @@ ROS_LOG_DIR=/tmp/ros_logs ros2 topic echo /aruco/pose
 
 | 话题 | 类型 | 说明 |
 | --- | --- | --- |
-| `/aruco/pose` | `geometry_msgs/msg/PoseStamped` | 本帧选中 Marker 经偏移补偿后的统一目标位姿 |
+| `/aruco/pose` | `geometry_msgs/msg/PoseStamped` | 非共面联合 PnP 或单 Marker 回退得到的统一甲板目标位姿 |
 | `/aruco/id` | `std_msgs/msg/Int32` | 与本帧有效 `/aruco/pose` 对应的 Marker ID |
 | `/aruco/visible` | `std_msgs/msg/Bool` | 本帧是否存在有效位姿 |
 | `/aruco/active_marker_id` | `std_msgs/msg/Int32` | 选择器内部 active ID；无 active 时为 `-1` |

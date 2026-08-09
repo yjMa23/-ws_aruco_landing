@@ -16,14 +16,20 @@ find_package(cv_bridge REQUIRED)
 find_package(message_filters REQUIRED)
 find_package(OpenCV REQUIRED COMPONENTS core imgproc calib3d aruco)
 
-add_library(aruco_detector_core src/marker_selector.cpp)
+add_library(
+  aruco_detector_core
+  src/marker_selector.cpp
+  src/noncoplanar_board_pose.cpp
+)
 target_compile_features(aruco_detector_core PUBLIC cxx_std_17)
 target_include_directories(
   aruco_detector_core
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
+    ${OpenCV_INCLUDE_DIRS}
 )
+target_link_libraries(aruco_detector_core PUBLIC ${OpenCV_LIBS})
 
 add_executable(aruco_detector_node src/aruco_detector_node.cpp)
 target_compile_features(aruco_detector_node PUBLIC cxx_std_17)
@@ -64,6 +70,10 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(marker_selector_test test/marker_selector_test.cpp)
   target_link_libraries(marker_selector_test aruco_detector_core)
+
+  ament_add_gtest(noncoplanar_board_pose_test test/noncoplanar_board_pose_test.cpp)
+  target_include_directories(noncoplanar_board_pose_test PRIVATE ${OpenCV_INCLUDE_DIRS})
+  target_link_libraries(noncoplanar_board_pose_test aruco_detector_core ${OpenCV_LIBS})
 endif()
 
 ament_package()

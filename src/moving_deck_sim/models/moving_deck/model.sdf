@@ -71,6 +71,67 @@
         </material>
       </visual>
 
+      <!-- 远距非共面副 Marker：与 ID0 联合 PnP，消除近正视单平面法向歧义。 -->
+      <visual name="aruco_marker_far_secondary_visual">
+        <pose>-0.75 0 0.2851650429449553 0 0.7853981633974483 0</pose>
+        <cast_shadows>false</cast_shadows>
+        <geometry>
+          <plane>
+            <normal>0 0 1</normal>
+            <size>0.75 0.75</size>
+          </plane>
+        </geometry>
+        <material>
+          <diffuse>1 1 1 1</diffuse>
+          <specular>0.4 0.4 0.4 1</specular>
+          <pbr>
+            <metal>
+              <albedo_map>model://moving_deck/aruco_id4.pgm</albedo_map>
+            </metal>
+          </pbr>
+        </material>
+      </visual>
+
+      <visual name="aruco_marker_far_secondary_roll_positive_visual">
+        <pose>0 0.75 0.2851650429449553 0.7853981633974483 0 0</pose>
+        <cast_shadows>false</cast_shadows>
+        <geometry>
+          <plane>
+            <normal>0 0 1</normal>
+            <size>0.75 0.75</size>
+          </plane>
+        </geometry>
+        <material>
+          <diffuse>1 1 1 1</diffuse>
+          <specular>0.4 0.4 0.4 1</specular>
+          <pbr>
+            <metal>
+              <albedo_map>model://moving_deck/aruco_id5.pgm</albedo_map>
+            </metal>
+          </pbr>
+        </material>
+      </visual>
+
+      <visual name="aruco_marker_far_secondary_roll_negative_visual">
+        <pose>0 -0.75 0.2851650429449553 -0.7853981633974483 0 0</pose>
+        <cast_shadows>false</cast_shadows>
+        <geometry>
+          <plane>
+            <normal>0 0 1</normal>
+            <size>0.75 0.75</size>
+          </plane>
+        </geometry>
+        <material>
+          <diffuse>1 1 1 1</diffuse>
+          <specular>0.4 0.4 0.4 1</specular>
+          <pbr>
+            <metal>
+              <albedo_map>model://moving_deck/aruco_id6.pgm</albedo_map>
+            </metal>
+          </pbr>
+        </material>
+      </visual>
+
       <!-- 中距 Marker 偏置到甲板左侧，为中心超近距 Marker 留出几何空间。 -->
       <visual name="aruco_marker_near_visual">
         <pose>-0.18 0 0.002 0 0 0</pose>

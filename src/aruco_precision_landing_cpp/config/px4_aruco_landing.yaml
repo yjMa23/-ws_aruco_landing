@@ -38,6 +38,30 @@ px4_aruco_landing_node:
     target_state_estimator.reinitialize_gap_s: 2.0
     target_state_estimator.innovation_gate_mahalanobis: 5.0
 
+    # 独立 6-DoF shadow：只读取时间对齐视觉位姿并发布诊断，不接入任何控制路径。
+    deck_motion_shadow.enabled: true
+    deck_motion_shadow.linear_jerk_std_mps3: 1.0
+    deck_motion_shadow.angular_jerk_std_radps3: 0.20
+    deck_motion_shadow.measurement_horizontal_std_m: 0.08
+    deck_motion_shadow.measurement_vertical_std_m: 0.12
+    deck_motion_shadow.measurement_orientation_std_rad: 0.02617993877991494
+    deck_motion_shadow.initial_position_std_m: 0.20
+    deck_motion_shadow.initial_velocity_std_mps: 1.0
+    deck_motion_shadow.initial_acceleration_std_mps2: 1.0
+    deck_motion_shadow.initial_orientation_std_rad: 0.05235987755982988
+    deck_motion_shadow.initial_angular_velocity_std_radps: 0.17453292519943295
+    deck_motion_shadow.initial_angular_acceleration_std_radps2: 0.17453292519943295
+    deck_motion_shadow.minimum_sample_dt_s: 0.001
+    deck_motion_shadow.maximum_sample_dt_s: 0.25
+    deck_motion_shadow.reinitialize_gap_s: 2.0
+    deck_motion_shadow.position_innovation_gate_mahalanobis: 5.0
+    deck_motion_shadow.orientation_innovation_gate_mahalanobis: 5.0
+    deck_motion_shadow.minimum_upward_normal_component: 0.50
+    deck_motion_shadow.prediction_sample_period_s: 0.05
+    deck_motion_shadow.trusted_prediction_horizon_s: 0.50
+    deck_motion_shadow.maximum_prediction_horizon_s: 1.00
+    deck_motion_shadow.kinematic_fit_window_s: 0.30
+
     # vertical estimation 并行垂直估计器当前只发布调试结果，不接管 relative descent 控制。
     vertical_state_estimator.enabled: true
     vertical_state_estimator.process_acceleration_std_mps2: 0.40

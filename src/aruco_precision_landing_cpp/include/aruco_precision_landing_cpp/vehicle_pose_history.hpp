@@ -23,6 +23,16 @@ struct VehiclePoseHistoryParameters
 };
 
 /**
+ * @brief 同一 PX4 样本时刻的机体位姿和 NED 线速度。
+ */
+struct VehicleKinematicState
+{
+  Pose3d pose{};
+  Eigen::Vector3d velocity_ned_mps{Eigen::Vector3d::Zero()};
+  bool velocity_valid{true};
+};
+
+/**
  * @brief 保存 PX4 local NED 机体位姿，并按采样时间插值查询。
  *
  * 位置使用线性插值，姿态使用最短路径四元数 Slerp。该类只接受严格单调递增的
@@ -49,6 +59,15 @@ public:
   bool add_sample(const Pose3d & pose, double sample_time_s);
 
   /**
+   * @brief 写入一帧 local NED 机体位姿和线速度。
+   *
+   * @param state 位姿及 NED 线速度；速度单位为 m/s。
+   * @param sample_time_s 与图像时间戳同一 ROS 时间域中的采样时间，单位为秒。
+   * @return 输入有限且时间严格递增时返回 true，否则返回 false。
+   */
+  bool add_sample(const VehicleKinematicState & state, double sample_time_s);
+
+  /**
    * @brief 查询指定 ROS 时间对应的 local NED 机体位姿。
    *
    * @param query_time_s 图像采样时间，单位为秒。
@@ -57,6 +76,17 @@ public:
    *         `std::nullopt`。
    */
   std::optional<Pose3d> lookup(double query_time_s) const;
+
+  /**
+   * @brief 查询并插值指定时刻的机体位姿和 NED 线速度。
+   *
+   * 位姿平移与速度使用线性插值，姿态使用最短路径 Slerp；端点规则与 `lookup`
+   * 相同。
+   *
+   * @param query_time_s ROS 时间域查询时间，单位为秒。
+   * @return 可查询时返回运动状态，否则返回 `std::nullopt`。
+   */
+  std::optional<VehicleKinematicState> lookup_state(double query_time_s) const;
 
   /**
    * @brief 清除全部位姿和时间历史。
@@ -72,7 +102,7 @@ private:
   struct Sample
   {
     double time_s{0.0};
-    Pose3d pose{};
+    VehicleKinematicState state{};
   };
 
   VehiclePoseHistoryParameters parameters_;

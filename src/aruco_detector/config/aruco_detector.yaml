@@ -24,5 +24,11 @@ aruco_detector:
     switch_required_consecutive_frames: 5
     # 仅保留内部 active 状态的短时漏检帧数，不会复用上一帧位姿。
     active_missing_grace_frames: 2
+    # 5 m shadow 使用 ID0/4/5/6 非共面角点联合 PnP；任一副 Marker 缺失时回退单 Marker。
+    far_board.enabled: true
+    far_board.marker_ids: [0, 4, 5, 6]
+    far_board.marker_lengths_m: [0.50, 0.75, 0.75, 0.75]
+    # 每组为甲板坐标系中的 [x, y, z, roll, pitch, yaw]，单位 m/rad。
+    far_board.marker_poses_deck_xyz_rpy: [0.45, 0.0, 0.0, 0.0, 0.0, 0.0, -0.75, 0.0, 0.2851650429449553, 0.0, 0.7853981633974483, 0.0, 0.0, 0.75, 0.2851650429449553, 0.7853981633974483, 0.0, 0.0, 0.0, -0.75, 0.2851650429449553, -0.7853981633974483, 0.0, 0.0]
     # 近似时间同步队列用于容纳图像与 CameraInfo 的小幅时间戳偏差。
     sync_queue_size: 10

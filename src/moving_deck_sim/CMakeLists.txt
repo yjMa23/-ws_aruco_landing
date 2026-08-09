@@ -40,6 +40,7 @@ target_compile_features(moving_deck_controller PUBLIC cxx_std_17)
 target_link_libraries(
   moving_deck_controller
   moving_deck_motion
+  gz-math7::gz-math7
   gz-msgs10::gz-msgs10
   gz-transport13::gz-transport13
 )

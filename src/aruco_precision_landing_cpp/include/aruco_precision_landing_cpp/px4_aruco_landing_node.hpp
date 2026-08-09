@@ -6,6 +6,7 @@
 
 #include "aruco_precision_landing_cpp/coordinate_transform.hpp"
 #include "aruco_precision_landing_cpp/deck_attitude_estimator.hpp"
+#include "aruco_precision_landing_cpp/deck_motion_estimator.hpp"
 #include "aruco_precision_landing_cpp/deck_plane_geometry.hpp"
 #include "aruco_precision_landing_cpp/final_descent_controller.hpp"
 #include "aruco_precision_landing_cpp/gnss_rendezvous_guidance.hpp"
@@ -48,6 +49,7 @@
 #include <std_msgs/msg/int32.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/u_int32.hpp>
+#include <trajectory_msgs/msg/multi_dof_joint_trajectory.hpp>
 
 namespace aruco_precision_landing_cpp
 {
@@ -133,6 +135,19 @@ private:
   bool compute_marker_pose_ned(
     double image_sample_time_s,
     Pose3d & marker_pose_ned) const;
+
+  /**
+   * @brief 计算甲板相对无人机的图像时刻位姿，坐标轴平行 PX4 local NED。
+   *
+   * @param image_sample_time_s 图像 header 中的 ROS 采样时间，单位为秒。
+   * @param relative_deck_pose_ned 输出 `deck-uav` 平移及 deck 到 NED 的姿态。
+   * @param uav_velocity_ned_mps 输出图像时刻无人机 local NED 速度。
+   * @return 位姿历史可插值且相机变换有效时返回 true，否则返回 false。
+   */
+  bool compute_relative_deck_pose_ned(
+    double image_sample_time_s,
+    Pose3d & relative_deck_pose_ned,
+    Eigen::Vector3d & uav_velocity_ned_mps) const;
   bool compute_local_marker_error(double & error_north, double & error_east) const;
   void update_estimated_deck_attitude(
     const Eigen::Quaterniond & marker_to_ned_rotation,
@@ -202,6 +217,7 @@ private:
   void publish_effective_relative_velocity_gain();
   void publish_estimated_deck_acceleration(const rclcpp::Time & now);
   void publish_estimated_deck_attitude();
+  void publish_deck_motion_shadow(const rclcpp::Time & now);
   void publish_deck_plane_geometry_shadow(const rclcpp::Time & now);
   void publish_deck_normal_calibration_debug();
   void publish_terminal_stabilization_debug(const rclcpp::Time & now);
@@ -258,6 +274,8 @@ private:
   double estimator_maximum_sample_dt_s_{0.50};
   double estimator_reinitialize_gap_s_{2.0};
   double estimator_innovation_gate_mahalanobis_{5.0};
+  bool deck_motion_shadow_enabled_{true};
+  DeckMotionEstimatorParameters deck_motion_shadow_parameters_{};
   bool vertical_state_estimator_enabled_{true};
   double vertical_process_acceleration_std_mps2_{0.40};
   double vertical_measurement_std_m_{0.05};
@@ -539,6 +557,7 @@ private:
   int32_t deck_plane_geometry_sample_marker_id_{-1};
   DeckAttitudeEstimate estimated_deck_attitude_{};
   DeckAttitudeEstimate shadow_deck_attitude_{};
+  std::string deck_motion_shadow_status_{"NOT_INITIALIZED"};
   DeckPlaneGeometryResult deck_plane_geometry_result_{};
   std::string deck_plane_geometry_status_{"not updated"};
   LandingWindowResult landing_window_result_{};
@@ -559,6 +578,7 @@ private:
   std::unique_ptr<GnssRendezvousGuidance> gnss_guidance_;
   std::unique_ptr<VisualHandoverGuidance> visual_guidance_;
   std::unique_ptr<TargetStateEstimator> target_state_estimator_;
+  std::unique_ptr<DeckMotionEstimator> deck_motion_estimator_;
   std::unique_ptr<VerticalStateEstimator> vertical_state_estimator_;
   std::unique_ptr<MotionPredictor> motion_predictor_;
   std::unique_ptr<MovingTargetTrackingController> tracking_controller_;
@@ -617,6 +637,12 @@ private:
     estimated_deck_acceleration_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Vector3Stamped>::SharedPtr
     estimated_deck_attitude_pub_;
+  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr deck_motion_shadow_state_pub_;
+  rclcpp::Publisher<trajectory_msgs::msg::MultiDOFJointTrajectory>::SharedPtr
+    deck_motion_shadow_trajectory_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr deck_motion_shadow_status_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr
+    deck_motion_shadow_trusted_horizon_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Vector3Stamped>::SharedPtr
     deck_plane_upward_normal_pub_;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr deck_plane_body_clearance_pub_;

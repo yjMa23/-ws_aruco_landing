@@ -18,6 +18,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(trajectory_msgs REQUIRED)
 
 add_library(
   aruco_landing_math
@@ -32,6 +33,7 @@ add_library(
   src/vehicle_pose_history.cpp
   src/landing_window.cpp
   src/deck_attitude_estimator.cpp
+  src/deck_motion_estimator.cpp
   src/deck_plane_geometry.cpp
   src/relative_descent_controller.cpp
   src/vertical_state_estimator.cpp
@@ -75,6 +77,7 @@ ament_target_dependencies(
   nav_msgs
   sensor_msgs
   std_msgs
+  trajectory_msgs
 )
 
 install(
@@ -171,6 +174,12 @@ if(BUILD_TESTING)
   target_link_libraries(deck_attitude_estimator_test aruco_landing_math)
 
   ament_add_gtest(
+    deck_motion_estimator_test
+    test/deck_motion_estimator_test.cpp
+  )
+  target_link_libraries(deck_motion_estimator_test aruco_landing_math)
+
+  ament_add_gtest(
     deck_plane_geometry_test
     test/deck_plane_geometry_test.cpp
   )
@@ -249,6 +258,15 @@ if(BUILD_TESTING)
   )
   set_tests_properties(
     tilted_deck_tests
+    PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../..
+  )
+
+  add_test(
+    NAME deck_motion_shadow_tests
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_deck_motion_shadow.py
+  )
+  set_tests_properties(
+    deck_motion_shadow_tests
     PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../..
   )
 
