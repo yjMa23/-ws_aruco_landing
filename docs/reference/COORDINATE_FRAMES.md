@@ -12,7 +12,7 @@
 | `uav_centered_ned` | 状态采样时刻位于无人机参考点，三轴平行 `local_ned` | ArUco shadow 当前相对位姿。 |
 | `uav_origin_ned` | 轨迹发布时冻结在无人机参考点，三轴平行 `local_ned` | 甲板预测轨迹与未来相对 MPC 输入。 |
 | `deck_landing_up` | x 甲板前、y 甲板左、z 甲板上 | 统一 Marker 后的甲板着陆参考系和 6-DoF shadow。 |
-| `vessel_body` | marine 船体刚体参考系；第一版与 deck 轴平行 | marine `MotionProfile` 驱动参考点，neutral world z≈0。 |
+| `vessel_body` | marine WAM-V canonical 刚体参考系；与官方 `wamv/base_link` 轴语义对齐 | marine `MotionProfile` 驱动参考点，neutral world z≈0.2 m。 |
 | `landing_deck` | x 甲板前、y 甲板左、z 甲板上 | marine Gazebo 固定甲板 frame，原点为着陆平面中心。 |
 | Gazebo world ENU | x 东、y 北、z 上 | Gazebo 模型和 Ground Truth。 |
 | WGS84 | 纬度、经度、椭球高 | 船舶 GNSS 和 PX4 地理参考。 |
@@ -129,12 +129,14 @@ T_world_vessel
 = T_world_deck
 ```
 
-第一版固定：
+Marine M2 固定：
 
 ```text
-T_vessel_deck.translation = [0, 0, 2] m
+T_vessel_deck.translation = [0, 0, 1.8] m
 T_vessel_deck.rotation = I
 ```
+
+该 offset 来自 VRX WAM-V canonical base geometry 与新增 2.4×2.4 m landing platform：official `top_base` 顶面约 z=1.30 m，固定支撑将 landing plane 提升到 z=1.80 m。scenario neutral deck center 仍定义为 world z=2.0 m，因此 neutral vessel reference 为 z=0.2 m。
 
 若 `r_{VD}^V` 为 vessel body 中的 deck offset，输入线速度在 world ENU、角速度在 vessel body 中，则：
 

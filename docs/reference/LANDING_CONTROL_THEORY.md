@@ -523,7 +523,7 @@ a_{bias,xy}\approx-g\frac{[b_{z,N},b_{z,E}]^T}{b_{z,D}}
 
 ## 12. Marine vessel 刚体几何（仅仿真语义）
 
-Marine 第一版把解析运动参考点从甲板中心改为 `vessel_body`，控制目标仍然是 landing deck。固定变换为 `T_V_D`，其中第一版 `r_{VD}^V=[0,0,2]^T m`、`R_V_D=I`。Gazebo world ENU 中：
+Marine 把解析运动参考点从甲板中心改为 `vessel_body`，控制目标仍然是 landing deck。M2 的 `vessel_body` 与官方 VRX WAM-V `wamv/base_link` canonical frame 对齐；固定变换为 `T_V_D`，其中 `r_{VD}^V=[0,0,1.8]^T m`、`R_V_D=I`。scenario neutral deck center 仍为 world z=2.0 m，因此 neutral vessel reference z=0.2 m。Gazebo world ENU 中：
 
 ```math
 p_D^W=p_V^W+R_W^V r_{VD}^V
@@ -537,7 +537,7 @@ v_D^W=v_V^W+R_W^V(\omega_V^V\times r_{VD}^V)
 
 这一步只在 `moving_deck_sim` 中把 vessel raw Ground Truth 转换成 deck-center Ground Truth，确保 roll/pitch 的甲板中心位置包含杠杆臂运动。它**不是**控制器可用的状态来源；生产控制仍只使用 PX4 state、模拟 GNSS、camera/ArUco 与内部 estimator。
 
-Marker 的 `T_deck_marker_i` 保持 legacy 标定不变，marine 只是把整个 landing deck 作为 `vessel_body` 的固定刚体子 frame。完整仿真契约见 [MARINE_VESSEL_KINEMATICS.md](MARINE_VESSEL_KINEMATICS.md)。
+Marker 的 `T_deck_marker_i` 保持 legacy 标定不变，marine 只是把整个 landing deck 作为 `vessel_body` 的固定刚体子 frame。M2 的 WAM-V / PBR ocean 都只属于仿真视觉与固定刚体语义，不把 wave/buoyancy/hydrodynamics 引入控制链。基础刚体契约见 [MARINE_VESSEL_KINEMATICS.md](MARINE_VESSEL_KINEMATICS.md)，M2 WAM-V 几何与上游契约见 [VRX_WAMV_INTEGRATION.md](VRX_WAMV_INTEGRATION.md)。
 
 ## 13. 动态姿态限制
 

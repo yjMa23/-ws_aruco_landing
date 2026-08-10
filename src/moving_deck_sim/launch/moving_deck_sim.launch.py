@@ -9,6 +9,10 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
+MARINE_NEUTRAL_DECK_HEIGHT_M = 2.0
+MARINE_DECK_OFFSET_BODY = [0.0, 0.0, 1.8]
+
+
 def _launch_setup(context, package_share: str, gz_launch: str, gui_config_path: str):
     environment = LaunchConfiguration("environment").perform(context)
     if environment not in ("legacy", "marine"):
@@ -31,11 +35,19 @@ def _launch_setup(context, package_share: str, gz_launch: str, gui_config_path: 
         }
     else:
         world_path = os.path.join(package_share, "worlds", "aruco_marine_vessel.sdf")
+        # Scenario YAML 的 neutral z=2 m 继续表示 landing deck center。WAM-V deck
+        # offset 由官方 top_base + 本项目固定支撑/平台几何得到，而不是沿用 M1 的临时 2 m。
+        marine_vessel_neutral_z = (
+            MARINE_NEUTRAL_DECK_HEIGHT_M - MARINE_DECK_OFFSET_BODY[2]
+        )
         model_overrides = {
-            "model_name": "landing_vessel",
-            # 现有 scenario YAML 的 neutral z=2 m 表示 deck；marine 把运动参考点下移到 vessel z=0。
-            "initial_position_offset_enu": [0.0, 0.0, -2.0],
-            "deck_offset_body": [0.0, 0.0, 2.0],
+            "model_name": "vrx_wamv_landing",
+            "initial_position_offset_enu": [
+                0.0,
+                0.0,
+                marine_vessel_neutral_z - MARINE_NEUTRAL_DECK_HEIGHT_M,
+            ],
+            "deck_offset_body": MARINE_DECK_OFFSET_BODY,
             "deck_rotation_wxyz": [1.0, 0.0, 0.0, 0.0],
             "deck_frame_id": "landing_deck",
         }

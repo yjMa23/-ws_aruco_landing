@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<sdf version="1.9">
+  <model name="vrx_ocean_visual">
+    <static>true</static>
+    <link name="surface">
+      <!-- Visual-only water. No collision, buoyancy, hydrodynamics or force coupling. -->
+      <visual name="ocean_surface_visual">
+        <cast_shadows>false</cast_shadows>
+        <geometry>
+          <plane>
+            <normal>0 0 1</normal>
+            <size>300 300</size>
+          </plane>
+        </geometry>
+        <material>
+          <ambient>0.015 0.08 0.12 1</ambient>
+          <diffuse>0.025 0.18 0.28 1</diffuse>
+          <specular>0.85 0.90 0.95 1</specular>
+          <pbr>
+            <metal>
+              <normal_map>model://vrx_ocean_visual/materials/textures/wave_normals.dds</normal_map>
+              <roughness>0.16</roughness>
+              <metalness>0.03</metalness>
+            </metal>
+          </pbr>
+        </material>
+      </visual>
+    </link>
+  </model>
+</sdf>

@@ -1,5 +1,7 @@
 # Marine Scene 第一版构建与验证说明
 
+> 本文记录 Marine M1 primitive fixture 的构建基线。Marine M2 的正式 `--environment marine` 已切换到 VRX WAM-V、`r_VD=[0,0,1.8] m` 和 VRX-style visual-only ocean；当前构建与验证请以 [`VRX_WAMV_BUILD.md`](VRX_WAMV_BUILD.md) 为准。本文中的 `landing_vessel` / `2 m` 只描述保留的 M1 debug fixture，不再是正式 marine runtime。
+
 ## 1. 数据流与模块落点
 
 ```text

@@ -106,12 +106,40 @@ TEST(RigidBodyKinematicsTest, FixedRotationTransformsDeckAngularVelocity)
 TEST(RigidBodyKinematicsTest, MarineNeutralGeometryPlacesDeckAtTwoMeters)
 {
   RigidBodyState vessel;
-  vessel.position_world = {0.0, 0.0, 0.0};
+  vessel.position_world = {0.0, 0.0, 0.2};
   FixedRigidTransform transform;
-  transform.translation_body = {0.0, 0.0, 2.0};
+  transform.translation_body = {0.0, 0.0, 1.8};
 
   const auto deck = transform_rigid_body_state(vessel, transform);
   EXPECT_NEAR(deck.position_world[2], 2.0, kTolerance);
+}
+
+TEST(RigidBodyKinematicsTest, NormalizesParentAndFixedQuaternions)
+{
+  RigidBodyState vessel;
+  vessel.orientation_wxyz = {2.0, 0.0, 0.0, 0.0};
+  FixedRigidTransform transform;
+  transform.rotation_wxyz = {2.0 * kSqrtHalf, 0.0, 0.0, 2.0 * kSqrtHalf};
+
+  const auto deck = transform_rigid_body_state(vessel, transform);
+  EXPECT_NEAR(deck.orientation_wxyz[0], kSqrtHalf, kTolerance);
+  EXPECT_NEAR(deck.orientation_wxyz[1], 0.0, kTolerance);
+  EXPECT_NEAR(deck.orientation_wxyz[2], 0.0, kTolerance);
+  EXPECT_NEAR(deck.orientation_wxyz[3], kSqrtHalf, kTolerance);
+}
+
+TEST(RigidBodyKinematicsTest, FixedRotationComposesDeckOrientation)
+{
+  RigidBodyState vessel;
+  vessel.orientation_wxyz = {kSqrtHalf, kSqrtHalf, 0.0, 0.0};
+  FixedRigidTransform transform;
+  transform.rotation_wxyz = {kSqrtHalf, 0.0, kSqrtHalf, 0.0};
+
+  const auto deck = transform_rigid_body_state(vessel, transform);
+  EXPECT_NEAR(deck.orientation_wxyz[0], 0.5, kTolerance);
+  EXPECT_NEAR(deck.orientation_wxyz[1], 0.5, kTolerance);
+  EXPECT_NEAR(deck.orientation_wxyz[2], 0.5, kTolerance);
+  EXPECT_NEAR(deck.orientation_wxyz[3], 0.5, kTolerance);
 }
 
 TEST(RigidBodyKinematicsTest, RejectsNonFiniteInputsAndInvalidQuaternion)

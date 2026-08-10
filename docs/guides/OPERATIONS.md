@@ -98,7 +98,7 @@ colcon build --symlink-install \
 
 它继续使用 `aruco_moving_deck.sdf`、`moving_deck` 和历史 UAV spawn，不改变 P9/P10 复现路径。
 
-Marine 第一版需要显式选择：
+Marine M2 需要显式选择：
 
 ```bash
 ./scripts/start_sitl.sh --environment marine --scenario static
@@ -106,7 +106,7 @@ Marine 第一版需要显式选择：
   --rendezvous-altitude 7.0
 ```
 
-marine 使用 `aruco_marine_vessel.sdf`、`landing_vessel/vessel_body`、固定 `landing_deck` frame 和独立 `x≈-12 m` UAV launch platform。launch 会把既有 scenario 的 neutral z 从 deck `2 m` 转成 vessel reference `0 m`，并用固定 `[0,0,2] m` 杠杆臂恢复 `/simulation/deck/ground_truth` 的 deck-center 语义。
+marine 使用 `aruco_marine_vessel.sdf`、`vrx_wamv_landing/vessel_body`、固定 `landing_deck` frame 和独立 `x≈-12 m` UAV launch platform。WAM-V visual 来自固定 VRX commit 的官方 mesh/PBR maps；海面是 visual-only VRX-style PBR water。launch 会把既有 scenario 的 neutral deck z=`2 m` 转成 WAM-V vessel reference z=`0.2 m`，并用固定 `r_VD=[0,0,1.8] m` 恢复 `/simulation/deck/ground_truth` 的 deck-center 语义。
 
 marine 只允许 GNSS rendezvous、视觉捕获、安全高度跟踪和 deck-motion shadow。以下命令必须在启动前失败：
 
@@ -117,7 +117,7 @@ marine 只允许 GNSS rendezvous、视觉捕获、安全高度跟踪和 deck-mot
   --terminal-contact-stabilization-shadow --dry-run
 ```
 
-本阶段没有 VRX、wave、RAO、Buoyancy、Hydrodynamics、wind 或 current。构建与 SDF 验证见 [Marine Scene 构建说明](MARINE_SCENE_BUILD.md)。
+M2 已使用 VRX WAM-V 视觉资产和 VRX `wave_normals.dds`，但没有启用动态 `WaveVisual`、wave-driven vessel dynamics、RAO、Buoyancy、Hydrodynamics、wind 或 current。`MotionProfile` 仍是唯一 vessel motion source。M1 基础构建说明见 [Marine Scene 构建说明](MARINE_SCENE_BUILD.md)，M2 上游/资产/build/SDF/GUI 验证见 [VRX WAM-V 构建说明](VRX_WAMV_BUILD.md)。
 
 ### 3.2 甲板 6-DoF Shadow
 

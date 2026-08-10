@@ -777,7 +777,8 @@ start_process() {
 
 px4_spawn_pose="-4,0,0.2"
 if [[ "$environment" == "marine" ]]; then
-  px4_spawn_pose="-12,0,0.4"
+  # Marine launch dock top is z=0.40 m; keep the PX4 model origin 0.20 m above it.
+  px4_spawn_pose="-12,0,0.6"
 fi
 
 start_px4() {

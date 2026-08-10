@@ -19,7 +19,7 @@ evaluator 和约 `5 m` 的 `static/rollpitch/combined/rigid_body_motion × seed 
 通过，失败集中在二阶导数驱动的未来 twist，现有证据不支持把它归因为单纯像素
 分辨率问题。
 
-Marine M1 已把环境语义升级为可选的 `landing_vessel/vessel_body → fixed landing_deck`，并保留 legacy 为默认；该场景扩展不改变 shadow 的观测契约，也不能作为跳过 Future Twist 诊断的理由。
+Marine M2 已把显式 `--environment marine` 切换到 `vrx_wamv_landing/vessel_body → fixed landing_deck` 和 VRX-style visual-only ocean，并保留 legacy 为默认。WAM-V canonical frame 到 landing deck 的固定 offset 为 `[0,0,1.8] m`；`MotionProfile` 仍是唯一 vessel motion source。该场景升级不改变 shadow 的观测契约，也不能作为跳过 Future Twist 诊断的理由。
 
 ## 下一目标
 
@@ -40,4 +40,4 @@ Marine M1 已把环境语义升级为可选的 `landing_vessel/vessel_body → f
 acados NMPC。首次主动动态下降最多到 `0.50 m` 保持，真实接触仍需独立计划。
 本阶段不修改现有水平相对 MPC，不开放动态姿态下降、`NAV_LAND` 或自动 Disarm。
 
-更后续的海况/高保真验证可以单独规划 VRX/WAM-V、Wavefield、JONSWAP/PM、RAO、浮力、水动力、洋流和风载，但这些工作必须晚于当前 Future Twist 因果可观测性诊断，且不能在 Marine M1 中宣称已经实现。
+Marine M3 可以在 Future Twist 因果可观测性诊断之后单独规划：首先评审并构建 VRX `WaveVisual` 动态 Gerstner rendering，确认它与 vessel dynamics 完全解耦；随后再分别评审 JONSWAP/PM sea state、RAO-based vessel response、浮力、水动力、洋流和风载。M2 **没有**实现动态 WaveVisual、wave-driven vessel dynamics、JONSWAP/PM 船体响应、RAO、浮力、水动力、洋流或风载。

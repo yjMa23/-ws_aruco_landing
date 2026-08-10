@@ -1,6 +1,8 @@
 # Marine Vessel 刚体运动学契约
 
-本文档定义 marine 环境中 `vessel_body → landing deck` 的刚体几何与 Ground Truth 语义。该模型只用于仿真场景、传感器模拟和离线评测，不改变生产控制器的数据边界。
+> 本文保留 Marine M1 的通用刚体公式与安全边界；其中 primitive `landing_vessel`、5×5 m deck、neutral vessel z≈0 和 `r_VD≈[0,0,2] m` 是 M1 fixture 数值。Marine M2 正式 WAM-V 几何改为 `r_VD=[0,0,1.8] m`、neutral vessel z≈0.2 m、2.4×2.4 m landing platform，详见 [`VRX_WAMV_INTEGRATION.md`](VRX_WAMV_INTEGRATION.md)。
+
+本文档定义 marine 环境中 `vessel_body → landing deck` 的通用刚体几何与 Ground Truth 语义。该模型只用于仿真场景、传感器模拟和离线评测，不改变生产控制器的数据边界。
 
 ## 1. 问题定义与边界
 
