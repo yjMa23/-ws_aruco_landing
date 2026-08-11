@@ -24,9 +24,18 @@ SCENARIOS = ("static", "rollpitch", "combined", "rigid_body_motion")
 SEEDS = (1, 2, 3)
 
 
-def start_command(workspace: Path, scenario: str, seed: int, bag: Path) -> list[str]:
+def start_command(
+    workspace: Path,
+    scenario: str,
+    seed: int,
+    bag: Path,
+    environment: str = "legacy",
+) -> list[str]:
+    if environment not in {"legacy", "marine"}:
+        raise ValueError(f"unsupported environment: {environment}")
     return [
         str(workspace / "scripts" / "start_sitl.sh"),
+        "--environment", environment,
         "--scenario", scenario,
         "--seed", str(seed),
         "--headless",
@@ -43,6 +52,7 @@ def run_episode(
     output: Path,
     scenario: str,
     seed: int,
+    environment: str,
     startup_timeout_s: float,
     record_duration_s: float,
 ) -> dict[str, object]:
@@ -66,11 +76,12 @@ def run_episode(
         episode_dir / "scenario_config.yaml",
     )
     bag = episode_dir / "bag"
-    command = start_command(workspace, scenario, seed, bag)
+    command = start_command(workspace, scenario, seed, bag, environment)
     manifest: dict[str, object] = {
         "episode_id": episode_id,
         "scenario": scenario,
         "seed": seed,
+        "environment": environment,
         "command": command,
         "success": False,
     }
@@ -150,6 +161,7 @@ def run_episode(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--environment", choices=("legacy", "marine"), default="legacy")
     parser.add_argument("--startup-timeout", type=float, default=180.0)
     parser.add_argument("--record-duration", type=float, default=30.0)
     parser.add_argument("--dry-run", action="store_true")
@@ -164,7 +176,11 @@ def main() -> int:
             "scenario": scenario,
             "seed": seed,
             "command": start_command(
-                args.workspace, scenario, seed, args.output / f"{scenario}_s{seed}" / "bag"
+                args.workspace,
+                scenario,
+                seed,
+                args.output / f"{scenario}_s{seed}" / "bag",
+                args.environment,
             ),
         }
         for scenario in SCENARIOS
@@ -182,12 +198,14 @@ def main() -> int:
             args.output,
             item["scenario"],
             item["seed"],
+            args.environment,
             args.startup_timeout,
             args.record_duration,
         )
         for item in matrix
     ]
     aggregate = {
+        "environment": args.environment,
         "scenarios": list(SCENARIOS),
         "seeds": list(SEEDS),
         "episodes": results,

@@ -1,0 +1,28 @@
+aruco_detector:
+  ros__parameters:
+    image_topic: /world/aruco/model/x500_mono_cam_down_0/link/camera_link/sensor/camera/image
+    camera_info_topic: /world/aruco/model/x500_mono_cam_down_0/link/camera_link/sensor/camera/camera_info
+    marker_length: 0.5
+    target_id: 0
+    dictionary: DICT_4X4_50
+
+    # Marine 近距链路保持 frozen multi-scale MarkerSelector 的 ID0/1/2/3 参数。
+    marker_ids: [0, 1, 2, 3]
+    marker_lengths_m: [0.50, 0.20, 0.04, 0.02]
+    marker_priorities: [3, 2, 1, 0]
+    marker_target_offsets_m: [-0.45, 0.0, 0.0, 0.18, 0.0, 0.0, -0.05, 0.0, 0.0, 0.0, 0.0, 0.0]
+    marker_min_switch_areas_px2: [400.0, 400.0, 400.0, 400.0]
+    active_hold_area_ratio: 0.60
+    minimum_border_margin_px: 12.0
+    switch_required_consecutive_frames: 5
+    active_missing_grace_frames: 2
+
+    # Marine 远距目标为可打印平贴的 4-marker planar board；坐标相对 landing deck center。
+    far_board.enabled: true
+    far_board.pose_model: planar
+    far_board.marker_ids: [4, 5, 6, 7]
+    far_board.marker_lengths_m: [0.50, 0.50, 0.50, 0.50]
+    far_board.marker_poses_deck_xyz_rpy: [0.78, 0.78, 0.002, 0.0, 0.0, 0.0, 0.78, -0.78, 0.002, 0.0, 0.0, 0.0, -0.78, 0.78, 0.002, 0.0, 0.0, 0.0, -0.78, -0.78, 0.002, 0.0, 0.0, 0.0]
+    far_board.max_reprojection_rmse_px: 5.0
+
+    sync_queue_size: 10

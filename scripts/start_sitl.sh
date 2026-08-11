@@ -393,7 +393,9 @@ case "$scenario" in
   *) die "invalid scenario '$scenario' (expected static, constant02, constant, sinusoidal, heave, heave_h1, heave_h2, heave_h3, rollpitch, combined, rigid_body_motion, or a tilted-deck fixed tilt_*_2deg profile)" ;;
 esac
 
+aruco_detector_config_name="aruco_detector.yaml"
 if [[ "$environment" == "marine" ]]; then
+  aruco_detector_config_name="aruco_detector_marine.yaml"
   if [[ "$relative_descent_enabled" == "true" || "$final_descent_enabled" == "true" ||
     "$terminal_contact_stabilization_mode" != "disabled" ]]
   then
@@ -610,6 +612,7 @@ if [[ "$dry_run" == "true" ]]; then
   echo "DRY_RUN validation passed"
   echo "environment=$environment"
   echo "scenario=$scenario"
+  echo "aruco_detector_config=$aruco_detector_config_name"
   echo "rendezvous_altitude_m=$rendezvous_altitude_m"
   echo "relative_descent_enabled=$relative_descent_enabled"
   echo "descent_minimum_test_height_m=$descent_minimum_test_height_m"
@@ -661,10 +664,15 @@ done
 
 deck_share="$(ros2 pkg prefix --share moving_deck_sim)" ||
   die "moving_deck_sim is not built; run colcon build first"
+aruco_detector_share="$(ros2 pkg prefix --share aruco_detector)" ||
+  die "aruco_detector is not built; run colcon build first"
 scenario_path="$deck_share/config/$scenario_config"
+aruco_detector_config_path="$aruco_detector_share/config/$aruco_detector_config_name"
 gnss_config_path="$deck_share/config/gnss_ideal.yaml"
 [[ -f "$scenario_path" ]] || die "scenario config not found: $scenario_path"
 [[ -f "$gnss_config_path" ]] || die "GNSS config not found: $gnss_config_path"
+[[ -f "$aruco_detector_config_path" ]] ||
+  die "ArUco detector config not found: $aruco_detector_config_path"
 
 px4_camera_model_path="$px4_dir/Tools/simulation/gz/models/mono_cam/model.sdf"
 project_camera_models_dir="$deck_share/models"
@@ -815,6 +823,7 @@ start_process "camera bridge" ros2 run ros_gz_bridge parameter_bridge \
   '/world/aruco/model/x500_mono_cam_down_0/link/camera_link/sensor/camera/image@sensor_msgs/msg/Image[gz.msgs.Image' \
   '/world/aruco/model/x500_mono_cam_down_0/link/camera_link/sensor/camera/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo'
 start_process "ArUco detector" ros2 launch aruco_detector aruco_detector.launch.py \
+  "config_file:=$aruco_detector_config_path" \
   use_sim_time:=true
 
 if [[ "$auto_confirm_controller" != "true" ]]; then
@@ -1003,6 +1012,9 @@ if [[ "$record" == "true" ]]; then
     /aruco/selected_corner_area_px2
     /aruco/selected_border_margin_px
     /aruco/selection_reason
+    /aruco/pose_source
+    /aruco/board_marker_count
+    /aruco/board_reprojection_rmse_px
     /fmu/out/vehicle_local_position_v1
     /fmu/out/vehicle_land_detected
     /fmu/out/vehicle_odometry

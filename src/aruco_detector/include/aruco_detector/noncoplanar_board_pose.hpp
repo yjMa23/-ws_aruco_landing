@@ -4,7 +4,8 @@
 #ifndef ARUCO_DETECTOR__NONCOPLANAR_BOARD_POSE_HPP_
 #define ARUCO_DETECTOR__NONCOPLANAR_BOARD_POSE_HPP_
 
-#include <array>
+#include "aruco_detector/board_marker_calibration.hpp"
+
 #include <cstddef>
 #include <optional>
 #include <vector>
@@ -13,17 +14,6 @@
 
 namespace aruco_detector
 {
-
-/**
- * @brief 单个 Marker 在统一甲板坐标系中的已知刚体标定。
- */
-struct BoardMarkerCalibration
-{
-  int id{0};
-  double length_m{0.0};
-  std::array<double, 3> center_deck_m{{0.0, 0.0, 0.0}};
-  std::array<double, 3> rpy_deck_marker_rad{{0.0, 0.0, 0.0}};
-};
 
 /**
  * @brief 非共面角点联合 PnP 得到的甲板坐标系相对相机位姿。

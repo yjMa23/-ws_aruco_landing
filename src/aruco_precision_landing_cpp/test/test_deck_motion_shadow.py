@@ -218,6 +218,31 @@ class DeckMotionShadowTests(unittest.TestCase):
             },
         )
 
+        marine = subprocess.run(
+            [
+                str(runner),
+                "--environment",
+                "marine",
+                "--output",
+                "/tmp/deck-motion-shadow-marine-dry",
+                "--dry-run",
+            ],
+            cwd=WORKSPACE_DIR,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(marine.returncode, 0, marine.stderr)
+        marine_episodes = json.loads(marine.stdout)["episodes"]
+        self.assertEqual(len(marine_episodes), 12)
+        self.assertTrue(
+            all(
+                episode["command"][episode["command"].index("--environment") + 1]
+                == "marine"
+                for episode in marine_episodes
+            )
+        )
+
     def test_ground_truth_topic_exists_only_in_simulation_or_offline_evaluators(self) -> None:
         forbidden = "/simulation/deck/" + "ground_truth"
         forbidden_uav = "/simulation/uav/" + "ground_truth_pose"

@@ -20,6 +20,7 @@ add_library(
   aruco_detector_core
   src/marker_selector.cpp
   src/noncoplanar_board_pose.cpp
+  src/planar_board_pose.cpp
 )
 target_compile_features(aruco_detector_core PUBLIC cxx_std_17)
 target_include_directories(
@@ -74,6 +75,10 @@ if(BUILD_TESTING)
   ament_add_gtest(noncoplanar_board_pose_test test/noncoplanar_board_pose_test.cpp)
   target_include_directories(noncoplanar_board_pose_test PRIVATE ${OpenCV_INCLUDE_DIRS})
   target_link_libraries(noncoplanar_board_pose_test aruco_detector_core ${OpenCV_LIBS})
+
+  ament_add_gtest(planar_board_pose_test test/planar_board_pose_test.cpp)
+  target_include_directories(planar_board_pose_test PRIVATE ${OpenCV_INCLUDE_DIRS})
+  target_link_libraries(planar_board_pose_test aruco_detector_core ${OpenCV_LIBS})
 endif()
 
 ament_package()

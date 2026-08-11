@@ -1,43 +1,83 @@
-# 下一步计划：动态甲板未来 Twist 可观测性
+# 下一步计划：Planar Board 正式 5 m 验证 → Future Twist 因果诊断
 
 ## 当前状态
 
-甲板 6-DoF shadow 已按相对方案实现：当前位姿为
-`uav_centered_ned` 中的 `deck-uav`，twist 为甲板自身 NED twist；预测轨迹
-相对每条消息发布时冻结的 `uav_origin_ned`。实现、标准消息接口、测试、
-evaluator 和约 `5 m` 的 `static/rollpitch/combined/rigid_body_motion × seed 1/2/3`
-正式矩阵已完成。
+Marine 已完成可实船平贴部署的远距 ArUco 几何和 detector 实现：
 
-冻结结果为：
+- `--environment legacy` 继续使用 frozen ID0/4/5/6 非共面几何与历史配置。
+- `--environment marine` 使用独立 `aruco_detector_marine.yaml`。
+- Marine ID4/5/6/7 均为 `0.50 m`，中心为 `(±0.78, ±0.78, 0.002) m`，全部 `rpy=0`。
+- `>=2` 个远距 Marker 使用 `SOLVEPNP_IPPE` planar multi-marker pose；1 个使用已知 `T_marker_deck` 转换到 deck center；0 个回退既有 ID0/1/2/3 `MarkerSelector`。
+- detector 增加 `/aruco/pose_source`、`/aruco/board_marker_count`、`/aruco/board_reprojection_rmse_px`，失效帧不发布陈旧 pose。
+- Marine 仍只允许 GNSS rendezvous、视觉捕获、安全高度跟踪和 deck-motion shadow；相对下降、`FINAL_DESCENT`、真实接触、terminal-contact stabilization、`NAV_LAND` 与自动 Disarm 均未开放。
 
-- 安全隔离、时间同步、有限性和有效覆盖率均为 `12/12`。
-- 当前法向与 `0.5 s` 水平/垂直位置、法向门均为 `12/12`，yaw 为 `11/12`。
-- `0.5 s` 水平速度、垂直速度和角速度门分别为 `6/12`、`2/12`、`3/12`。
-- 全部硬门总计 `2/12`；因此不得开始 acados NMPC、动态姿态下降或真实接触设计。
+此前旧非共面 Board 的约 `5 m` 相对 shadow 正式矩阵为：安全隔离 `12/12`、当前法向与未来位置主要硬门 `12/12`，Future Twist 相关水平速度/垂直速度/角速度门分别 `6/12`、`2/12`、`3/12`，全部硬门 `2/12`。这些数据仍是 frozen 历史证据，不得用新 Planar Board 结果覆盖。
 
-本轮未触发约 `3 m` 对照：约 `5 m` 的当前位姿、法向和未来位置门已全部
-通过，失败集中在二阶导数驱动的未来 twist，现有证据不支持把它归因为单纯像素
-分辨率问题。
+## 下一目标 1：Planar Board 正式约 5 m 4×3
 
-Marine 已把显式 `--environment marine` 切换到 `vrx_wamv_landing/vessel_body → fixed landing_deck`，并启用与 vessel dynamics 完全解耦的 VRX `WaveVisual` 动态 visual-only ocean；legacy 仍为默认。WAM-V canonical frame 到 landing deck 的固定 offset 为 `[0,0,1.8] m`；`MotionProfile` 仍是唯一 vessel motion source。该场景升级只改变渲染，不改变 shadow 的观测契约，也不能作为跳过 Future Twist 诊断的理由。
+先固定当前代码、几何、阈值和 seed，运行：
 
-## 下一目标
+```text
+static / rollpitch / combined / rigid_body_motion × seed 1/2/3
+```
 
-先完成未来 twist 观测契约评审，不直接继续调 CA 带宽：
+共 12 runs，保持 `rendezvous_altitude_m=7.0`（约 5 m 相对甲板高度）。直接执行：
 
-1. 使用现有正式 Bag 做严格因果回放，分解 ArUco 相对位姿、PX4 无人机速度、
-   局部常加速度拟合和 SO(3) 角导数对 `0.5 s` twist 误差的贡献。Ground Truth
-   只允许评分，不得用于在线参数、相位或频率拟合。
-2. 若 ArUco-only 因果估计在跨 seed 冻结参数下仍无法通过，先单独评审最小额外
-   观测契约：甲板 IMU 只提供线/角加速度，船舶 GNSS velocity 只作远距离绝对锚。
-   该方案会改变“近距离 ArUco 主导”边界，未经批准不实现。
-3. 任何新模型必须先在 `static/combined seed1` 上用预注册参数通过全部旧硬门，
-   再从头运行新的 `4 × 3` 正式矩阵；失败 seed 不替换，门限不放宽。
+```bash
+python3 scripts/run_deck_motion_shadow_experiments.py \
+  --environment marine \
+  --output results/deck_motion_shadow_planar_marine_5m_<date>
+```
+
+不得换 seed、删失败轮次、重挑结果或为了通过验收放宽 detector/shadow 阈值。
+
+本轮 Planar Board 的主要验收不是 Future Twist `12/12`，而是：
+
+1. ArUco valid coverage 足够稳定，远距主要来源为 `PLANAR_BOARD_MULTI`。
+2. current deck position error 与 deck-normal error 不劣化到不可用。
+3. `board_reprojection_rmse_px` finite 且无系统性爆炸。
+4. planar ambiguity 不产生 frame-to-frame pose/normal flip。
+5. 4/3/2 Marker partial visibility 能继续输出统一 deck pose；1 Marker 正确进入 `FAR_SINGLE`。
+6. `NAV_LAND=0`、Disarm command=0、`touchdown_confirmed=false`，没有任何下降或接触路径被意外打开。
+
+同时与 frozen 旧非共面结果比较：
+
+```text
+ArUco valid coverage
+current position error
+normal error
+board reprojection RMSE
+pose flip count
+0.5 s position prediction
+0.5 s normal prediction
+future twist
+```
+
+比较只用于确认几何替换的代价与收益，不允许为追求更好结果改 seed 或筛选轮次。
+
+## 下一目标 2：Future Twist 因果可观测性诊断
+
+只有 Planar Board 的 4×3 正式 safe-altitude 验证完成后，才继续 Future Twist 诊断：
+
+1. 使用新的固定 Planar Board 正式 Bag 做严格因果回放，分解 ArUco 相对位姿、PX4 UAV velocity、局部常加速度拟合与 SO(3) 角导数对 `0.5 s` twist 误差的贡献。Ground Truth 只允许离线评分，不能进入在线参数、相位、频率或 future trajectory。
+2. 若 ArUco-only 因果估计在跨 seed 固定参数下仍无法通过，再单独评审最小额外观测契约，例如甲板 IMU 的线/角加速度或船舶 GNSS velocity 绝对锚；未经批准不实现。
+3. 任意新预测模型必须先在 `static/combined seed1` 用预注册参数通过全部旧安全硬门，再从头运行新的 4×3；失败 seed 不替换、门限不放宽。
 
 ## 后续边界
 
-只有约 `5 m` 的新正式矩阵 `12/12` 全部通过，下一份计划才允许设计
-acados NMPC。首次主动动态下降最多到 `0.50 m` 保持，真实接触仍需独立计划。
-本阶段不修改现有水平相对 MPC，不开放动态姿态下降、`NAV_LAND` 或自动 Disarm。
+本计划不授权：
 
-动态 Gerstner rendering 已作为纯视觉能力完成，不再属于后续算法计划。Future Twist 因果可观测性诊断完成后，如确有论文或实验需求，再单独评审真正的 sea-state → vessel-response 链，包括 JONSWAP/PM sea state、RAO-based vessel response、浮力、水动力、洋流和风载；这些动力学能力当前仍未实现，不能与 visual-only WaveVisual 混为一谈。
+```text
+acados NMPC
+dynamic deck descent
+real contact
+NAV_LAND
+automatic disarm
+JONSWAP / PM spectrum
+RAO
+wave-driven WAM-V dynamics
+Buoyancy / Hydrodynamics
+wind / current
+```
+
+VRX `WaveVisual + Gerstner` 已经是动态 visual-only ocean，`MotionProfile` 仍是唯一 vessel motion source。只有 Future Twist 因果可观测性被独立解决后，才可另起计划评审动态姿态控制或真实 sea-state → vessel-response 链。

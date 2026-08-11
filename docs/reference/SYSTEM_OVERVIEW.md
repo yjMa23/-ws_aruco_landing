@@ -24,7 +24,7 @@
 
 | 包 | 当前职责 |
 | --- | --- |
-| `aruco_detector` | 读取图像与相机内参，完成多尺度 Marker 选择、非共面远距联合 PnP、单 Marker 回退和调试图像发布。 |
+| `aruco_detector` | 读取图像与相机内参；legacy 保留 frozen 非共面远距 PnP，Marine 使用独立共面 Board IPPE、多/单 Marker deck-center fallback、ID0/1/2/3 MarkerSelector 和逐帧位姿来源诊断。 |
 | `aruco_precision_landing_cpp` | PX4 Offboard、GNSS 会合、视觉接管、估计、预测、跟踪、下降、触地检测和接触保持。 |
 | `moving_deck_sim` | 生成 legacy 甲板或 marine vessel 刚体运动、deck-center Ground Truth，并提供船舶 GNSS 传感器模型。 |
 
@@ -50,7 +50,9 @@ Marine 的独立 `aruco_marine_vessel.sdf` 已切换到 `vrx_wamv_landing`。wor
 
 marine 中同一 `MotionProfile` 驱动与官方 `wamv/base_link` 对齐的 canonical `vessel_body`，neutral reference 为 world z≈0.2 m；固定 `T_vessel_deck` 使用 `r_VD=[0,0,1.8] m`、`R_V_D=I`，把 raw vessel state 转为 landing deck center，neutral deck center 仍为 z≈2.0 m。`rigid_body_kinematics` 显式加入 `R(ω×r)` lever-arm 线速度，因此 roll/pitch 同时改变 deck orientation 与 deck-center position/velocity。`/simulation/deck/ground_truth_raw` 在 marine 表示 vessel raw state，最终 `/simulation/deck/ground_truth` 仍表示 deck center。
 
-WAM-V / ocean 单模型通过 `gz sdf -k`，完整 marine world 在 `gz sdf -k` 中会触发 sdformat CLI 缺少 `model://` find callback 的已知限制；实际 `gz sim` server smoke 已成功解析 include，加载 `vrx::WaveVisual`、`vrx_wamv_landing` 的 VelocityControl / OdometryPublisher，并正确读取 CWR `amplitude=0.06 m`、`period=4.0 s` 等参数，未出现 missing plugin/mesh/shader/texture。全仓构建与测试为 `374 tests, 0 errors, 0 failures, 0 skipped`。当前验证 shell 无 DISPLAY/Wayland，因此“海面肉眼持续运动”仍需要用户侧 GUI 验收。Marine `static` 与 `rigid_body_motion` 各完成一轮有限 headless PX4 SITL smoke：两轮都完成 GNSS rendezvous、非共面 ArUco 捕获并停留在安全高度 `WAIT_LANDING_WINDOW`；rigid-body 运行时 shadow 为 `UPDATED:TRUSTED`、terminal stabilization=false、touchdown_confirmed=false。rigid-body 抓取 `3578` 组同时间戳 raw/deck GT，位置刚体关系最大误差 `8.95e-16 m`，lever-arm 速度关系最大误差 `1.57e-16 m/s`，全部 finite；最早 deck GT 为 z≈2.00 m，随后 6-DoF profile 使 deck z 覆盖约 `1.453–2.274 m`。两轮 PX4 ULog 均为 `NAV_LAND=0`、Disarm command=0，结束时 landed=false。当前验证 shell 无 DISPLAY/Wayland，因此未做 GUI 人工视觉验收。
+WAM-V / ocean 单模型通过 `gz sdf -k`，完整 marine world 在 `gz sdf -k` 中会触发 sdformat CLI 缺少 `model://` find callback 的已知限制；实际 `gz sim` server smoke 已成功解析 include，加载 `vrx::WaveVisual`、`vrx_wamv_landing` 的 VelocityControl / OdometryPublisher，并正确读取 CWR `amplitude=0.06 m`、`period=4.0 s` 等参数，未出现 missing plugin/mesh/shader/texture。当前全仓构建与测试为 `389 tests, 0 errors, 0 failures, 0 skipped`。
+
+Marine Planar Board 改造后，`static` 与 `rigid_body_motion` 又各完成一轮 headless PX4 SITL safe-altitude smoke。两轮都完成 GNSS rendezvous、Planar Board 捕获并进入 `WAIT_LANDING_WINDOW`，shadow 到 `UPDATED:TRUSTED`。static Bag 中 `/aruco/pose_source` 为 `401 PLANAR_BOARD_MULTI + 419 NONE`（NONE 均在视觉捕获前），Board 可见计数覆盖 2/3/4 Marker，401 个 multi pose 的 reprojection RMSE median/P95/max 为 `0.554/0.810/0.964 px`，连续 deck-normal `flip_count=0`；rigid-body 为 `435 PLANAR_BOARD_MULTI + 1 FAR_SINGLE + 430 NONE`，Board 可见计数覆盖 1/2/3/4 Marker，435 个 multi pose RMSE median/P95/max 为 `0.411/0.482/0.847 px`，436 个 pose 的 `flip_count=0`。现有 shadow evaluator 对两轮都给出 `valid_coverage=1.0`：static 当前水平/垂直位置 P95 为 `0.030/0.006 m`，但 normal RMSE/P95 为 `1.129°/1.929°`，超过旧非共面 hard gate 的 `1.0°/1.5°`；rigid-body 当前水平/垂直位置 P95 为 `0.048/0.011 m`，normal RMSE/P95 为 `0.364°/0.656°`，当前法向门通过。Future Twist/0.5 s 预测硬门仍有失败，不属于本阶段验收。两轮都记录 `NAV_LAND=0`、Disarm command=0、`touchdown_confirmed=false`、terminal stabilization=false；因此本阶段仍只有 safe-altitude 证据，且 static normal 仍需正式 4×3 判断是否为持续性 planar 可观测性代价。当前 shell 的 `DISPLAY` 与 `WAYLAND_DISPLAY` 都为空，所以 ID4/5/6/7 实际 GUI 视觉布置仍标记为 `GUI visual verification pending`。
 
 ### 3.2 船舶 GNSS
 
@@ -70,15 +72,17 @@ WAM-V / ocean 单模型通过 `gz sdf -k`，完整 marine world 在 `gz sdf -k` 
 ```text
 /aruco/pose
 /aruco/visible
+/aruco/pose_source
+/aruco/board_marker_count
+/aruco/board_reprojection_rmse_px
 /aruco/debug_image
 ```
 
-四尺度 Marker 使用有状态选择，避免近距离尺寸切换抖动；PnP 位姿先补偿到统一甲板参考点，再进入坐标链。相机模型支持普通和近距配置。
+四尺度 ID0/1/2/3 Marker 继续使用原有有状态选择，entry threshold、hold hysteresis、border margin、stable challenger 和 missing grace 均未重写。PnP 位姿统一补偿到 `deck_landing_up` 后再进入控制坐标链；失效帧发布 `visible=false / pose_source=NONE`，不复用陈旧 pose。
 
-约 `5 m` 远距目标另有 ID 0/4/5/6 非共面板：ID 0 为 `0.50 m` 共面主 Marker，
-ID 4/5/6 为 `0.75 m`、分别沿两个甲板轴正负倾斜 `45°` 的副 Marker。检测器把当前
-可见的已标定角点一次联合求解到 `deck_landing_up`；只有角点集合退化为共面时才回退
-单 Marker。三个倾斜纹理为 `120×120`，避免 Gazebo 斜视采样把码元插值成灰块。
+legacy/default 保留 frozen ID0/4/5/6 非共面板：ID0 为 `0.50 m`，ID4/5/6 为 `0.75 m` 且采用历史 ±45° 倾斜标定，继续走 legacy `noncoplanar` estimator 与 primary-Marker 触发语义。
+
+Marine 不再复制该几何。远距目标为 ID4/5/6/7 四个 `0.50 m` 共面 Marker，中心分别为 `(0.78,0.78,0.002)`、`(0.78,-0.78,0.002)`、`(-0.78,0.78,0.002)`、`(-0.78,-0.78,0.002) m`，全部 `rpy=(0,0,0)`、平贴 `landing_deck`。`>=2` 个有效 Board Marker 时使用 `solvePnPGeneric(..., SOLVEPNP_IPPE)` 并按正深度、deck normal 物理方向、reprojection RMSE 和上一帧视觉连续性消歧；1 个远距 Marker 时用已知 `T_marker_deck` 转回统一 deck center (`FAR_SINGLE`)；0 个远距 Marker 时才回到 ID0/1/2/3 `MarkerSelector` (`NEAR_SINGLE`)。OpenCV IPPE 只在内部把真实 `z=0.002 m` 平面临时平移到 `z=0`，输出再严格恢复到 deck origin。完整理论见 [`PLANAR_ARUCO_BOARD.md`](PLANAR_ARUCO_BOARD.md)。
 
 ## 4. 坐标和时间
 
@@ -286,8 +290,7 @@ INIT
 - 静止、水平匀速和升沉相对下降及真实接触。
 - 四状态相对 MPC 的安全高度、下降、接触与规则式回退。
 - 固定正 `+2° roll/pitch` 的终端接触稳定化和 10 秒保持。
-- 全工作区当前实现记录为 `361 tests, 0 failures, 0 skipped`；相对 shadow
-  正式 12 轮的安全隔离为 `12/12`，全性能硬门为 `2/12`。
+- 全工作区当前实现记录为 `389 tests, 0 errors, 0 failures, 0 skipped`；旧非共面 Board 相对 shadow 正式 12 轮的安全隔离为 `12/12`、全性能硬门为 `2/12`。新 Planar Board 的正式 Marine 4×3 尚未执行，当前只完成 static + rigid-body smoke。
 
 固定正倾角的成功不能外推到负倾角、动态 `rollpitch` 或 `combined`。
 
@@ -298,7 +301,7 @@ INIT
 - 负固定倾角、动态姿态、combined 和 rigid_body_motion 禁止下降与接触。
 - Ground Truth 不得进入控制器、窗口、估计器或状态机。
 - `--environment legacy` 仍是默认路径；`--environment marine` 必须显式选择。
-- Marine M2 只允许 GNSS rendezvous、视觉捕获、安全高度跟踪和 deck-motion shadow；相对下降、最终下降和任意 terminal-contact stabilization 会在启动前拒绝。
+- Marine 只允许 GNSS rendezvous、Planar Board/near Marker 视觉捕获、安全高度跟踪和 deck-motion shadow；相对下降、最终下降和任意 terminal-contact stabilization 会在启动前拒绝。Planar Board 实现与诊断本身不构成下降授权。
 - Marine 已引入固定版本的 VRX WAM-V visual，并启用 visual-only `WaveVisual` 动态 Gerstner 海面；仍没有 wave-driven vessel dynamics、JONSWAP/PM 船体响应、RAO、Buoyancy、Hydrodynamics、wind、current 或 CFD。`MotionProfile` 仍是唯一 vessel motion source，视觉海浪不能进入控制器或 Ground Truth。
 - 非有限 setpoint、非法四元数、无效 PX4 frame 和过期观测必须拒绝。
 - 实机自动解锁不属于默认配置；所有自动动作仅面向 SITL 并需显式授权。

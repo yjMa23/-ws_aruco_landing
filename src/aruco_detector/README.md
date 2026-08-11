@@ -181,7 +181,7 @@ ROS_LOG_DIR=/tmp/ros_logs ros2 topic echo /aruco/pose
 
 ## 默认输入
 
-默认订阅的话题来自 `config/aruco_detector.yaml`：
+默认/legacy 订阅与历史远距几何来自 `config/aruco_detector.yaml`；`scripts/start_sitl.sh --environment marine` 会改用独立的 `config/aruco_detector_marine.yaml`，两套环境不再共享远距 Board 几何：
 
 ```text
 /world/aruco/model/x500_mono_cam_down_0/link/camera_link/sensor/camera/image
@@ -205,19 +205,23 @@ ROS_LOG_DIR=/tmp/ros_logs ros2 topic echo /aruco/pose
 | `minimum_border_margin_px` | `12.0` | 挑战者进入门限及 active 靠近边界判定距离 |
 | `switch_required_consecutive_frames` | `5` | 同一挑战者完成切换前需要连续可靠的帧数 |
 | `active_missing_grace_frames` | `2` | 短时漏检时仅保留内部 active 状态的帧数 |
-| `far_board.enabled` | `true` | ID 0 为 active 时启用远距非共面联合 PnP |
-| `far_board.marker_ids` | `[0, 4, 5, 6]` | 联合 PnP 使用的已标定 Marker ID |
-| `far_board.marker_lengths_m` | `[0.50, 0.75, 0.75, 0.75]` | 非共面目标各 Marker 边长 |
+| `far_board.enabled` | `true` | 启用 environment-specific 远距 Board 路由 |
+| `far_board.pose_model` | `noncoplanar` | legacy/default 使用历史非共面 PnP；Marine 配置为 `planar` |
+| `far_board.marker_ids` | `[0, 4, 5, 6]` | legacy/default 的已标定 Marker；Marine 为 `[4,5,6,7]` |
+| `far_board.marker_lengths_m` | `[0.50, 0.75, 0.75, 0.75]` | legacy/default 尺寸；Marine 四个远距 Marker 均为 `0.50 m` |
 | `far_board.marker_poses_deck_xyz_rpy` | 见 YAML | 各 Marker 在 `deck_landing_up` 中的 `[x,y,z,roll,pitch,yaw]` 标定 |
+| `far_board.max_reprojection_rmse_px` | `5.0` | planar IPPE 候选允许的最大重投影 RMSE |
 | `sync_queue_size` | `10` | 图像和相机内参同步队列长度 |
 
 多尺度模式采用有状态选择：当前 active Marker 面积与边界质量可靠时始终保持；只有 active 接近边界、面积不足或丢失后，满足进入门限的挑战者才开始累计，并在连续稳定达到配置帧数后切换。初次捕获优先选择物理边长最大的可靠 Marker。单 Marker 模式仍接受任意有限正面积检测，不受多尺度切换门限影响。
 
 `active_missing_grace_frames` 只保留选择器内部状态。漏检帧不会复用上一帧位姿，`/aruco/visible` 仍为 `false`，`/aruco/id` 也不会发布陈旧 ID。
 
-远距模式把本帧可见且已标定的 ID 0/4/5/6 角点统一表达在
-`deck_landing_up`，只有角点集合确实非共面时才用一次 `solvePnP` 输出甲板中心完整位姿。
-当前集合退化为共面时自动回退现有单 Marker PnP；回退不影响选择器或安全恢复。
+legacy/default 继续把 ID0/4/5/6 作为 frozen 非共面目标，保留历史 primary-Marker 触发和 `SOLVEPNP_ITERATIVE` 路径。
+
+Marine 则使用独立的 ID4/5/6/7 共面 Board：四个 `0.50 m` Marker 平贴在 `deck_landing_up` 的 `(±0.78,±0.78,0.002) m`，rpy 全为零。Board 估计器不再依赖 `active_marker_id`；本帧只要有至少两个有效 Board Marker，就把全部可见角点送入 `solvePnPGeneric(..., SOLVEPNP_IPPE)`。真实标定平面保留 `z=0.002 m`，仅在 OpenCV IPPE 内部临时平移到 `z=0` 后再把结果变换回 deck origin。
+
+Marine 路由为：`>=2` 个 Board Marker → `PLANAR_BOARD_MULTI`；恰好 `1` 个 → 单 Marker PnP 后用已知 `T_marker_deck` 转为统一 deck center (`FAR_SINGLE`)；没有远距 Marker → 原有 ID0/1/2/3 `MarkerSelector` (`NEAR_SINGLE`)；全部无效 → `NONE`。MarkerSelector 的 entry threshold、hold hysteresis、border margin、stable challenger 和 missing grace 没有重写。
 
 ## 输出话题
 
@@ -231,6 +235,9 @@ ROS_LOG_DIR=/tmp/ros_logs ros2 topic echo /aruco/pose
 /aruco/selected_corner_area_px2   std_msgs/msg/Float64
 /aruco/selected_border_margin_px  std_msgs/msg/Float64
 /aruco/selection_reason           std_msgs/msg/String
+/aruco/pose_source                std_msgs/msg/String
+/aruco/board_marker_count         std_msgs/msg/Int32
+/aruco/board_reprojection_rmse_px std_msgs/msg/Float64
 /aruco/debug_image                sensor_msgs/msg/Image
 ```
 
@@ -238,16 +245,19 @@ ROS_LOG_DIR=/tmp/ros_logs ros2 topic echo /aruco/pose
 
 | 话题 | 类型 | 说明 |
 | --- | --- | --- |
-| `/aruco/pose` | `geometry_msgs/msg/PoseStamped` | 非共面联合 PnP 或单 Marker 回退得到的统一甲板目标位姿 |
-| `/aruco/id` | `std_msgs/msg/Int32` | 与本帧有效 `/aruco/pose` 对应的 Marker ID |
+| `/aruco/pose` | `geometry_msgs/msg/PoseStamped` | environment-specific Board PnP 或单 Marker 回退得到的统一甲板目标位姿 |
+| `/aruco/id` | `std_msgs/msg/Int32` | 单 Marker 时对应 Marker ID；Marine multi-board 统一 deck pose 时为 `-1` |
 | `/aruco/visible` | `std_msgs/msg/Bool` | 本帧是否存在有效位姿 |
 | `/aruco/active_marker_id` | `std_msgs/msg/Int32` | 选择器内部 active ID；无 active 时为 `-1` |
 | `/aruco/selected_corner_area_px2` | `std_msgs/msg/Float64` | 本帧 selected Marker 角点面积；无 selected 时为 `NaN` |
 | `/aruco/selected_border_margin_px` | `std_msgs/msg/Float64` | 本帧 selected Marker 最小边界距离；无 selected 时为 `NaN` |
 | `/aruco/selection_reason` | `std_msgs/msg/String` | 每帧稳定选择原因，如 `HOLD_ACTIVE`、`CHALLENGER_STABILIZING`、`SWITCH_STABLE` |
+| `/aruco/pose_source` | `std_msgs/msg/String` | `PLANAR_BOARD_MULTI`、`FAR_SINGLE`、`NEAR_SINGLE`、`NONE`；legacy 还可为 `NONCOPLANAR_BOARD_MULTI` |
+| `/aruco/board_marker_count` | `std_msgs/msg/Int32` | 本帧角点完整且有限的已标定远距 Board Marker 数 |
+| `/aruco/board_reprojection_rmse_px` | `std_msgs/msg/Float64` | planar multi-board 重投影 RMSE；其他来源为 `NaN` |
 | `/aruco/debug_image` | `sensor_msgs/msg/Image` | 绘制检测框、坐标轴和选择器状态后的调试图像 |
 
-当没有本帧有效 selected Marker、相机内参无效或位姿估计失败时，节点会发布 `/aruco/visible = false`，并且不会发布新的 `/aruco/pose` 或 `/aruco/id`。诊断话题仍会逐帧发布，便于区分 active 状态、挑战者累计和真实位姿可用性。
+当本帧没有任何有效 Board/单 Marker pose、相机内参无效或位姿估计失败时，节点会发布 `/aruco/visible = false`，并且不会发布新的 `/aruco/pose` 或 `/aruco/id`。`pose_source=NONE`、Board count 和 RMSE 诊断仍逐帧更新；不会复用上一帧 pose。上一帧 planar pose 只作为 IPPE 双解的视觉连续性软先验，不会在失效帧被重新发布。
 
 ## 验证
 

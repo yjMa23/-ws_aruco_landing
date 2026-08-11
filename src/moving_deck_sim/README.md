@@ -67,7 +67,9 @@ v_D^W=v_V^W+R_W^V(\omega_V^V\times r_{VD}^V)
 
 ## 视觉目标
 
-landing deck 保留 legacy 的 Marker 局部几何：ID 0/1/2/3 多尺度目标，以及远距非共面 ID 4/5/6。marine model 中各 Marker pose 直接相对 `landing_deck` frame 定义，尺寸、ID、偏移和倾斜角不变；纹理继续复用仓库现有资源。
+legacy 的 Marker 几何保持 frozen：ID0/1/2/3 多尺度目标与历史 ID0/4/5/6 非共面远距结构均不修改。
+
+marine 使用独立布局：ID0/1/2/3 继续承担近距多尺度切换；远距改为 ID4/5/6/7 四个 `0.50 m` 共面 Marker，中心分别为 `(0.78,0.78,0.002)`、`(0.78,-0.78,0.002)`、`(-0.78,0.78,0.002)`、`(-0.78,-0.78,0.002) m`，全部 `rpy=0` 且 `relative_to="landing_deck"`。ID7 新增 `DICT_4X4_50` 纹理。Marine detector 使用独立 `aruco_detector_marine.yaml`，SDF 几何与 detector calibration 由回归测试逐项比对。
 
 ## 输出
 
@@ -117,4 +119,4 @@ colcon test --packages-select moving_deck_sim
 colcon test-result --verbose
 ```
 
-普通 C++ 测试覆盖 MotionProfile、GNSS sensor model 以及 rigid-body zero offset、translation、roll/pitch/yaw、lever-arm velocity、固定旋转、quaternion normalization 和非有限输入；Python 测试覆盖 environment 默认值、marine 安全门、VRX upstream metadata/asset import、dynamic WaveVisual ocean SDF/参数、Marker regression、legacy regression 以及 production Ground Truth subscription guard。
+普通 C++ 测试覆盖 MotionProfile、GNSS sensor model 以及 rigid-body zero offset、translation、roll/pitch/yaw、lever-arm velocity、固定旋转、quaternion normalization 和非有限输入；Python 测试覆盖 environment 默认值、Marine 独立 detector config、安全门、VRX upstream metadata/asset import、dynamic WaveVisual ocean SDF/参数、ID4/5/6/7 共面 Board 与 detector calibration 一致性、frozen legacy Marker regression 以及 production Ground Truth subscription guard。

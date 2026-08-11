@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
+import ast
 import os
+import re
 import subprocess
 import unittest
 import xml.etree.ElementTree as ET
@@ -15,7 +17,33 @@ MARINE_WORLD = (
 )
 WAMV_MODEL = MODELS_DIR / "vrx_wamv_landing" / "model.sdf"
 OCEAN_MODEL = MODELS_DIR / "vrx_ocean_visual" / "model.sdf"
+ARUCO_CONFIG_DIR = WORKSPACE_DIR / "src" / "aruco_detector" / "config"
+LEGACY_ARUCO_CONFIG = ARUCO_CONFIG_DIR / "aruco_detector.yaml"
+MARINE_ARUCO_CONFIG = ARUCO_CONFIG_DIR / "aruco_detector_marine.yaml"
 VRX_COMMIT = "7609d1bd90ce7edb29d040a082f949e8b089c864"
+
+
+def list_parameter(path: Path, name: str) -> list[float | int]:
+    text = path.read_text(encoding="utf-8")
+    match = re.search(
+        rf"^\s*{re.escape(name)}:\s*(\[[^\n]*\])\s*$", text, re.MULTILINE
+    )
+    if match is None:
+        raise AssertionError(f"parameter not found: {name} in {path}")
+    value = ast.literal_eval(match.group(1))
+    if not isinstance(value, list):
+        raise AssertionError(f"parameter is not a list: {name}")
+    return value
+
+
+def scalar_parameter(path: Path, name: str) -> str:
+    text = path.read_text(encoding="utf-8")
+    match = re.search(
+        rf"^\s*{re.escape(name)}:\s*([^#\n]+?)\s*$", text, re.MULTILINE
+    )
+    if match is None:
+        raise AssertionError(f"parameter not found: {name} in {path}")
+    return match.group(1).strip()
 
 
 class MarineEnvironmentTest(unittest.TestCase):
@@ -32,6 +60,7 @@ class MarineEnvironmentTest(unittest.TestCase):
         completed = self.run_dry("--scenario", "static")
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("environment=legacy", completed.stdout)
+        self.assertIn("aruco_detector_config=aruco_detector.yaml", completed.stdout)
 
     def test_legacy_defaults_keep_historical_world_model_and_spawn(self) -> None:
         launch = (
@@ -54,6 +83,7 @@ class MarineEnvironmentTest(unittest.TestCase):
         completed = self.run_dry("--environment", "marine", "--scenario", "static")
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("environment=marine", completed.stdout)
+        self.assertIn("aruco_detector_config=aruco_detector_marine.yaml", completed.stdout)
         self.assertIn("relative_descent_enabled=false", completed.stdout)
         self.assertIn("final_descent_enabled=false", completed.stdout)
         self.assertIn("terminal_contact_stabilization_enabled=false", completed.stdout)
@@ -214,39 +244,136 @@ class MarineEnvironmentTest(unittest.TestCase):
         self.assertIn('os.path.join(package_prefix, "lib")', launch)
         self.assertIn('px4_spawn_pose="-12,0,0.6"', script)
 
-    def test_marine_marker_geometry_matches_legacy_deck(self) -> None:
+    def test_legacy_marker_geometry_and_detector_calibration_remain_frozen(self) -> None:
         legacy_root = ET.parse(MODELS_DIR / "moving_deck" / "model.sdf").getroot()
-        marine_root = ET.parse(WAMV_MODEL).getroot()
-        marker_names = (
-            "aruco_marker_far_visual",
-            "aruco_marker_far_secondary_visual",
-            "aruco_marker_far_secondary_roll_positive_visual",
-            "aruco_marker_far_secondary_roll_negative_visual",
-            "aruco_marker_near_visual",
-            "aruco_marker_ultra_near_visual",
-            "aruco_marker_contact_visual",
+        legacy_link = legacy_root.find("./model/link[@name='moving_deck']")
+        self.assertIsNotNone(legacy_link)
+        expected_visuals = {
+            "aruco_marker_far_visual": (
+                "0.45 0 0.001 0 0 0",
+                "0.5 0.5",
+                "model://arucotag/arucotag.png",
+            ),
+            "aruco_marker_far_secondary_visual": (
+                "-0.75 0 0.2851650429449553 0 0.7853981633974483 0",
+                "0.75 0.75",
+                "model://moving_deck/aruco_id4.pgm",
+            ),
+            "aruco_marker_far_secondary_roll_positive_visual": (
+                "0 0.75 0.2851650429449553 0.7853981633974483 0 0",
+                "0.75 0.75",
+                "model://moving_deck/aruco_id5.pgm",
+            ),
+            "aruco_marker_far_secondary_roll_negative_visual": (
+                "0 -0.75 0.2851650429449553 -0.7853981633974483 0 0",
+                "0.75 0.75",
+                "model://moving_deck/aruco_id6.pgm",
+            ),
+            "aruco_marker_near_visual": (
+                "-0.18 0 0.002 0 0 0",
+                "0.20 0.20",
+                "model://moving_deck/aruco_id1.pgm",
+            ),
+            "aruco_marker_ultra_near_visual": (
+                "0.05 0 0.003 0 0 0",
+                "0.04 0.04",
+                "model://moving_deck/aruco_id2.pgm",
+            ),
+            "aruco_marker_contact_visual": (
+                "0 0 0.004 0 0 0",
+                "0.02 0.02",
+                "model://moving_deck/aruco_id3.pgm",
+            ),
+        }
+        for name, expected in expected_visuals.items():
+            with self.subTest(marker=name):
+                visual = legacy_link.find(f"./visual[@name='{name}']")
+                self.assertIsNotNone(visual)
+                self.assertEqual(visual.findtext("pose").strip(), expected[0])
+                self.assertEqual(visual.findtext("./geometry/plane/size").strip(), expected[1])
+                self.assertEqual(
+                    visual.findtext("./material/pbr/metal/albedo_map").strip(), expected[2]
+                )
+
+        self.assertEqual(list_parameter(LEGACY_ARUCO_CONFIG, "marker_ids"), [0, 1, 2, 3])
+        self.assertEqual(
+            list_parameter(LEGACY_ARUCO_CONFIG, "marker_lengths_m"),
+            [0.50, 0.20, 0.04, 0.02],
+        )
+        self.assertEqual(
+            list_parameter(LEGACY_ARUCO_CONFIG, "far_board.marker_ids"), [0, 4, 5, 6]
+        )
+        self.assertEqual(
+            list_parameter(LEGACY_ARUCO_CONFIG, "far_board.marker_lengths_m"),
+            [0.50, 0.75, 0.75, 0.75],
+        )
+        self.assertEqual(scalar_parameter(LEGACY_ARUCO_CONFIG, "far_board.pose_model"), "noncoplanar")
+        self.assertEqual(
+            list_parameter(LEGACY_ARUCO_CONFIG, "far_board.marker_poses_deck_xyz_rpy"),
+            [
+                0.45, 0.0, 0.0, 0.0, 0.0, 0.0,
+                -0.75, 0.0, 0.2851650429449553, 0.0, 0.7853981633974483, 0.0,
+                0.0, 0.75, 0.2851650429449553, 0.7853981633974483, 0.0, 0.0,
+                0.0, -0.75, 0.2851650429449553, -0.7853981633974483, 0.0, 0.0,
+            ],
         )
 
-        legacy_link = legacy_root.find("./model/link[@name='moving_deck']")
+    def test_marine_planar_board_matches_detector_calibration(self) -> None:
+        marine_root = ET.parse(WAMV_MODEL).getroot()
         marine_link = marine_root.find("./model/link[@name='vessel_body']")
-        self.assertIsNotNone(legacy_link)
         self.assertIsNotNone(marine_link)
-        for name in marker_names:
-            with self.subTest(marker=name):
-                legacy = legacy_link.find(f"./visual[@name='{name}']")
-                marine = marine_link.find(f"./visual[@name='{name}']")
-                self.assertIsNotNone(legacy)
-                self.assertIsNotNone(marine)
-                self.assertEqual(legacy.findtext("pose").strip(), marine.findtext("pose").strip())
+
+        ids = list_parameter(MARINE_ARUCO_CONFIG, "far_board.marker_ids")
+        lengths = list_parameter(MARINE_ARUCO_CONFIG, "far_board.marker_lengths_m")
+        poses = list_parameter(MARINE_ARUCO_CONFIG, "far_board.marker_poses_deck_xyz_rpy")
+        self.assertEqual(ids, [4, 5, 6, 7])
+        self.assertEqual(lengths, [0.50, 0.50, 0.50, 0.50])
+        self.assertEqual(scalar_parameter(MARINE_ARUCO_CONFIG, "far_board.pose_model"), "planar")
+        self.assertEqual(len(poses), 24)
+
+        expected_centers = {
+            4: (0.78, 0.78, 0.002),
+            5: (0.78, -0.78, 0.002),
+            6: (-0.78, 0.78, 0.002),
+            7: (-0.78, -0.78, 0.002),
+        }
+        visual_names = {
+            4: "aruco_marker_planar_id4_visual",
+            5: "aruco_marker_planar_id5_visual",
+            6: "aruco_marker_planar_id6_visual",
+            7: "aruco_marker_planar_id7_visual",
+        }
+        for index, marker_id in enumerate(ids):
+            with self.subTest(marker_id=marker_id):
+                config_pose = tuple(float(value) for value in poses[index * 6:(index + 1) * 6])
+                self.assertEqual(config_pose[:3], expected_centers[marker_id])
+                self.assertEqual(config_pose[3:], (0.0, 0.0, 0.0))
+
+                visual = marine_link.find(f"./visual[@name='{visual_names[marker_id]}']")
+                self.assertIsNotNone(visual)
+                pose_element = visual.find("pose")
+                self.assertIsNotNone(pose_element)
+                self.assertEqual(pose_element.attrib.get("relative_to"), "landing_deck")
+                sdf_pose = tuple(float(value) for value in pose_element.text.split())
+                self.assertEqual(sdf_pose, config_pose)
                 self.assertEqual(
-                    legacy.findtext("./geometry/plane/size").strip(),
-                    marine.findtext("./geometry/plane/size").strip(),
+                    visual.findtext("./geometry/plane/normal").strip(), "0 0 1"
                 )
                 self.assertEqual(
-                    legacy.findtext("./material/pbr/metal/albedo_map").strip(),
-                    marine.findtext("./material/pbr/metal/albedo_map").strip(),
+                    tuple(float(value) for value in visual.findtext("./geometry/plane/size").split()),
+                    (lengths[index], lengths[index]),
                 )
-                self.assertEqual(marine.find("pose").attrib.get("relative_to"), "landing_deck")
+                self.assertLessEqual(abs(sdf_pose[0]) + lengths[index] * 0.5, 1.20)
+                self.assertLessEqual(abs(sdf_pose[1]) + lengths[index] * 0.5, 1.20)
+                self.assertLessEqual(abs(sdf_pose[2]), 0.004)
+                self.assertEqual(
+                    visual.findtext("./material/pbr/metal/albedo_map").strip(),
+                    f"model://moving_deck/aruco_id{marker_id}.pgm",
+                )
+
+        id7_texture = MODELS_DIR / "moving_deck" / "aruco_id7.pgm"
+        self.assertTrue(id7_texture.is_file())
+        self.assertGreater(id7_texture.stat().st_size, 0)
 
     def test_production_landing_code_does_not_subscribe_ground_truth(self) -> None:
         production_roots = (

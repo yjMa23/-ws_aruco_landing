@@ -106,7 +106,7 @@ Marine M2 需要显式选择：
   --rendezvous-altitude 7.0
 ```
 
-marine 使用 `aruco_marine_vessel.sdf`、`vrx_wamv_landing/vessel_body`、固定 `landing_deck` frame 和独立 `x≈-12 m` UAV launch platform。WAM-V visual 来自固定 VRX commit 的官方 mesh/PBR maps；海面是 visual-only VRX-style PBR water。launch 会把既有 scenario 的 neutral deck z=`2 m` 转成 WAM-V vessel reference z=`0.2 m`，并用固定 `r_VD=[0,0,1.8] m` 恢复 `/simulation/deck/ground_truth` 的 deck-center 语义。
+marine 使用 `aruco_marine_vessel.sdf`、`vrx_wamv_landing/vessel_body`、固定 `landing_deck` frame 和独立 `x≈-12 m` UAV launch platform。WAM-V visual 来自固定 VRX commit 的官方 mesh/PBR maps；海面启用 `waterlow.dae + WaveVisual + Gerstner shader` 的 dynamic visual-only VRX ocean。launch 会把既有 scenario 的 neutral deck z=`2 m` 转成 WAM-V vessel reference z=`0.2 m`，并用固定 `r_VD=[0,0,1.8] m` 恢复 `/simulation/deck/ground_truth` 的 deck-center 语义。Marine 启动脚本同时改用 `aruco_detector_marine.yaml`，legacy 继续使用历史 `aruco_detector.yaml`。
 
 marine 只允许 GNSS rendezvous、视觉捕获、安全高度跟踪和 deck-motion shadow。以下命令必须在启动前失败：
 
@@ -117,7 +117,7 @@ marine 只允许 GNSS rendezvous、视觉捕获、安全高度跟踪和 deck-mot
   --terminal-contact-stabilization-shadow --dry-run
 ```
 
-M2 已使用 VRX WAM-V 视觉资产和 VRX `wave_normals.dds`，但没有启用动态 `WaveVisual`、wave-driven vessel dynamics、RAO、Buoyancy、Hydrodynamics、wind 或 current。`MotionProfile` 仍是唯一 vessel motion source。M1 基础构建说明见 [Marine Scene 构建说明](MARINE_SCENE_BUILD.md)，M2 上游/资产/build/SDF/GUI 验证见 [VRX WAM-V 构建说明](VRX_WAMV_BUILD.md)。
+M2 已使用 VRX WAM-V 视觉资产并启用 VRX `WaveVisual`：`waterlow.dae` 顶点与 bump-map UV 由 Gerstner shader 随 simulation time 动态更新。它仍是纯渲染能力，没有 wave-driven vessel dynamics、RAO、Buoyancy、Hydrodynamics、wind 或 current；`MotionProfile` 仍是唯一 vessel motion source。M1 基础构建说明见 [Marine Scene 构建说明](MARINE_SCENE_BUILD.md)，M2 上游/资产/build/SDF/GUI 验证见 [VRX WAM-V 构建说明](VRX_WAMV_BUILD.md)。
 
 ### 3.2 甲板 6-DoF Shadow
 
@@ -130,10 +130,15 @@ ros2 topic echo /landing/deck_motion_shadow/status
 ros2 topic echo /landing/deck_motion_shadow/trusted_horizon_s
 ```
 
-约 `5 m` 时还应在 `/aruco/debug_image` 中确认 ID 0/4/5/6 同帧可见；检测器日志
-`Using 4-marker noncoplanar far-board pose` 表示本帧使用联合 PnP。若日志显示
-`single-marker fallback`，先检查倾斜 Marker 纹理、标定数组和视场，不要调 shadow
-创新门掩盖视觉退化。
+Marine 约 `5 m` 时应在 `/aruco/debug_image` 中确认 ID4/5/6/7 至少多个同帧可见，并检查：
+
+```bash
+ros2 topic echo /aruco/pose_source
+ros2 topic echo /aruco/board_marker_count
+ros2 topic echo /aruco/board_reprojection_rmse_px
+```
+
+正常远距来源应主要为 `PLANAR_BOARD_MULTI`；只有一个大 Marker 可用时才是 `FAR_SINGLE`，远距全部离开视场后才由 ID0/1/2/3 `MarkerSelector` 给出 `NEAR_SINGLE`。若多 Marker 可见但持续 `NONE`，先检查共面 SDF/calibration、CameraInfo、角点质量、法向与 reprojection RMSE，不要调 shadow 创新门掩盖视觉退化。legacy 环境仍保留历史 ID0/4/5/6 非共面日志和语义。
 
 正式约 `5 m` 甲板相对高度的 12 轮矩阵（runner 固定
 `rendezvous_altitude_m=7.0`，因为甲板表面位于 world `z=2.0 m`）：
