@@ -46,11 +46,11 @@
 
 运动控制器支持确定性 reset、固定更新频率和固定随机种子。Ground Truth 发布完整位置、姿态、线速度和角速度，只能供传感器仿真与离线评测使用。
 
-Marine M2 的独立 `aruco_marine_vessel.sdf` 已切换到 `vrx_wamv_landing`。world 仍名为 `aruco`，保持 ENU、球面坐标和 250 Hz 物理更新；场景包含官方 VRX WAM-V base mesh/PBR visual、约 `300×300 m` visual-only VRX-style PBR ocean、独立静态 UAV launch platform，以及 WAM-V 上新增的 `2.4×2.4 m` UAV landing platform。legacy `aruco_moving_deck.sdf` 和 `models/moving_deck` 保持独立且仍是默认环境。
+Marine 的独立 `aruco_marine_vessel.sdf` 已切换到 `vrx_wamv_landing`。world 仍名为 `aruco`，保持 ENU、球面坐标和 250 Hz 物理更新；场景包含官方 VRX WAM-V base mesh/PBR visual、VRX `waterlow.dae + WaveVisual + Gerstner shader` 动态 visual-only ocean、独立静态 UAV launch platform，以及 WAM-V 上新增的 `2.4×2.4 m` UAV landing platform。动态海面顶点和 bump-map UV 随 Gazebo simulation time 更新，但没有 collision 或波浪力。legacy `aruco_moving_deck.sdf` 和 `models/moving_deck` 保持独立且仍是默认环境。
 
 marine 中同一 `MotionProfile` 驱动与官方 `wamv/base_link` 对齐的 canonical `vessel_body`，neutral reference 为 world z≈0.2 m；固定 `T_vessel_deck` 使用 `r_VD=[0,0,1.8] m`、`R_V_D=I`，把 raw vessel state 转为 landing deck center，neutral deck center 仍为 z≈2.0 m。`rigid_body_kinematics` 显式加入 `R(ω×r)` lever-arm 线速度，因此 roll/pitch 同时改变 deck orientation 与 deck-center position/velocity。`/simulation/deck/ground_truth_raw` 在 marine 表示 vessel raw state，最终 `/simulation/deck/ground_truth` 仍表示 deck center。
 
-M2 的 WAM-V / ocean 单模型通过 `gz sdf -k`，完整 marine world 在 `gz sdf -k` 中会触发 sdformat CLI 缺少 `model://` find callback 的已知限制；实际 `gz sim` server smoke 已成功解析 include 并加载 `vrx_wamv_landing` 的 VelocityControl / OdometryPublisher，未出现 missing mesh/texture/material。全仓构建与测试为 `374 tests, 0 errors, 0 failures, 0 skipped`。Marine `static` 与 `rigid_body_motion` 各完成一轮有限 headless PX4 SITL smoke：两轮都完成 GNSS rendezvous、非共面 ArUco 捕获并停留在安全高度 `WAIT_LANDING_WINDOW`；rigid-body 运行时 shadow 为 `UPDATED:TRUSTED`、terminal stabilization=false、touchdown_confirmed=false。rigid-body 抓取 `3578` 组同时间戳 raw/deck GT，位置刚体关系最大误差 `8.95e-16 m`，lever-arm 速度关系最大误差 `1.57e-16 m/s`，全部 finite；最早 deck GT 为 z≈2.00 m，随后 6-DoF profile 使 deck z 覆盖约 `1.453–2.274 m`。两轮 PX4 ULog 均为 `NAV_LAND=0`、Disarm command=0，结束时 landed=false。当前验证 shell 无 DISPLAY/Wayland，因此未做 GUI 人工视觉验收。
+WAM-V / ocean 单模型通过 `gz sdf -k`，完整 marine world 在 `gz sdf -k` 中会触发 sdformat CLI 缺少 `model://` find callback 的已知限制；实际 `gz sim` server smoke 已成功解析 include，加载 `vrx::WaveVisual`、`vrx_wamv_landing` 的 VelocityControl / OdometryPublisher，并正确读取 CWR `amplitude=0.06 m`、`period=4.0 s` 等参数，未出现 missing plugin/mesh/shader/texture。全仓构建与测试为 `374 tests, 0 errors, 0 failures, 0 skipped`。当前验证 shell 无 DISPLAY/Wayland，因此“海面肉眼持续运动”仍需要用户侧 GUI 验收。Marine `static` 与 `rigid_body_motion` 各完成一轮有限 headless PX4 SITL smoke：两轮都完成 GNSS rendezvous、非共面 ArUco 捕获并停留在安全高度 `WAIT_LANDING_WINDOW`；rigid-body 运行时 shadow 为 `UPDATED:TRUSTED`、terminal stabilization=false、touchdown_confirmed=false。rigid-body 抓取 `3578` 组同时间戳 raw/deck GT，位置刚体关系最大误差 `8.95e-16 m`，lever-arm 速度关系最大误差 `1.57e-16 m/s`，全部 finite；最早 deck GT 为 z≈2.00 m，随后 6-DoF profile 使 deck z 覆盖约 `1.453–2.274 m`。两轮 PX4 ULog 均为 `NAV_LAND=0`、Disarm command=0，结束时 landed=false。当前验证 shell 无 DISPLAY/Wayland，因此未做 GUI 人工视觉验收。
 
 ### 3.2 船舶 GNSS
 
@@ -299,6 +299,6 @@ INIT
 - Ground Truth 不得进入控制器、窗口、估计器或状态机。
 - `--environment legacy` 仍是默认路径；`--environment marine` 必须显式选择。
 - Marine M2 只允许 GNSS rendezvous、视觉捕获、安全高度跟踪和 deck-motion shadow；相对下降、最终下降和任意 terminal-contact stabilization 会在启动前拒绝。
-- Marine M2 已引入固定版本的 VRX WAM-V visual 和 VRX-style ocean visual，但没有启用动态 WaveVisual、wave-driven vessel dynamics、JONSWAP/PM 船体响应、RAO、Buoyancy、Hydrodynamics、wind、current 或 CFD。`MotionProfile` 仍是唯一 vessel motion source。
+- Marine 已引入固定版本的 VRX WAM-V visual，并启用 visual-only `WaveVisual` 动态 Gerstner 海面；仍没有 wave-driven vessel dynamics、JONSWAP/PM 船体响应、RAO、Buoyancy、Hydrodynamics、wind、current 或 CFD。`MotionProfile` 仍是唯一 vessel motion source，视觉海浪不能进入控制器或 Ground Truth。
 - 非有限 setpoint、非法四元数、无效 PX4 frame 和过期观测必须拒绝。
 - 实机自动解锁不属于默认配置；所有自动动作仅面向 SITL 并需显式授权。

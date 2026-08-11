@@ -101,6 +101,14 @@ class MarineEnvironmentTest(unittest.TestCase):
             "vrx_wamv_landing/meshes/WAM-V_Roughness.png",
             "vrx_wamv_landing/meshes/WAM-V_Metalness.png",
             "vrx_ocean_visual/materials/textures/wave_normals.dds",
+            "vrx_ocean_visual/materials/textures/skybox_lowres.dds",
+            "vrx_ocean_visual/meshes/waterlow.dae",
+            "vrx_ocean_visual/materials/programs/GerstnerWaves_vs_330.glsl",
+            "vrx_ocean_visual/materials/programs/GerstnerWaves_fs_330.glsl",
+            "vrx_wave_visual/WaveVisual.cc",
+            "vrx_wave_visual/WaveVisual.hh",
+            "vrx_wave_visual/Wavefield.cc",
+            "vrx_wave_visual/Wavefield.hh",
         )
         for relative_path in required:
             with self.subTest(asset=relative_path):
@@ -148,18 +156,35 @@ class MarineEnvironmentTest(unittest.TestCase):
             "/simulation/deck/ground_truth_raw",
         )
 
-    def test_marine_ocean_is_visual_only_with_vrx_normal_texture(self) -> None:
+    def test_marine_ocean_is_visual_only_dynamic_vrx_wavevisual(self) -> None:
         root = ET.parse(OCEAN_MODEL).getroot()
         model = root.find("./model[@name='vrx_ocean_visual']")
         self.assertIsNotNone(model)
         link = model.find("./link[@name='surface']")
         self.assertIsNotNone(link)
         self.assertIsNone(link.find("collision"))
+        visual = link.find("./visual[@name='ocean_surface_visual']")
+        self.assertIsNotNone(visual)
         self.assertEqual(
-            link.findtext("./visual/material/pbr/metal/normal_map"),
-            "model://vrx_ocean_visual/materials/textures/wave_normals.dds",
+            visual.findtext("./geometry/mesh/uri"),
+            "model://vrx_ocean_visual/meshes/waterlow.dae",
         )
-        self.assertIsNone(model.find("plugin"))
+        plugin = visual.find("./plugin[@name='vrx::WaveVisual']")
+        self.assertIsNotNone(plugin)
+        self.assertEqual(plugin.attrib.get("filename"), "libWaveVisual.so")
+        self.assertEqual(
+            plugin.findtext("./shader/vertex"),
+            "materials/programs/GerstnerWaves_vs_330.glsl",
+        )
+        self.assertEqual(
+            plugin.findtext("./shader/fragment"),
+            "materials/programs/GerstnerWaves_fs_330.glsl",
+        )
+        self.assertEqual(plugin.findtext("./wavefield/wave/model"), "CWR")
+        self.assertEqual(plugin.findtext("./wavefield/wave/number"), "3")
+        self.assertEqual(plugin.findtext("./wavefield/wave/amplitude"), "0.06")
+        self.assertEqual(plugin.findtext("./wavefield/wave/period"), "4.0")
+        self.assertEqual(plugin.findtext("./wavefield/wave/steepness"), "0.02")
 
     def test_marine_runtime_sdf_has_no_fuel_or_user_cache_dependency(self) -> None:
         runtime_files = (MARINE_WORLD, WAMV_MODEL, OCEAN_MODEL)
@@ -185,6 +210,8 @@ class MarineEnvironmentTest(unittest.TestCase):
         self.assertIn('MARINE_NEUTRAL_DECK_HEIGHT_M = 2.0', launch)
         self.assertIn('MARINE_DECK_OFFSET_BODY = [0.0, 0.0, 1.8]', launch)
         self.assertIn('"model_name": "vrx_wamv_landing"', launch)
+        self.assertIn('GZ_SIM_SYSTEM_PLUGIN_PATH', launch)
+        self.assertIn('os.path.join(package_prefix, "lib")', launch)
         self.assertIn('px4_spawn_pose="-12,0,0.6"', script)
 
     def test_marine_marker_geometry_matches_legacy_deck(self) -> None:

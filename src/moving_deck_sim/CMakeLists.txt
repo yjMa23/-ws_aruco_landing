@@ -6,17 +6,24 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 find_package(ament_cmake REQUIRED)
+find_package(Eigen3 REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(gz-common5 REQUIRED COMPONENTS graphics)
 find_package(gz-math7 REQUIRED)
 find_package(gz-msgs10 REQUIRED)
+find_package(gz-plugin2 REQUIRED COMPONENTS loader register)
+find_package(gz-rendering8 REQUIRED)
+find_package(gz-sim8 REQUIRED)
 find_package(gz-transport13 REQUIRED)
+find_package(gz-utils2 REQUIRED)
+find_package(sdformat14 REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 
-# Marine WAM-V 仅导入固定 VRX commit 的最小视觉资产；运行时不依赖 VRX/Fuel。
+# Marine 仅从固定 VRX commit 导入 WAM-V 与 WaveVisual 所需最小内容；运行时不依赖完整 VRX/Fuel。
 find_package(Git REQUIRED)
 set(VRX_UPSTREAM_REPOSITORY "https://github.com/osrf/vrx.git")
 set(VRX_UPSTREAM_BRANCH "jazzy")
@@ -71,10 +78,9 @@ function(clone_vrx_upstream)
   endif()
 endfunction()
 
-function(import_vrx_asset relative_destination upstream_path expected_size)
+function(import_vrx_file relative_destination upstream_path expected_size)
   set(destination "${VRX_ASSET_STAGE_DIR}/${relative_destination}")
   get_filename_component(destination_dir "${destination}" DIRECTORY)
-  get_filename_component(install_dir "${relative_destination}" DIRECTORY)
   file(MAKE_DIRECTORY "${destination_dir}")
 
   set(needs_import TRUE)
@@ -99,18 +105,22 @@ function(import_vrx_asset relative_destination upstream_path expected_size)
     )
     if(NOT import_result EQUAL 0)
       file(REMOVE "${destination}")
-      message(FATAL_ERROR "Failed to import VRX asset ${upstream_path}: ${import_error}")
+      message(FATAL_ERROR "Failed to import VRX file ${upstream_path}: ${import_error}")
     endif()
   endif()
 
   file(SIZE "${destination}" imported_size)
   if(NOT imported_size EQUAL expected_size)
     message(FATAL_ERROR
-      "VRX asset size mismatch for ${upstream_path}: expected ${expected_size}, got ${imported_size}")
+      "VRX file size mismatch for ${upstream_path}: expected ${expected_size}, got ${imported_size}")
   endif()
+endfunction()
 
+function(import_vrx_asset relative_destination upstream_path expected_size)
+  import_vrx_file("${relative_destination}" "${upstream_path}" "${expected_size}")
+  get_filename_component(install_dir "${relative_destination}" DIRECTORY)
   install(
-    FILES "${destination}"
+    FILES "${VRX_ASSET_STAGE_DIR}/${relative_destination}"
     DESTINATION "share/${PROJECT_NAME}/models/${install_dir}"
   )
 endfunction()
@@ -147,6 +157,69 @@ import_vrx_asset(
   "vrx_gz/models/coast_waves/materials/textures/wave_normals.dds"
   262271
 )
+import_vrx_asset(
+  "vrx_ocean_visual/materials/textures/skybox_lowres.dds"
+  "vrx_gz/models/coast_waves/materials/textures/skybox_lowres.dds"
+  786560
+)
+import_vrx_asset(
+  "vrx_ocean_visual/meshes/waterlow.dae"
+  "vrx_gz/models/coast_waves/meshes/waterlow.dae"
+  13323357
+)
+import_vrx_asset(
+  "vrx_ocean_visual/materials/programs/GerstnerWaves_vs_330.glsl"
+  "vrx_gz/models/coast_waves/materials/programs/GerstnerWaves_vs_330.glsl"
+  4097
+)
+import_vrx_asset(
+  "vrx_ocean_visual/materials/programs/GerstnerWaves_fs_330.glsl"
+  "vrx_gz/models/coast_waves/materials/programs/GerstnerWaves_fs_330.glsl"
+  2159
+)
+
+import_vrx_file(
+  "vrx_wave_visual/WaveVisual.cc"
+  "vrx_gz/src/WaveVisual.cc"
+  15228
+)
+import_vrx_file(
+  "vrx_wave_visual/WaveVisual.hh"
+  "vrx_gz/src/WaveVisual.hh"
+  1916
+)
+import_vrx_file(
+  "vrx_wave_visual/Wavefield.cc"
+  "vrx_gz/src/Wavefield.cc"
+  26812
+)
+import_vrx_file(
+  "vrx_wave_visual/Wavefield.hh"
+  "vrx_gz/src/Wavefield.hh"
+  11653
+)
+
+add_library(
+  WaveVisual SHARED
+  "${VRX_ASSET_STAGE_DIR}/vrx_wave_visual/WaveVisual.cc"
+  "${VRX_ASSET_STAGE_DIR}/vrx_wave_visual/Wavefield.cc"
+)
+target_compile_features(WaveVisual PUBLIC cxx_std_17)
+target_include_directories(WaveVisual PRIVATE "${VRX_ASSET_STAGE_DIR}/vrx_wave_visual")
+target_link_libraries(
+  WaveVisual
+  PRIVATE
+    Eigen3::Eigen
+    gz-common5::gz-common5
+    gz-math7::gz-math7
+    gz-msgs10::gz-msgs10
+    gz-plugin2::gz-plugin2
+    gz-rendering8::gz-rendering8
+    gz-sim8::core
+    gz-transport13::gz-transport13
+    gz-utils2::gz-utils2
+)
+install(TARGETS WaveVisual LIBRARY DESTINATION lib)
 
 add_library(moving_deck_motion src/motion_profile.cpp)
 target_compile_features(moving_deck_motion PUBLIC cxx_std_17)

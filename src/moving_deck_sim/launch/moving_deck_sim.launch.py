@@ -1,6 +1,6 @@
 import os
 
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_prefix, get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.actions import SetEnvironmentVariable
@@ -98,6 +98,7 @@ def _launch_setup(context, package_share: str, gz_launch: str, gui_config_path: 
 
 def generate_launch_description():
     package_share = get_package_share_directory("moving_deck_sim")
+    package_prefix = get_package_prefix("moving_deck_sim")
     ros_gz_sim_share = get_package_share_directory("ros_gz_sim")
     gui_config_path = os.path.join(package_share, "config", "gazebo_gui.config")
     default_config = os.path.join(package_share, "config", "constant_velocity.yaml")
@@ -107,6 +108,10 @@ def generate_launch_description():
     existing_resource_path = os.environ.get("GZ_SIM_RESOURCE_PATH", "")
     resource_path = os.pathsep.join(
         [os.path.join(package_share, "models"), existing_resource_path]
+    ).rstrip(os.pathsep)
+    existing_plugin_path = os.environ.get("GZ_SIM_SYSTEM_PLUGIN_PATH", "")
+    plugin_path = os.pathsep.join(
+        [os.path.join(package_prefix, "lib"), existing_plugin_path]
     ).rstrip(os.pathsep)
 
     return LaunchDescription(
@@ -142,6 +147,7 @@ def generate_launch_description():
                 description="Deterministic seed shared by deck motion and GNSS simulation.",
             ),
             SetEnvironmentVariable("GZ_SIM_RESOURCE_PATH", resource_path),
+            SetEnvironmentVariable("GZ_SIM_SYSTEM_PLUGIN_PATH", plugin_path),
             SetEnvironmentVariable("QT_QPA_PLATFORM", "xcb"),
             SetEnvironmentVariable("GZ_IP", "127.0.0.1"),
             OpaqueFunction(

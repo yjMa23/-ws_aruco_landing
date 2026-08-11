@@ -1,4 +1,4 @@
-# Third-party asset: VRX wave normal texture
+# Third-party components: VRX dynamic wave visual
 
 - Repository: https://github.com/osrf/vrx
 - Branch audited: `jazzy`
@@ -6,12 +6,20 @@
 - License: Apache License 2.0
 - License copy: `../vrx_wamv_landing/LICENSE-VRX.txt`
 
-Imported at build time:
+Imported from the pinned commit at build time:
 
 ```text
+vrx_gz/models/coast_waves/meshes/waterlow.dae
+vrx_gz/models/coast_waves/materials/programs/GerstnerWaves_vs_330.glsl
+vrx_gz/models/coast_waves/materials/programs/GerstnerWaves_fs_330.glsl
 vrx_gz/models/coast_waves/materials/textures/wave_normals.dds
+vrx_gz/models/coast_waves/materials/textures/skybox_lowres.dds
+vrx_gz/src/WaveVisual.cc
+vrx_gz/src/WaveVisual.hh
+vrx_gz/src/Wavefield.cc
+vrx_gz/src/Wavefield.hh
 ```
 
-The texture is not modified. This project supplies its own visual-only plane and PBR material. It intentionally does not copy or enable VRX `WaveVisual`, `Wavefield`, coast water mesh, buoyancy, hydrodynamics or wind plugins in Marine M2.
+The imported files are not modified. `WaveVisual.cc` and `Wavefield.cc` are compiled together into the local `libWaveVisual.so`; the SDF only supplies project-selected visual CWR parameters. No VRX buoyancy, hydrodynamics, wind, propulsion, competition or scoring plugin is copied or enabled.
 
-The built runtime model uses only the local installed copy under `materials/textures/` and has no Fuel or user-cache dependency.
+The built runtime resolves the mesh, shaders and textures from the local `moving_deck_sim` install share and the plugin from the local package `lib/` directory. It has no Gazebo Fuel or user-cache dependency.

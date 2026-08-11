@@ -537,7 +537,7 @@ v_D^W=v_V^W+R_W^V(\omega_V^V\times r_{VD}^V)
 
 这一步只在 `moving_deck_sim` 中把 vessel raw Ground Truth 转换成 deck-center Ground Truth，确保 roll/pitch 的甲板中心位置包含杠杆臂运动。它**不是**控制器可用的状态来源；生产控制仍只使用 PX4 state、模拟 GNSS、camera/ArUco 与内部 estimator。
 
-Marker 的 `T_deck_marker_i` 保持 legacy 标定不变，marine 只是把整个 landing deck 作为 `vessel_body` 的固定刚体子 frame。M2 的 WAM-V / PBR ocean 都只属于仿真视觉与固定刚体语义，不把 wave/buoyancy/hydrodynamics 引入控制链。基础刚体契约见 [MARINE_VESSEL_KINEMATICS.md](MARINE_VESSEL_KINEMATICS.md)，M2 WAM-V 几何与上游契约见 [VRX_WAMV_INTEGRATION.md](VRX_WAMV_INTEGRATION.md)。
+Marker 的 `T_deck_marker_i` 保持 legacy 标定不变，marine 只是把整个 landing deck 作为 `vessel_body` 的固定刚体子 frame。WAM-V 与动态 `WaveVisual` ocean 都只属于仿真视觉与固定刚体语义；视觉海浪不把 wave/buoyancy/hydrodynamics 引入控制链。基础刚体契约见 [MARINE_VESSEL_KINEMATICS.md](MARINE_VESSEL_KINEMATICS.md)，WAM-V 几何、上游与海面渲染契约见 [VRX_WAMV_INTEGRATION.md](VRX_WAMV_INTEGRATION.md)。
 
 ## 13. 动态姿态限制
 

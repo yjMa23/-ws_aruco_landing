@@ -54,7 +54,7 @@ PX4 SITL
 MicroXRCEAgent
 ```
 
-M2 asset configure 还要求系统 `git`（审计机 `git version 2.34.1`）。Ubuntu 22.04 缺失时安装：
+Marine asset / WaveVisual configure 还要求系统 `git`（审计机 `git version 2.34.1`）。Ubuntu 22.04 缺失时安装：
 
 ```bash
 sudo apt update
@@ -67,7 +67,7 @@ sudo apt install git
 
 ### 3.2 New source asset dependency
 
-M2 不新增可执行 VRX runtime package，而是在 CMake configure/build 阶段通过 Git partial clone 从固定 commit 导入最小只读视觉资产：
+Marine 不安装完整 VRX runtime package，而是在 CMake configure/build 阶段通过 Git partial clone 从固定 commit 导入最小 WAM-V / dynamic-ocean 内容：
 
 ```text
 WAM-V-Base.dae
@@ -75,9 +75,16 @@ WAM-V_Albedo.png
 WAM-V_Normal.png
 WAM-V_Roughness.png
 WAM-V_Metalness.png
+waterlow.dae
+GerstnerWaves_vs_330.glsl
+GerstnerWaves_fs_330.glsl
 wave_normals.dds
+skybox_lowres.dds
+WaveVisual.cc / WaveVisual.hh
+Wavefield.cc / Wavefield.hh
 ```
 
+`WaveVisual.cc` 与 `Wavefield.cc` 从同一 pinned commit 导入 build tree 后编译为本项目安装目录中的 `libWaveVisual.so`；不会安装 VRX competition、propulsion、buoyancy 或 hydrodynamics plugin。动态 ocean plugin 依赖本机 Gazebo Harmonic 的 `gz-sim8`、`gz-common5`、`gz-plugin2`、`gz-rendering8`、`gz-utils2`、`sdformat14`、现有 `gz-math7/gz-msgs10/gz-transport13` 与 `Eigen3`。
 来源仓库与 revision 固定为：
 
 ```text
@@ -86,17 +93,20 @@ branch: jazzy
 commit: 7609d1bd90ce7edb29d040a082f949e8b089c864
 ```
 
-CMake 使用 `--filter=blob:none --no-checkout --depth 1`，随后只通过 `git show <commit>:<path>` 导出所需六个 blob，并校验预期字节数。构建期需要访问 GitHub；**运行时不需要网络**。构建后的 asset 安装到：
+CMake 使用 `--filter=blob:none --no-checkout --depth 1`，随后只通过 `git show <commit>:<path>` 导出本项目需要的 WAM-V / ocean 资源与 WaveVisual/Wavefield 源文件，并逐项校验预期字节数。构建期需要访问 GitHub；**运行时不需要网络**。构建后的 asset / plugin 安装到：
 
 ```text
+install/moving_deck_sim/lib/libWaveVisual.so
 install/moving_deck_sim/share/moving_deck_sim/models/vrx_wamv_landing/meshes/
 install/moving_deck_sim/share/moving_deck_sim/models/vrx_wamv_landing/materials/textures/
+install/moving_deck_sim/share/moving_deck_sim/models/vrx_ocean_visual/meshes/
+install/moving_deck_sim/share/moving_deck_sim/models/vrx_ocean_visual/materials/programs/
 install/moving_deck_sim/share/moving_deck_sim/models/vrx_ocean_visual/materials/textures/
 ```
 
 模型目录 `THIRD_PARTY.md` 记录每个上游文件、commit、license 和本项目改动。
 
-> 选择构建期固定 commit 导入而不是整个 VRX workspace 的原因：官方 WAM-V PBR 二进制资源较大，而 M2 只需要 WAM-V base visual 和一张 water normal texture。该策略避免 ROS Jazzy/competition plugin 变成 runtime dependency，也避免依赖 Gazebo Fuel 或用户 cache。
+> 选择构建期固定 commit 导入而不是整个 VRX workspace 的原因：本项目只需要 WAM-V base visual 与 dynamic-ocean 的最小 rendering 子集。该策略避免 ROS Jazzy/competition、propulsion、buoyancy 等无关 plugin 变成 runtime dependency，也避免依赖 Gazebo Fuel 或用户 cache。
 
 ## 4. Asset import / vendor strategy
 
@@ -126,21 +136,18 @@ src/moving_deck_sim/models/
 │   └── materials/textures/
 └── vrx_ocean_visual/
     ├── model.config
-    ├── model.sdf
+    ├── model.sdf               # water mesh + vrx::WaveVisual + CWR 参数
     ├── THIRD_PARTY.md
-    └── materials/textures/     # build/install 后含 VRX wave_normals.dds
+    ├── meshes/                 # build/install 后含 waterlow.dae
+    ├── materials/programs/     # Gerstner vertex / fragment shaders
+    └── materials/textures/     # wave normals + skybox cubemap
 ```
 
 `models/landing_vessel/` 可以保留为历史/debug fixture，但 marine 正式 world 不再 include 它。
 
 ## 6. Environment variables
 
-正常 launch 会把 package share 的 `models` 目录加入：
-
-```text
-GZ_SIM_RESOURCE_PATH
-```
-
+正常 launch 会把 package share 的 `models` 目录加入 `GZ_SIM_RESOURCE_PATH`，并把 package `lib/` 加入 `GZ_SIM_SYSTEM_PLUGIN_PATH`，保证 `libWaveVisual.so` 可由 Gazebo 解析。
 手工检查 source/install SDF 时可使用：
 
 ```bash
@@ -148,7 +155,10 @@ source /opt/ros/humble/setup.bash
 source ~/ws_sensor_combined/install/setup.bash
 source install/setup.bash
 
-export GZ_SIM_RESOURCE_PATH="$(ros2 pkg prefix --share moving_deck_sim)/models${GZ_SIM_RESOURCE_PATH:+:$GZ_SIM_RESOURCE_PATH}"
+share="$(ros2 pkg prefix --share moving_deck_sim)"
+prefix="$(ros2 pkg prefix moving_deck_sim)"
+export GZ_SIM_RESOURCE_PATH="$share/models${GZ_SIM_RESOURCE_PATH:+:$GZ_SIM_RESOURCE_PATH}"
+export GZ_SIM_SYSTEM_PLUGIN_PATH="$prefix/lib${GZ_SIM_SYSTEM_PLUGIN_PATH:+:$GZ_SIM_SYSTEM_PLUGIN_PATH}"
 ```
 
 禁止把 VRX clone、Fuel cache 或某个用户 home 下的 mesh 路径写进 SDF。
@@ -173,8 +183,9 @@ colcon build --symlink-install \
 预期：
 
 - `moving_deck_sim` 正常构建；
-- WAM-V mesh/PBR maps 和 water normal texture 出现在 install share；
-- 不需要安装 `vrx_gz`、`vrx_ros`、`wamv_gazebo` 或 `wamv_description` package。
+- `libWaveVisual.so` 安装到 package lib；
+- WAM-V mesh/PBR maps、water mesh、Gerstner shaders、normal texture 和 skybox texture 出现在 install share；
+- 不需要安装完整 `vrx_gz`、`vrx_ros`、`wamv_gazebo` 或 `wamv_description` package。
 
 ## 8. Gazebo CLI capability check
 
@@ -190,7 +201,9 @@ gz sim --help
 ```bash
 source install/setup.bash
 share="$(ros2 pkg prefix --share moving_deck_sim)"
+prefix="$(ros2 pkg prefix moving_deck_sim)"
 export GZ_SIM_RESOURCE_PATH="$share/models${GZ_SIM_RESOURCE_PATH:+:$GZ_SIM_RESOURCE_PATH}"
+export GZ_SIM_SYSTEM_PLUGIN_PATH="$prefix/lib${GZ_SIM_SYSTEM_PLUGIN_PATH:+:$GZ_SIM_SYSTEM_PLUGIN_PATH}"
 
 gz sdf -k "$share/models/vrx_wamv_landing/model.sdf"
 gz sdf -k "$share/models/vrx_ocean_visual/model.sdf"
@@ -205,19 +218,26 @@ gz sdf -k "$share/worlds/aruco_marine_vessel.sdf"
 
 ```bash
 share="$(ros2 pkg prefix --share moving_deck_sim)"
-find "$share/models/vrx_wamv_landing" -maxdepth 4 -type f -print
-find "$share/models/vrx_ocean_visual" -maxdepth 4 -type f -print
+prefix="$(ros2 pkg prefix moving_deck_sim)"
+test -f "$prefix/lib/libWaveVisual.so"
+find -L "$share/models/vrx_wamv_landing" -maxdepth 4 -type f -print
+find -L "$share/models/vrx_ocean_visual" -maxdepth 4 -type f -print
 ```
 
 必须存在：
 
 ```text
+libWaveVisual.so
 WAM-V-Base.dae
 WAM-V_Albedo.png
 WAM-V_Normal.png
 WAM-V_Roughness.png
 WAM-V_Metalness.png
+waterlow.dae
+GerstnerWaves_vs_330.glsl
+GerstnerWaves_fs_330.glsl
 wave_normals.dds
+skybox_lowres.dds
 THIRD_PARTY.md
 LICENSE-VRX.txt
 ```
@@ -354,11 +374,11 @@ velocity_error = v_D - v_V - R_W_V (omega_V × r_VD)
 
 人工检查：
 
-1. 海面不是纯蓝色无高光平板；
-2. WAM-V 双体船 mesh 完整；
-3. hull / pontoon 比例正确；
-4. 2.4×2.4 m landing platform 明确安装在船上；
-5. ID0～ID6 位于 landing platform；
+1. 海面存在连续可见的波峰/波谷与法线纹理运动，不再是一张静止平板；
+2. 暂停 Gazebo 时海面动画同步暂停，继续仿真后恢复；
+3. 波幅不会明显吞没 WAM-V 或造成大范围穿模；
+4. WAM-V 双体船 mesh 完整，hull / pontoon 比例正确；
+5. 2.4×2.4 m landing platform 明确安装在船上，ID0～ID6 位于 platform；
 6. UAV launch platform 与船分离；
 7. UAV 下视相机能够看到 deck；
 8. 没有粉色/黑色 missing-material 模型。
@@ -367,23 +387,26 @@ velocity_error = v_D - v_V - R_W_V (omega_V × r_VD)
 
 ## 15. Dynamic wave plugin status
 
-VRX upstream 的动态视觉海面来自 `WaveVisual` + `Wavefield` + Gerstner shaders + coast water mesh。本机审计确认 `vrx_gz/CMakeLists.txt` 会把 `WaveVisual` 与 `ScoringPlugin`、`Waves`、`gz-sim8`、`gz-rendering8`、`gz-sensors8`、Eigen 等一起链接，而 `vrx_gz/package.xml` 还声明 build/runtime 依赖 `vrx_ros`、`wamv_gazebo`；当前 Humble 工作区没有安装 `vrx_ros`、`wamv_gazebo`、`vrx_gz` 或 `wamv_description`。因此直接构建官方 `vrx_gz` 会把 M2 不需要的 competition/runtime stack 引入依赖图；若只拆出 `WaveVisual`，则需要维护自定义 CMake、`Waves/Wavefield` 源、Gerstner shaders 和约 13 MB coast water mesh，这已经是独立插件移植任务。M2 因而不编译该插件，避免为了动态视觉扩大 runtime/build dependency。
+VRX upstream 的动态视觉海面来自 `WaveVisual` + `Wavefield` + Gerstner shaders + coast water mesh。项目仍不直接构建完整 `vrx_gz`：那会额外引入 competition/scoring、propulsion、buoyancy 等当前不需要的依赖。当前实现只从同一 pinned commit 导入 `WaveVisual.cc/.hh`、`Wavefield.cc/.hh` 和海面 mesh/shader/texture，并在 `moving_deck_sim` 内编译单独的 `libWaveVisual.so`。
 
 因此当前 ocean 是：
 
 ```text
-VRX wave normal texture + PBR material + static visual geometry
+waterlow.dae
++ libWaveVisual.so
++ CWR 3-component Gerstner vertex displacement
++ animated wave-normal bump map
 ```
 
-不是：
+仍然不是：
 
 ```text
-WaveVisual dynamic Gerstner geometry
 wave-driven vessel dynamics
 buoyancy / hydrodynamics
+RAO / wind / current
 ```
 
-如果后续 Marine M3 要启用动态 WaveVisual，应独立完成插件源码/ABI、shader、water mesh、GUI rendering 和无力耦合验证，再进入主场景。
+server smoke 已确认 `vrx::WaveVisual` 能被 Gazebo Harmonic 8.14.0 加载，CWR 参数被正确解析，且没有 missing plugin/mesh/shader/texture。由于当前验证 shell 没有 `DISPLAY` / `WAYLAND_DISPLAY`，最终“海面肉眼连续运动”的 GUI 验收仍需在用户图形会话中执行。
 
 ## 16. M2 实际验证记录
 
@@ -400,9 +423,9 @@ build: 3 packages finished
 full test: 374 tests, 0 errors, 0 failures, 0 skipped
 ```
 
-第一次使用 `raw.githubusercontent.com` 的 CMake 下载方案在 `WAM-V-Base.dae` 上出现 inactivity timeout，因此最终实现改为 Git HTTP/1.1 partial clone + lazy blob fetch；相同机器随后成功导出全部六个资产并完成全仓构建。该失败是构建策略审计证据，不是最终 runtime dependency。
+第一次使用 `raw.githubusercontent.com` 的 CMake 下载方案在 `WAM-V-Base.dae` 上出现 inactivity timeout，因此最终实现改为 Git HTTP/1.1 partial clone + lazy blob fetch；相同机制现已用于 WAM-V 资产、dynamic-ocean mesh/shader/texture 和 WaveVisual/Wavefield 源码，并完成全仓构建。该失败是构建策略审计证据，不是最终 runtime dependency。
 
-WAM-V / ocean 单模型 `gz sdf -k` 均为 `Valid.`。完整 world 的 `gz sdf -k` 会因为 standalone sdformat CLI 没有设置 `model://` find callback 而报告 include URI unresolved；实际设置 package `GZ_SIM_RESOURCE_PATH` 后执行 `gz sim -s -r --iterations 250`，成功创建 `vrx_wamv_landing` VelocityControl / OdometryPublisher 且没有 missing mesh/texture/material，故最终以真实 Gazebo load 为 include/asset 证据。
+WAM-V / ocean 单模型 `gz sdf -k` 均为 `Valid.`。完整 world 的 `gz sdf -k` 会因为 standalone sdformat CLI 没有设置 `model://` find callback 而报告 include URI unresolved；实际同时设置 package `GZ_SIM_RESOURCE_PATH` 与 `GZ_SIM_SYSTEM_PLUGIN_PATH` 后执行 `gz sim -s -r` smoke，成功加载 `vrx::WaveVisual`、`vrx_wamv_landing` VelocityControl / OdometryPublisher，正确解析 `amplitude=0.06 m`、`period=4.0 s`、`steepness=0.02`，且没有 missing plugin/mesh/shader/texture。
 
 有限 SITL：
 
@@ -417,4 +440,4 @@ DISPLAY=
 WAYLAND_DISPLAY=
 ```
 
-因此 GUI 人工验收没有执行；必须在有图形会话的终端按第 14 节命令检查 WAM-V/PBR ocean/landing platform/Marker/launch dock/材质。
+因此 GUI 人工验收没有执行；必须在有图形会话的终端按第 14 节命令检查 WAM-V、海面是否持续运动、landing platform、Marker、launch dock 和材质。

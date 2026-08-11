@@ -34,7 +34,7 @@ license: Apache License 2.0
 
 ## 3. Reused upstream assets
 
-M2 只导入以下固定 commit 中的最小视觉资产，不依赖运行时 VRX package：
+Marine 场景从固定 commit 导入 WAM-V 与动态海面所需的最小上游内容，不依赖运行时 VRX ROS/competition package：
 
 ```text
 vrx_urdf/wamv_description/models/WAM-V-Base/mesh/WAM-V-Base.dae
@@ -42,7 +42,15 @@ vrx_urdf/wamv_description/models/WAM-V-Base/mesh/WAM-V_Albedo.png
 vrx_urdf/wamv_description/models/WAM-V-Base/mesh/WAM-V_Normal.png
 vrx_urdf/wamv_description/models/WAM-V-Base/mesh/WAM-V_Roughness.png
 vrx_urdf/wamv_description/models/WAM-V-Base/mesh/WAM-V_Metalness.png
+vrx_gz/models/coast_waves/meshes/waterlow.dae
+vrx_gz/models/coast_waves/materials/programs/GerstnerWaves_vs_330.glsl
+vrx_gz/models/coast_waves/materials/programs/GerstnerWaves_fs_330.glsl
 vrx_gz/models/coast_waves/materials/textures/wave_normals.dds
+vrx_gz/models/coast_waves/materials/textures/skybox_lowres.dds
+vrx_gz/src/WaveVisual.cc
+vrx_gz/src/WaveVisual.hh
+vrx_gz/src/Wavefield.cc
+vrx_gz/src/Wavefield.hh
 ```
 
 WAM-V collision geometry依据同一 commit 的：
@@ -53,7 +61,7 @@ vrx_urdf/wamv_description/urdf/wamv_base.urdf.xacro
 
 其中官方 `wamv/base_link` 为 canonical vessel reference。M2 不复制发动机、螺旋桨、传感器、推进器布局、competition scoring plugin、wind plugin、buoyancy 或 hydrodynamics plugin。
 
-由于上述二进制 PBR 资产总量较大，本仓库采用 **固定 commit + Git partial clone 的构建期导入**，而不是把整个 VRX workspace 或 Fuel cache 纳入运行时依赖。CMake 只从精确 SHA 导出列出的六个视觉文件并校验预期字节数；构建后所有运行时 URI 都指向 `moving_deck_sim` install share 内的本地文件。运行 marine 场景不需要访问 Gazebo Fuel、GitHub、用户 home cache 或 VRX workspace。来源、commit、复制路径和改动记录见模型目录 `THIRD_PARTY.md`。
+由于上述 WAM-V PBR、water mesh 和 shader 资源总量较大，本仓库采用 **固定 commit + Git partial clone 的构建期导入**，而不是把整个 VRX workspace 或 Fuel cache 纳入运行时依赖。CMake 只从精确 SHA 导出本节列出的 WAM-V / ocean 资源与 WaveVisual/Wavefield 源文件，并逐项校验预期字节数；构建后所有运行时 URI 都指向 `moving_deck_sim` install share 内的本地文件，`libWaveVisual.so` 也安装到本 package 的 `lib/`。运行 marine 场景不需要访问 Gazebo Fuel、GitHub、用户 home cache 或 VRX workspace。来源、commit、复制路径和改动记录见模型目录 `THIRD_PARTY.md`。
 
 ## 4. WAM-V model hierarchy
 
@@ -198,18 +206,46 @@ MotionProfile
 
 ## 12. Ocean / wave visual semantics
 
-Upstream VRX `coast_waves` 使用 `libWaveVisual.so`、Gerstner vertex/fragment shaders、`Wavefield` 参数和专用 water mesh。M2 审计确认该实现的动态可视化是独立 rendering plugin，但完整复用需要额外维护 VRX plugin source、shader、13 MB water mesh 以及 rendering ABI；它不是 WAM-V visual asset 的必要依赖。
+Marine 海面直接复用固定 VRX commit 的 `WaveVisual + Wavefield` 动态渲染链：
 
-M2 因而采用 VRX-style **visual-only PBR water fallback**：
+```text
+waterlow.dae
+  → vrx::WaveVisual
+  → GerstnerWaves_vs_330.glsl / GerstnerWaves_fs_330.glsl
+  → simulation time t
+  → vertex displacement + animated bump-map UV
+```
 
-- 大尺度 plane；
-- VRX `wave_normals.dds` 作为 normal map；
-- 低 roughness / 适度 specular；
+`WaveVisual` 只在 rendering thread 中更新 shader 参数。顶点位移、法线和 bump-map 纹理坐标都随 Gazebo simulation time 变化，因此暂停仿真时海面也应暂停；恢复仿真后继续运动。该链不创建 collision，也不向 WAM-V 施加任何力。
+
+默认视觉海况使用可重复的 3 分量 CWR Gerstner 参数：
+
+```text
+model       = CWR
+number      = 3
+amplitude   = 0.06 m
+period      = 4.0 s
+scale       = 1.35
+angle       = 0.35 rad
+direction   = 0.25 rad
+steepness   = 0.02
+tau         = 1.5 s
+bumpSpeed   = [0.01, 0.01]  # upstream WaveVisual default
+```
+
+这里的 `amplitude` 只控制视觉 mesh；它不是有效波高输入，也不驱动船体姿态。选择约 6 cm 的单分量基准幅值，是为了从 UAV 俯视视角能清楚看到海面运动，同时避免视觉波峰大幅穿过当前没有浮力耦合的 WAM-V。
+
+海面仍严格保持 **visual-only**：
+
 - 无 collision；
 - 无 buoyancy / hydrodynamics；
-- 无 vessel force coupling。
+- 无 wave force / vessel force coupling；
+- `/simulation/deck/ground_truth_raw` 与 `/simulation/deck/ground_truth` 不读取 wavefield；
+- `MotionProfile` 仍是 vessel 的唯一运动源。
 
-该水面可以具有纹理法线带来的视觉起伏/高光，但 **不宣称动态 Gerstner WaveVisual 已启用**。真正的动态 wave rendering plugin 构建和 GUI 视觉验证留给 Marine M3，除非本阶段本机验证证明可以无额外风险启用。
+因此动态海面只提升画面真实性，不改变现有控制实验的因果关系。若未来要让船体真正随海浪升沉/横摇/纵摇，必须单独引入海况到 vessel-response 的动力学链，并重新定义 Ground Truth、随机种子与实验可重复性边界。
+
+动态海面验收分两层：server/build 检查负责证明 plugin、shader、mesh 与 texture 都能解析且无 missing-resource 错误；最终“肉眼看到海面在动”必须通过带 GUI 的 Gazebo 视觉验收，headless smoke 不能替代这一项。
 
 ## 13. Why M2 does not enable hydrodynamics
 

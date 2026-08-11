@@ -3,27 +3,43 @@
   <model name="vrx_ocean_visual">
     <static>true</static>
     <link name="surface">
-      <!-- Visual-only water. No collision, buoyancy, hydrodynamics or force coupling. -->
+      <!-- Dynamic rendering only: no collision, buoyancy, hydrodynamics or force coupling. -->
       <visual name="ocean_surface_visual">
         <cast_shadows>false</cast_shadows>
         <geometry>
-          <plane>
-            <normal>0 0 1</normal>
-            <size>300 300</size>
-          </plane>
+          <mesh>
+            <uri>model://vrx_ocean_visual/meshes/waterlow.dae</uri>
+          </mesh>
         </geometry>
-        <material>
-          <ambient>0.015 0.08 0.12 1</ambient>
-          <diffuse>0.025 0.18 0.28 1</diffuse>
-          <specular>0.85 0.90 0.95 1</specular>
-          <pbr>
-            <metal>
-              <normal_map>model://vrx_ocean_visual/materials/textures/wave_normals.dds</normal_map>
-              <roughness>0.16</roughness>
-              <metalness>0.03</metalness>
-            </metal>
-          </pbr>
-        </material>
+        <plugin filename="libWaveVisual.so" name="vrx::WaveVisual">
+          <shader>
+            <vertex>materials/programs/GerstnerWaves_vs_330.glsl</vertex>
+            <fragment>materials/programs/GerstnerWaves_fs_330.glsl</fragment>
+            <parameters>
+              <rescale>0.125</rescale>
+              <bumpScale>75 75</bumpScale>
+              <hdrMultiplier>0.4</hdrMultiplier>
+              <fresnelPower>5.0</fresnelPower>
+              <shallowColor>0 0.12 0.22 1.0</shallowColor>
+              <deepColor>0 0.045 0.16 1.0</deepColor>
+            </parameters>
+          </shader>
+          <wavefield>
+            <topic>/moving_deck_sim/wavefield/parameters</topic>
+            <wave>
+              <model>CWR</model>
+              <number>3</number>
+              <amplitude>0.06</amplitude>
+              <period>4.0</period>
+              <scale>1.35</scale>
+              <angle>0.35</angle>
+              <direction>0.25</direction>
+              <steepness>0.02</steepness>
+              <tau>1.5</tau>
+            </wave>
+          </wavefield>
+        </plugin>
+        <visibility_flags>8</visibility_flags>
       </visual>
     </link>
   </model>

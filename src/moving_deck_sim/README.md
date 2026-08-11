@@ -21,7 +21,7 @@ models/vrx_wamv_landing/
 models/vrx_ocean_visual/
 ```
 
-marine M2 world 保持 `world=aruco`、ENU、球面坐标和 250 Hz 物理更新，使用固定 VRX commit 的官方 WAM-V base mesh/PBR maps、约 `300×300 m` visual-only VRX-style PBR ocean、`x=-12 m` 附近的独立静态 UAV launch platform，以及 WAM-V 上新增的 `2.4×2.4 m` UAV landing platform。M2 不启用动态 `WaveVisual`、wave-driven vessel dynamics、RAO、浮力、水动力、wind 或 current。
+marine world 保持 `world=aruco`、ENU、球面坐标和 250 Hz 物理更新，使用固定 VRX commit 的官方 WAM-V base mesh/PBR maps、`waterlow.dae + WaveVisual + Gerstner shader` 动态 visual-only ocean、`x=-12 m` 附近的独立静态 UAV launch platform，以及 WAM-V 上新增的 `2.4×2.4 m` UAV landing platform。海面随 Gazebo simulation time 动画，但不启用 wave-driven vessel dynamics、RAO、浮力、水动力、wind 或 current。
 
 ## 运动场景
 
@@ -39,7 +39,7 @@ marine M2 world 保持 `world=aruco`、ENU、球面坐标和 250 Hz 物理更新
 
 同一组 `MotionProfile` 参数同时供两个环境复用。legacy 中轨迹参考点为 deck center；marine 中 `MotionProfile` 驱动与官方 `wamv/base_link` 对齐的 canonical `vessel_body`。launch 把 neutral deck center z=2 m 转成 `vessel_body z≈0.2 m`，再由固定 `T_vessel_deck` 恢复 deck center。
 
-动态 `rollpitch`、`combined` 与 `rigid_body_motion` 仍只用于安全高度观察和离线评测。除此之外，marine M2 对所有 scenario 都额外禁止相对下降、最终下降和 terminal-contact stabilization。
+动态 `rollpitch`、`combined` 与 `rigid_body_motion` 仍只用于安全高度观察和离线评测。除此之外，marine 对所有 scenario 都额外禁止相对下降、最终下降和 terminal-contact stabilization。
 
 ## Vessel → Deck 刚体语义
 
@@ -63,7 +63,7 @@ p_D^W=p_V^W+R_W^V r_{VD}^V
 v_D^W=v_V^W+R_W^V(\omega_V^V\times r_{VD}^V)
 ```
 
-因此 marine roll/pitch 会同时产生 deck orientation 变化与 deck center lever-arm 位移/速度。基础刚体公式见 [`docs/reference/MARINE_VESSEL_KINEMATICS.md`](../../docs/reference/MARINE_VESSEL_KINEMATICS.md)，M2 WAM-V 几何、上游、license 与 visual-ocean 边界见 [`docs/reference/VRX_WAMV_INTEGRATION.md`](../../docs/reference/VRX_WAMV_INTEGRATION.md)。
+因此 marine roll/pitch 会同时产生 deck orientation 变化与 deck center lever-arm 位移/速度。基础刚体公式见 [`docs/reference/MARINE_VESSEL_KINEMATICS.md`](../../docs/reference/MARINE_VESSEL_KINEMATICS.md)，WAM-V 几何、上游、license 与 dynamic visual-ocean 边界见 [`docs/reference/VRX_WAMV_INTEGRATION.md`](../../docs/reference/VRX_WAMV_INTEGRATION.md)。
 
 ## 视觉目标
 
@@ -117,4 +117,4 @@ colcon test --packages-select moving_deck_sim
 colcon test-result --verbose
 ```
 
-普通 C++ 测试覆盖 MotionProfile、GNSS sensor model 以及 rigid-body zero offset、translation、roll/pitch/yaw、lever-arm velocity、固定旋转、quaternion normalization 和非有限输入；Python 测试覆盖 environment 默认值、marine 安全门、VRX upstream metadata/asset import、WAM-V/ocean SDF、Marker regression、legacy regression 以及 production Ground Truth subscription guard。
+普通 C++ 测试覆盖 MotionProfile、GNSS sensor model 以及 rigid-body zero offset、translation、roll/pitch/yaw、lever-arm velocity、固定旋转、quaternion normalization 和非有限输入；Python 测试覆盖 environment 默认值、marine 安全门、VRX upstream metadata/asset import、dynamic WaveVisual ocean SDF/参数、Marker regression、legacy regression 以及 production Ground Truth subscription guard。

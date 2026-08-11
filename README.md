@@ -58,14 +58,14 @@ source install/setup.bash
 ./scripts/start_sitl.sh
 ```
 
-默认环境仍为 `legacy`，保持历史 `aruco_moving_deck.sdf`、`moving_deck` 和 UAV spawn 行为不变。Marine M2 需要显式选择：
+默认环境仍为 `legacy`，保持历史 `aruco_moving_deck.sdf`、`moving_deck` 和 UAV spawn 行为不变。Marine 环境需要显式选择：
 
 ```bash
 ./scripts/start_sitl.sh --environment marine --scenario static
 ./scripts/start_sitl.sh --environment marine --scenario rigid_body_motion --rendezvous-altitude 7.0
 ```
 
-marine M2 已切换到官方 VRX WAM-V base mesh/PBR 资产和 VRX-style visual-only PBR ocean，并在 WAM-V 上增加 `2.4×2.4 m` UAV landing platform。`MotionProfile` 仍是 `vessel_body` 唯一运动源，固定 `T_vessel_deck`（`r_VD=[0,0,1.8] m`）将 WAM-V canonical vessel state 转换成 landing deck center Ground Truth；neutral vessel z≈0.2 m 时 deck center 仍为 world z≈2.0 m。marine 仍只保持安全高度，会在启动前拒绝相对下降、最终下降和全部 terminal-contact 模式，`NAV_LAND` 与自动 Disarm 仍未启用。
+marine 已切换到官方 VRX WAM-V base mesh/PBR 资产，并启用 `waterlow.dae + WaveVisual + Gerstner shader` 的动态 visual-only ocean；海面顶点与 bump-map UV 随 Gazebo simulation time 变化，但不产生 collision、浮力或波浪力。WAM-V 上增加 `2.4×2.4 m` UAV landing platform。`MotionProfile` 仍是 `vessel_body` 唯一运动源，固定 `T_vessel_deck`（`r_VD=[0,0,1.8] m`）将 WAM-V canonical vessel state 转换成 landing deck center Ground Truth；neutral vessel z≈0.2 m 时 deck center 仍为 world z≈2.0 m。marine 仍只保持安全高度，会在启动前拒绝相对下降、最终下降和全部 terminal-contact 模式，`NAV_LAND` 与自动 Disarm 仍未启用。
 
 常用安全检查：
 
@@ -84,7 +84,7 @@ marine M2 已切换到官方 VRX WAM-V base mesh/PBR 资产和 VRX-style visual-
 - 统一评测记录为 smoke `20/27`、正式基线 `40/40`、正式消融 `60/60`，另有 `30` 个 `NOT_APPLICABLE` 槽位。有限样本全成功不代表真实成功概率为 100%。
 - 6-DoF 相对 shadow 的约 `5 m` 正式矩阵为安全 `12/12`、全性能硬门
   `2/12`；剩余限制是 ArUco-only 动态甲板 `0.5 s` 未来 twist 可观测性。
-- marine M2 已完成 WAM-V 视觉资产、固定 UAV landing platform 和 VRX-style visual-only ocean 集成；没有启用 WaveVisual 动态 Gerstner mesh、wave-driven vessel dynamics、JONSWAP/PM 船体响应、RAO、浮力、水动力、洋流或风载。Future Twist 因果可观测性诊断仍是下一核心算法任务。
+- marine 已完成 WAM-V 视觉资产、固定 UAV landing platform 和 visual-only `WaveVisual` 动态 Gerstner 海面集成；仍没有 wave-driven vessel dynamics、JONSWAP/PM 船体响应、RAO、浮力、水动力、洋流或风载。Future Twist 因果可观测性诊断仍是下一核心算法任务。
 - 所有正式实验保持 `NAV_LAND / Disarm = 0 / 0`。
 
 ## 文档
