@@ -50,10 +50,11 @@ terminal contact stabilization: disabled
 时域。完整默认值见 `config/px4_aruco_landing.yaml`。
 
 当前 state 位姿使用 `uav_centered_ned`，trajectory 使用每条消息冻结的
-`uav_origin_ned`；两者的 twist 均为甲板自身 NED twist。约 `5 m` 的
-`static/rollpitch/combined/rigid_body_motion × seed 1/2/3` 正式矩阵已完成：
-安全隔离 `12/12`，冻结全性能硬门 `2/12`。Shadow 仍仅用于诊断，不授权 NMPC
-或动态姿态下降。
+`uav_origin_ned`；两者的 twist 均为甲板自身 NED twist。旧非共面 Board 的约
+`5 m` 正式矩阵为安全隔离 `12/12`、冻结全性能硬门 `2/12`。Marine Planar
+Board 的 `rendezvous-altitude=7.0` 正式矩阵为安全门 `12/12`、Board 门 `9/12`、
+全性能硬门 `0/12`；3 个 static seed 均未通过当前法向门。Shadow 仍仅用于诊断，
+不授权 NMPC 或动态姿态下降。
 
 ## 主要状态
 

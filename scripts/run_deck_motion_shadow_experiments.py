@@ -75,6 +75,12 @@ def run_episode(
         workspace / "src" / "moving_deck_sim" / "config" / scenario_file,
         episode_dir / "scenario_config.yaml",
     )
+    if environment == "marine":
+        shutil.copyfile(
+            workspace / "src" / "aruco_detector" / "config"
+            / "aruco_detector_marine.yaml",
+            episode_dir / "detector_config.yaml",
+        )
     bag = episode_dir / "bag"
     command = start_command(workspace, scenario, seed, bag, environment)
     manifest: dict[str, object] = {
@@ -137,19 +143,44 @@ def run_episode(
         manifest["residual_processes"] = residuals
     if failure:
         manifest["failure"] = failure
+        if failure.startswith("unsafe state entered"):
+            manifest["safety_passed"] = False
     elif not bag.exists():
         manifest["failure"] = "rosbag was not created"
     else:
         try:
-            evaluation = evaluate(bag)
+            evaluation = evaluate(bag, planar_board=environment == "marine")
             (episode_dir / "evaluation.json").write_text(
                 json.dumps(evaluation, indent=2, ensure_ascii=False, allow_nan=False) + "\n",
                 encoding="utf-8",
             )
-            manifest["evaluation_passed"] = evaluation["passed"]
-            manifest["success"] = bool(evaluation["passed"])
-            if not evaluation["passed"]:
-                manifest["failure"] = "one or more frozen hard gates failed"
+            if environment == "legacy":
+                manifest["evaluation_passed"] = evaluation["passed"]
+                manifest["success"] = bool(evaluation["passed"])
+                if not evaluation["passed"]:
+                    manifest["failure"] = "one or more frozen hard gates failed"
+            else:
+                metrics = evaluation["planar_board_metrics"]
+                manifest["shadow_full_hard_gates_passed"] = evaluation["passed"]
+                manifest["safety_passed"] = evaluation["safety_passed"]
+                manifest["planar_board_passed"] = evaluation["planar_board_passed"]
+                manifest["observed_multi_marker_counts"] = metrics[
+                    "observed_multi_marker_counts"
+                ]
+                manifest["single_marker_frame_count"] = metrics[
+                    "single_marker_frame_count"
+                ]
+                manifest["far_single_frame_count"] = metrics[
+                    "far_single_frame_count"
+                ]
+                manifest["evaluation_passed"] = bool(
+                    evaluation["safety_passed"] and evaluation["planar_board_passed"]
+                )
+                manifest["success"] = manifest["evaluation_passed"]
+                if not evaluation["safety_passed"]:
+                    manifest["failure"] = "one or more safety gates failed"
+                elif not evaluation["planar_board_passed"]:
+                    manifest["failure"] = "one or more planar-board gates failed"
         except Exception as error:  # noqa: BLE001 - persist evaluator failures per seed
             manifest["failure"] = f"evaluation error: {error!r}"
     (episode_dir / "manifest.json").write_text(
@@ -187,13 +218,20 @@ def main() -> int:
         for seed in SEEDS
     ]
     if args.dry_run:
-        print(json.dumps({"episodes": matrix}, indent=2, ensure_ascii=False))
+        dry_run: dict[str, object] = {"episodes": matrix}
+        if args.environment == "marine":
+            dry_run.update({
+                "environment": args.environment,
+                "evaluation_mode": "planar_board",
+            })
+        print(json.dumps(dry_run, indent=2, ensure_ascii=False))
         return 0
     if stale_processes():
         raise RuntimeError("refusing to start while matching PX4/Gazebo/landing processes exist")
     args.output.mkdir(parents=True, exist_ok=False)
-    results = [
-        run_episode(
+    results = []
+    for item in matrix:
+        result = run_episode(
             args.workspace,
             args.output,
             item["scenario"],
@@ -202,15 +240,76 @@ def main() -> int:
             args.startup_timeout,
             args.record_duration,
         )
-        for item in matrix
-    ]
+        results.append(result)
+        if args.environment == "marine" and result.get("safety_passed") is False:
+            break
     aggregate = {
         "environment": args.environment,
         "scenarios": list(SCENARIOS),
         "seeds": list(SEEDS),
         "episodes": results,
-        "passed": all(result["success"] for result in results),
     }
+    if args.environment == "legacy":
+        aggregate["passed"] = len(results) == len(matrix) and all(
+            result["success"] for result in results
+        )
+    else:
+        observed_multi_marker_counts = sorted({
+            marker_count
+            for result in results
+            for marker_count in result.get("observed_multi_marker_counts", [])
+        })
+        single_marker_frame_count = sum(
+            int(result.get("single_marker_frame_count", 0)) for result in results
+        )
+        far_single_frame_count = sum(
+            int(result.get("far_single_frame_count", 0)) for result in results
+        )
+        matrix_gates = {
+            "all_twelve_episodes_completed": len(results) == len(matrix),
+            "all_episode_safety_gates_passed": (
+                len(results) == len(matrix)
+                and all(result.get("safety_passed") is True for result in results)
+            ),
+            "all_episode_planar_board_gates_passed": (
+                len(results) == len(matrix)
+                and all(result.get("planar_board_passed") is True for result in results)
+            ),
+            "observed_multi_marker_counts_2_3_4": (
+                {2, 3, 4} <= set(observed_multi_marker_counts)
+            ),
+            "single_marker_frames_routed_to_far_single": (
+                single_marker_frame_count == far_single_frame_count
+            ),
+        }
+        aggregate.update(
+            {
+                "safety_passed_count": sum(
+                    result.get("safety_passed") is True for result in results
+                ),
+                "planar_board_passed_count": sum(
+                    result.get("planar_board_passed") is True for result in results
+                ),
+                "shadow_full_hard_gates_passed_count": sum(
+                    result.get("shadow_full_hard_gates_passed") is True
+                    for result in results
+                ),
+                "matrix_planar_board_metrics": {
+                    "observed_multi_marker_counts": observed_multi_marker_counts,
+                    "single_marker_frame_count": single_marker_frame_count,
+                    "far_single_frame_count": far_single_frame_count,
+                },
+                "matrix_planar_board_gates": matrix_gates,
+                "full_shadow_passed": (
+                    len(results) == len(matrix)
+                    and all(
+                        result.get("shadow_full_hard_gates_passed") is True
+                        for result in results
+                    )
+                ),
+                "passed": all(matrix_gates.values()),
+            }
+        )
     (args.output / "manifest.json").write_text(
         json.dumps(aggregate, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )

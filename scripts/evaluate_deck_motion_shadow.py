@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import bisect
+from collections import Counter
 import json
 import math
 from dataclasses import dataclass
@@ -24,6 +25,13 @@ LANDING_STATE_TOPIC = "/landing/state"
 MARKER_ID_TOPIC = "/landing/active_marker_id"
 LOCAL_POSITION_TOPIC = "/fmu/out/vehicle_local_position_v1"
 VEHICLE_COMMAND_TOPIC = "/fmu/in/vehicle_command"
+ARUCO_POSE_TOPIC = "/aruco/pose"
+ARUCO_VISIBLE_TOPIC = "/aruco/visible"
+ARUCO_POSE_SOURCE_TOPIC = "/aruco/pose_source"
+ARUCO_BOARD_MARKER_COUNT_TOPIC = "/aruco/board_marker_count"
+ARUCO_BOARD_REPROJECTION_RMSE_TOPIC = "/aruco/board_reprojection_rmse_px"
+TOUCHDOWN_CONFIRMED_TOPIC = "/landing/touchdown_confirmed"
+TERMINAL_STABILIZATION_ENABLED_TOPIC = "/landing/terminal_stabilization/enabled"
 REQUIRED_TOPICS = {
     GROUND_TRUTH_TOPIC,
     UAV_GROUND_TRUTH_TOPIC,
@@ -35,6 +43,15 @@ REQUIRED_TOPICS = {
     MARKER_ID_TOPIC,
     LOCAL_POSITION_TOPIC,
     VEHICLE_COMMAND_TOPIC,
+}
+PLANAR_BOARD_REQUIRED_TOPICS = {
+    ARUCO_POSE_TOPIC,
+    ARUCO_VISIBLE_TOPIC,
+    ARUCO_POSE_SOURCE_TOPIC,
+    ARUCO_BOARD_MARKER_COUNT_TOPIC,
+    ARUCO_BOARD_REPROJECTION_RMSE_TOPIC,
+    TOUCHDOWN_CONFIRMED_TOPIC,
+    TERMINAL_STABILIZATION_ENABLED_TOPIC,
 }
 
 TRACKING_STATES = {"TRACK_TARGET", "WAIT_LANDING_WINDOW"}
@@ -53,6 +70,7 @@ Q_NED_ENU = (0.0, math.sqrt(0.5), math.sqrt(0.5), 0.0)
 Q_BODY_DECK = (1.0, 0.0, 0.0, 0.0)
 WORLD_ORIGIN = GeodeticPosition(47.397971057728974, 8.546163739800146, 0.0)
 DEFAULT_UAV_MODEL_NAME = "x500_mono_cam_down_0"
+PLANAR_DIAGNOSTIC_PAIR_TOLERANCE_S = 0.01
 
 
 @dataclass(frozen=True)
@@ -77,6 +95,15 @@ class PredictionSample:
     state: RigidState
     linear_acceleration: tuple[float, float, float]
     angular_acceleration: tuple[float, float, float]
+
+
+@dataclass(frozen=True)
+class PlanarDiagnosticFrame:
+    bag_time_s: float
+    pose_source: str
+    marker_count: int
+    reprojection_rmse_px: float
+    visible: bool
 
 
 def finite(values: Sequence[float]) -> bool:
@@ -269,6 +296,102 @@ def summary(values: Sequence[float]) -> dict[str, float | int | None]:
     }
 
 
+def planar_value_summary(
+    values: Sequence[float],
+) -> dict[str, float | int | None]:
+    if not values:
+        return {"count": 0, "min": None, "median": None, "p95": None, "max": None}
+    return {
+        "count": len(values),
+        "min": min(values),
+        "median": percentile(values, 0.50),
+        "p95": percentile(values, 0.95),
+        "max": max(values),
+    }
+
+
+def pair_planar_diagnostics(
+    pose_sources: Sequence[tuple[float, str]],
+    marker_counts: Sequence[tuple[float, int]],
+    reprojection_rmses: Sequence[tuple[float, float]],
+    visibility: Sequence[tuple[float, bool]],
+    tolerance_s: float = PLANAR_DIAGNOSTIC_PAIR_TOLERANCE_S,
+) -> tuple[list[PlanarDiagnosticFrame], int]:
+    """按接收时间配对四个无 header 诊断话题，以 pose_source 为帧锚点。"""
+
+    groups = (marker_counts, reprojection_rmses, visibility)
+    times = [[sample[0] for sample in group] for group in groups]
+    used_indices = [set() for _ in groups]
+    frames: list[PlanarDiagnosticFrame] = []
+    unpaired_source_frame_count = 0
+    for source in pose_sources:
+        matches: list[tuple[float, Any]] = []
+        match_indices: list[int] = []
+        for group_index, group in enumerate(groups):
+            insertion = bisect.bisect_left(times[group_index], source[0])
+            candidates = [
+                index for index in (insertion - 1, insertion)
+                if 0 <= index < len(group) and index not in used_indices[group_index]
+            ]
+            if not candidates:
+                break
+            match_index = min(
+                candidates, key=lambda index: abs(group[index][0] - source[0])
+            )
+            match = group[match_index]
+            if abs(match[0] - source[0]) > tolerance_s:
+                break
+            matches.append(match)
+            match_indices.append(match_index)
+        if len(matches) != len(groups):
+            unpaired_source_frame_count += 1
+            continue
+        for group_index, match_index in enumerate(match_indices):
+            used_indices[group_index].add(match_index)
+        count, rmse, visible = matches
+        frames.append(
+            PlanarDiagnosticFrame(
+                source[0], source[1], count[1], rmse[1], visible[1]
+            )
+        )
+    return frames, unpaired_source_frame_count
+
+
+def planar_source_route_valid(frame: PlanarDiagnosticFrame) -> bool:
+    """校验 Marker 数、位姿来源和 visible 的 Marine 路由契约。"""
+
+    if frame.marker_count == 0:
+        return (
+            frame.pose_source == "NONE" and not frame.visible
+        ) or (
+            frame.pose_source == "NEAR_SINGLE" and frame.visible
+        )
+    if frame.marker_count == 1:
+        return frame.pose_source == "FAR_SINGLE" and frame.visible
+    if 2 <= frame.marker_count <= 4:
+        return frame.pose_source == "PLANAR_BOARD_MULTI" and frame.visible
+    return False
+
+
+def planar_reprojection_rmse_valid(frame: PlanarDiagnosticFrame) -> bool:
+    if frame.pose_source == "PLANAR_BOARD_MULTI":
+        return (
+            math.isfinite(frame.reprojection_rmse_px)
+            and 0.0 <= frame.reprojection_rmse_px <= 5.0
+        )
+    return math.isnan(frame.reprojection_rmse_px)
+
+
+def raw_normal_jumps_deg(
+    orientations: Sequence[Sequence[float]],
+) -> list[float]:
+    normals = [normal_and_yaw(orientation)[0] for orientation in orientations]
+    return [
+        normal_error_deg(previous, current)
+        for previous, current in zip(normals, normals[1:])
+    ]
+
+
 def normal_and_yaw(q: Sequence[float]) -> tuple[tuple[float, ...], float]:
     normal = quaternion_rotate(q, (0.0, 0.0, 1.0))
     deck_x = quaternion_rotate(q, (1.0, 0.0, 0.0))
@@ -345,7 +468,9 @@ def derivative_truth(
 
 
 def evaluate(
-    bag_path: Path, uav_model_name: str = DEFAULT_UAV_MODEL_NAME
+    bag_path: Path,
+    uav_model_name: str = DEFAULT_UAV_MODEL_NAME,
+    planar_board: bool = False,
 ) -> dict[str, Any]:
     rosbag2_py, deserialize_message, get_message, StorageOptions, ConverterOptions = (
         load_ros_modules()
@@ -357,10 +482,13 @@ def evaluate(
         ConverterOptions(input_serialization_format="cdr", output_serialization_format="cdr"),
     )
     topic_types = {topic.name: topic.type for topic in reader.get_all_topics_and_types()}
-    missing = REQUIRED_TOPICS - topic_types.keys()
+    required_topics = REQUIRED_TOPICS | (
+        PLANAR_BOARD_REQUIRED_TOPICS if planar_board else set()
+    )
+    missing = required_topics - topic_types.keys()
     if missing:
         raise RuntimeError("bag is missing required topics: " + ", ".join(sorted(missing)))
-    message_types = {topic: get_message(topic_types[topic]) for topic in REQUIRED_TOPICS}
+    message_types = {topic: get_message(topic_types[topic]) for topic in required_topics}
 
     truth_world: list[RigidState] = []
     truth_by_receipt_time_world: list[RigidState] = []
@@ -373,6 +501,13 @@ def evaluate(
     marker_ids: list[tuple[float, int]] = []
     local_positions: list[tuple[float, Any]] = []
     commands: list[tuple[int, float]] = []
+    pose_sources: list[tuple[float, str]] = []
+    board_marker_counts: list[tuple[float, int]] = []
+    board_reprojection_rmses: list[tuple[float, float]] = []
+    aruco_visibility: list[tuple[float, bool]] = []
+    raw_aruco_poses: list[tuple[float, tuple[float, float, float, float]]] = []
+    touchdown_confirmed: list[tuple[float, bool]] = []
+    terminal_stabilization_enabled: list[tuple[float, bool]] = []
     invalid_output_count = 0
     invalid_ground_truth_count = 0
 
@@ -557,6 +692,30 @@ def evaluate(
                 invalid_output_count += 1
         elif topic == VEHICLE_COMMAND_TOPIC:
             commands.append((int(message.command), float(message.param1)))
+        elif topic == ARUCO_POSE_SOURCE_TOPIC:
+            pose_sources.append((bag_time_s, str(message.data)))
+        elif topic == ARUCO_BOARD_MARKER_COUNT_TOPIC:
+            board_marker_counts.append((bag_time_s, int(message.data)))
+        elif topic == ARUCO_BOARD_REPROJECTION_RMSE_TOPIC:
+            board_reprojection_rmses.append((bag_time_s, float(message.data)))
+        elif topic == ARUCO_VISIBLE_TOPIC:
+            aruco_visibility.append((bag_time_s, bool(message.data)))
+        elif topic == ARUCO_POSE_TOPIC:
+            pose = message.pose
+            values = (
+                pose.position.x, pose.position.y, pose.position.z,
+                pose.orientation.w, pose.orientation.x,
+                pose.orientation.y, pose.orientation.z,
+            )
+            orientation = normalize_quaternion_or_none(values[3:])
+            if not finite(values[:3]) or orientation is None:
+                invalid_output_count += 1
+            else:
+                raw_aruco_poses.append((bag_time_s, orientation))
+        elif topic == TOUCHDOWN_CONFIRMED_TOPIC:
+            touchdown_confirmed.append((bag_time_s, bool(message.data)))
+        elif topic == TERMINAL_STABILIZATION_ENABLED_TOPIC:
+            terminal_stabilization_enabled.append((bag_time_s, bool(message.data)))
 
     reference = next(
         (
@@ -749,7 +908,7 @@ def evaluate(
             prediction_summary["angular_velocity_degps"], "p95", 2.0
         ),
     }
-    return {
+    result = {
         "bag": str(bag_uri),
         "state_contract": (
             "state: uav_centered_ned current deck-uav pose with deck NED twist; "
@@ -781,6 +940,146 @@ def evaluate(
             "prediction_excluded_without_future_truth": excluded_without_future_truth,
         },
     }
+    if not planar_board:
+        return result
+
+    diagnostic_frames, unpaired_pose_source_frame_count = pair_planar_diagnostics(
+        pose_sources,
+        board_marker_counts,
+        board_reprojection_rmses,
+        aruco_visibility,
+    )
+    tracking_frames = [
+        frame for frame in diagnostic_frames
+        if latest_value(landing_states, frame.bag_time_s) in TRACKING_STATES
+    ]
+    visible_tracking_frames = [frame for frame in tracking_frames if frame.visible]
+    tracking_raw_poses = [
+        orientation for time_s, orientation in raw_aruco_poses
+        if latest_value(landing_states, time_s) in TRACKING_STATES
+    ]
+    raw_normal_jumps = raw_normal_jumps_deg(
+        [orientation for _, orientation in raw_aruco_poses]
+    )
+    raw_normal_flip_count = sum(jump >= 90.0 for jump in raw_normal_jumps)
+    multi_frames = [
+        frame for frame in diagnostic_frames
+        if frame.pose_source == "PLANAR_BOARD_MULTI"
+    ]
+    tracking_multi_frames = [
+        frame for frame in tracking_frames
+        if frame.pose_source == "PLANAR_BOARD_MULTI"
+    ]
+    multi_rmses = [frame.reprojection_rmse_px for frame in multi_frames]
+    source_counts = Counter(frame.pose_source for frame in diagnostic_frames)
+    marker_counts = Counter(frame.marker_count for frame in diagnostic_frames)
+    tracking_source_counts = Counter(frame.pose_source for frame in tracking_frames)
+    tracking_marker_counts = Counter(frame.marker_count for frame in tracking_frames)
+    tracking_frame_count = len(tracking_frames)
+    valid_visual_frame_count = len(visible_tracking_frames)
+    visible_coverage = (
+        valid_visual_frame_count / tracking_frame_count if tracking_frame_count else 0.0
+    )
+    aruco_valid_coverage = (
+        min(valid_visual_frame_count, len(tracking_raw_poses)) / tracking_frame_count
+        if tracking_frame_count else 0.0
+    )
+    planar_multi_fraction = (
+        len(tracking_multi_frames) / valid_visual_frame_count
+        if valid_visual_frame_count else 0.0
+    )
+    touchdown_confirmed_count = sum(value for _, value in touchdown_confirmed)
+    terminal_stabilization_applied_count = sum(
+        value for _, value in terminal_stabilization_enabled
+    )
+    safety_gates = {
+        "no_descent_state": descent_state_count == 0,
+        "no_contact": contact_count == 0,
+        "no_penetration": penetration_count == 0,
+        "no_nav_land": nav_land_count == 0,
+        "no_disarm": disarm_count == 0,
+        "no_touchdown_confirmed": touchdown_confirmed_count == 0,
+        "no_terminal_stabilization_applied": terminal_stabilization_applied_count == 0,
+        "no_time_sync_error": time_sync_error_count == 0,
+        "no_nonfinite_output": invalid_output_count == 0,
+    }
+    planar_board_gates = {
+        "diagnostic_frames_paired": (
+            bool(diagnostic_frames) and unpaired_pose_source_frame_count == 0
+        ),
+        "aruco_valid_coverage_ge_95pct": aruco_valid_coverage >= 0.95,
+        "shadow_valid_coverage_ge_95pct": valid_coverage >= 0.95,
+        "planar_board_multi_fraction_ge_95pct": planar_multi_fraction >= 0.95,
+        "current_horizontal_position_p95_le_0p15m": metric_at_most(
+            current_summary["horizontal_position_m"], "p95", 0.15
+        ),
+        "current_vertical_position_p95_le_0p10m": metric_at_most(
+            current_summary["vertical_position_m"], "p95", 0.10
+        ),
+        "current_normal_rmse_le_1deg": metric_at_most(
+            current_summary["normal_deg"], "rmse", 1.0
+        ),
+        "current_normal_p95_le_1p5deg": metric_at_most(
+            current_summary["normal_deg"], "p95", 1.5
+        ),
+        "source_marker_routes_consistent": (
+            bool(diagnostic_frames)
+            and all(planar_source_route_valid(frame) for frame in diagnostic_frames)
+        ),
+        "reprojection_rmse_contract_valid": (
+            bool(multi_frames)
+            and all(planar_reprojection_rmse_valid(frame) for frame in diagnostic_frames)
+        ),
+        "raw_pose_normal_flip_count_zero": (
+            len(raw_aruco_poses) >= 2 and raw_normal_flip_count == 0
+        ),
+    }
+    result.update(
+        {
+            "evaluation_mode": "planar_board",
+            "safety_passed": all(safety_gates.values()),
+            "safety_gates": safety_gates,
+            "planar_board_passed": all(planar_board_gates.values()),
+            "planar_board_gates": planar_board_gates,
+            "planar_board_metrics": {
+                "diagnostic_frame_count": len(diagnostic_frames),
+                "tracking_diagnostic_frame_count": tracking_frame_count,
+                "unpaired_pose_source_frame_count": unpaired_pose_source_frame_count,
+                "pose_source_counts": dict(sorted(source_counts.items())),
+                "board_marker_count_distribution": {
+                    str(key): value for key, value in sorted(marker_counts.items())
+                },
+                "tracking_pose_source_counts": dict(sorted(tracking_source_counts.items())),
+                "tracking_board_marker_count_distribution": {
+                    str(key): value for key, value in sorted(tracking_marker_counts.items())
+                },
+                "visible_coverage": visible_coverage,
+                "aruco_valid_coverage": aruco_valid_coverage,
+                "shadow_valid_coverage": valid_coverage,
+                "planar_board_multi_fraction": planar_multi_fraction,
+                "board_reprojection_rmse_px": planar_value_summary(multi_rmses),
+                "raw_pose_count": len(raw_aruco_poses),
+                "tracking_raw_pose_count": len(tracking_raw_poses),
+                "raw_pose_normal_jump_deg": planar_value_summary(raw_normal_jumps),
+                "raw_pose_normal_flip_count": raw_normal_flip_count,
+                "observed_multi_marker_counts": sorted(
+                    {frame.marker_count for frame in multi_frames}
+                ),
+                "single_marker_frame_count": sum(
+                    frame.marker_count == 1 for frame in diagnostic_frames
+                ),
+                "far_single_frame_count": sum(
+                    frame.pose_source == "FAR_SINGLE" for frame in diagnostic_frames
+                ),
+                "touchdown_confirmed_count": touchdown_confirmed_count,
+                "terminal_stabilization_applied_count": (
+                    terminal_stabilization_applied_count
+                ),
+                "actual_relative_height_m": planar_value_summary(relative_heights),
+            },
+        }
+    )
+    return result
 
 
 def main() -> int:
@@ -788,14 +1087,18 @@ def main() -> int:
     parser.add_argument("bag", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--uav-model-name", default=DEFAULT_UAV_MODEL_NAME)
+    parser.add_argument("--planar-board", action="store_true")
     args = parser.parse_args()
-    result = evaluate(args.bag, args.uav_model_name)
+    result = evaluate(args.bag, args.uav_model_name, args.planar_board)
     output = json.dumps(result, indent=2, ensure_ascii=False, allow_nan=False)
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(output + "\n", encoding="utf-8")
     print(output)
-    return 0 if result["passed"] else 1
+    passed = result["passed"] if not args.planar_board else (
+        result["safety_passed"] and result["planar_board_passed"]
+    )
+    return 0 if passed else 1
 
 
 if __name__ == "__main__":

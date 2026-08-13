@@ -130,7 +130,7 @@ ros2 topic echo /landing/deck_motion_shadow/status
 ros2 topic echo /landing/deck_motion_shadow/trusted_horizon_s
 ```
 
-Marine 约 `5 m` 时应在 `/aruco/debug_image` 中确认 ID4/5/6/7 至少多个同帧可见，并检查：
+Marine 使用 `rendezvous-altitude=7.0` 时应在 `/aruco/debug_image` 中确认 ID4/5/6/7 至少多个同帧可见，并检查：
 
 ```bash
 ros2 topic echo /aruco/pose_source
@@ -140,7 +140,7 @@ ros2 topic echo /aruco/board_reprojection_rmse_px
 
 正常远距来源应主要为 `PLANAR_BOARD_MULTI`；只有一个大 Marker 可用时才是 `FAR_SINGLE`，远距全部离开视场后才由 ID0/1/2/3 `MarkerSelector` 给出 `NEAR_SINGLE`。若多 Marker 可见但持续 `NONE`，先检查共面 SDF/calibration、CameraInfo、角点质量、法向与 reprojection RMSE，不要调 shadow 创新门掩盖视觉退化。legacy 环境仍保留历史 ID0/4/5/6 非共面日志和语义。
 
-正式约 `5 m` 甲板相对高度的 12 轮矩阵（runner 固定
+旧非共面 Board 的正式约 `5 m` 甲板相对高度 12 轮矩阵（runner 固定
 `rendezvous_altitude_m=7.0`，因为甲板表面位于 world `z=2.0 m`）：
 
 ```bash
@@ -152,12 +152,37 @@ python3 scripts/run_deck_motion_shadow_experiments.py \
 `results/deck_motion_shadow_relative_5m_20260809`，结果为安全隔离 `12/12`、全性能
 硬门 `2/12`。新运行必须使用新目录，不得覆盖现有正式 Bag。
 
+Marine Planar Board 正式矩阵必须显式选择环境；runner 会自动启用
+`--planar-board` 评测，并保存 scenario、controller 和 detector 参数快照：
+
+```bash
+python3 scripts/run_deck_motion_shadow_experiments.py \
+  --environment marine \
+  --output results/deck_motion_shadow_planar_marine_local7m_<date>
+```
+
+2026-08-13 冻结结果位于
+`results/deck_motion_shadow_planar_marine_local7m_20260813`：安全门 `12/12`、Planar
+Board 门 `9/12`、完整 shadow 硬门 `0/12`。3 个 static seed 均仅因当前法向
+`RMSE/P95` 超过 `1.0°/1.5°` 而未通过 Board 门；不进入 Future Twist 调参。
+命令中的 `7.0 m` 是本地高度目标，12 轮实际相对高度总体覆盖 `5.262–6.186 m`，
+不得将它表述为与旧矩阵严格等高的非劣效比较。
+
 单 Bag 重新评测：
 
 ```bash
 python3 scripts/evaluate_deck_motion_shadow.py \
   results/deck_motion_shadow_relative_5m_20260809/static_s1/bag \
   --output results/deck_motion_shadow_relative_5m_20260809/static_s1/evaluation.json
+```
+
+Marine Planar Board Bag 单独重评测时增加模式参数：
+
+```bash
+python3 scripts/evaluate_deck_motion_shadow.py \
+  results/deck_motion_shadow_planar_marine_local7m_20260813/static_s1/bag \
+  --planar-board \
+  --output results/deck_motion_shadow_planar_marine_local7m_20260813/static_s1/evaluation.json
 ```
 
 `rendezvous_altitude_m` 是 PX4 local NED 原点上的高度目标，不是相机到甲板的直接距离；实际相对高度由 evaluator 报告。只有约 `5 m` 正式结果失败且证据明确指向视觉分辨率时，才以本地高度 `5.0 m` 运行同 seed 的约 `3 m` 无下降诊断：

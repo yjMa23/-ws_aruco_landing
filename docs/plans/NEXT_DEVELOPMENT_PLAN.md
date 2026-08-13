@@ -1,83 +1,48 @@
-# 下一步计划：Planar Board 正式 5 m 验证 → Future Twist 因果诊断
+# 下一步计划：定位 Planar Board static 法向误差
 
-## 当前状态
+## 当前阻塞
 
-Marine 已完成可实船平贴部署的远距 ArUco 几何和 detector 实现：
-
-- `--environment legacy` 继续使用 frozen ID0/4/5/6 非共面几何与历史配置。
-- `--environment marine` 使用独立 `aruco_detector_marine.yaml`。
-- Marine ID4/5/6/7 均为 `0.50 m`，中心为 `(±0.78, ±0.78, 0.002) m`，全部 `rpy=0`。
-- `>=2` 个远距 Marker 使用 `SOLVEPNP_IPPE` planar multi-marker pose；1 个使用已知 `T_marker_deck` 转换到 deck center；0 个回退既有 ID0/1/2/3 `MarkerSelector`。
-- detector 增加 `/aruco/pose_source`、`/aruco/board_marker_count`、`/aruco/board_reprojection_rmse_px`，失效帧不发布陈旧 pose。
-- Marine 仍只允许 GNSS rendezvous、视觉捕获、安全高度跟踪和 deck-motion shadow；相对下降、`FINAL_DESCENT`、真实接触、terminal-contact stabilization、`NAV_LAND` 与自动 Disarm 均未开放。
-
-此前旧非共面 Board 的约 `5 m` 相对 shadow 正式矩阵为：安全隔离 `12/12`、当前法向与未来位置主要硬门 `12/12`，Future Twist 相关水平速度/垂直速度/角速度门分别 `6/12`、`2/12`、`3/12`，全部硬门 `2/12`。这些数据仍是 frozen 历史证据，不得用新 Planar Board 结果覆盖。
-
-## 下一目标 1：Planar Board 正式约 5 m 4×3
-
-先固定当前代码、几何、阈值和 seed，运行：
+Marine Planar Board 正式 4×3 的安全门已通过 `12/12`，但 Board 门仅 `9/12`。
+失败严格集中在 `static seed 1/2/3` 的当前法向：
 
 ```text
-static / rollpitch / combined / rigid_body_motion × seed 1/2/3
+RMSE = 1.186–1.421°  > 1.0°
+P95  = 2.010–2.455°  > 1.5°
 ```
 
-共 12 runs，保持 `rendezvous_altitude_m=7.0`（约 5 m 相对甲板高度）。直接执行：
+同三轮的水平/垂直位置、覆盖、来源路由、重投影 RMSE 和 raw normal flip 均通过。
+正式 Bag 固定在 `results/deck_motion_shadow_planar_marine_local7m_20260813`，不得替换
+seed、删除失败轮次或放宽门限。
 
-```bash
-python3 scripts/run_deck_motion_shadow_experiments.py \
-  --environment marine \
-  --output results/deck_motion_shadow_planar_marine_5m_<date>
-```
+## 下一目标：离线定位 static 法向误差来源
 
-不得换 seed、删失败轮次、重挑结果或为了通过验收放宽 detector/shadow 阈值。
+只使用现有 12 个正式 Bag，按同一套固定分析方法完成：
 
-本轮 Planar Board 的主要验收不是 Future Twist `12/12`，而是：
+1. 分别计算 raw Planar pose 和 shadow current pose 的法向误差，区分误差来自 detector
+   还是 shadow 滤波/时间对齐。
+2. 在 static 与 9 个动态轮次间比较法向误差与 Marker 数、图像位置、Board
+   reprojection RMSE、pose source、相机—甲板距离和观测时序的关系。
+3. 检查 IPPE 候选选择、角点噪声、相机标定和位姿采样时刻是否能解释 static 的稳定
+   偏差；Ground Truth 只能在 pose 输出后离线评分，禁止用于候选选择、调参输入或控制。
+4. 形成唯一可证伪的根因结论和最小修复方案。若需要新模型或算法，先补理论文档和
+   构建说明，再编码；若证据不足，明确记录缺失观测，不猜测修复。
 
-1. ArUco valid coverage 足够稳定，远距主要来源为 `PLANAR_BOARD_MULTI`。
-2. current deck position error 与 deck-normal error 不劣化到不可用。
-3. `board_reprojection_rmse_px` finite 且无系统性爆炸。
-4. planar ambiguity 不产生 frame-to-frame pose/normal flip。
-5. 4/3/2 Marker partial visibility 能继续输出统一 deck pose；1 Marker 正确进入 `FAR_SINGLE`。
-6. `NAV_LAND=0`、Disarm command=0、`touchdown_confirmed=false`，没有任何下降或接触路径被意外打开。
+验收标准：分析脚本或测试能够在固定 Bag 上复现 3 个 static 失败，并给出 detector、
+时间对齐和 shadow 三段的误差分解。任何修复必须使用预先固定的一套参数重新运行完整
+Marine 4×3；只有安全门与 Board 门都达到 `12/12`，才能冻结新结果。
 
-同时与 frozen 旧非共面结果比较：
+## 暂缓：Future Twist 因果诊断
 
-```text
-ArUco valid coverage
-current position error
-normal error
-board reprojection RMSE
-pose flip count
-0.5 s position prediction
-0.5 s normal prediction
-future twist
-```
+当前 `0.5 s` 预测法向、水平速度、垂直速度、角速度门分别为
+`0/12`、`0/12`、`3/12`、`0/12`。在 Board 门达到 `12/12` 前不分析或调优这些项，
+也不修改控制器。
 
-比较只用于确认几何替换的代价与收益，不允许为追求更好结果改 seed 或筛选轮次。
+Board 验收完成后，另行使用严格因果回放：时刻 `t` 的输出只能读取 `t` 及以前的
+ArUco、PX4 速度和估计器历史，Ground Truth 只在输出后评分。若跨 seed 固定参数仍
+失败，再评审甲板 IMU 或船舶 GNSS velocity 等最小附加观测；未经新计划不实现。
 
-## 下一目标 2：Future Twist 因果可观测性诊断
+## 安全边界
 
-只有 Planar Board 的 4×3 正式 safe-altitude 验证完成后，才继续 Future Twist 诊断：
-
-1. 使用新的固定 Planar Board 正式 Bag 做严格因果回放，分解 ArUco 相对位姿、PX4 UAV velocity、局部常加速度拟合与 SO(3) 角导数对 `0.5 s` twist 误差的贡献。Ground Truth 只允许离线评分，不能进入在线参数、相位、频率或 future trajectory。
-2. 若 ArUco-only 因果估计在跨 seed 固定参数下仍无法通过，再单独评审最小额外观测契约，例如甲板 IMU 的线/角加速度或船舶 GNSS velocity 绝对锚；未经批准不实现。
-3. 任意新预测模型必须先在 `static/combined seed1` 用预注册参数通过全部旧安全硬门，再从头运行新的 4×3；失败 seed 不替换、门限不放宽。
-
-## 后续边界
-
-本计划不授权：
-
-```text
-acados NMPC
-dynamic deck descent
-real contact
-NAV_LAND
-automatic disarm
-JONSWAP / PM spectrum
-RAO
-wave-driven WAM-V dynamics
-Buoyancy / Hydrodynamics
-wind / current
-```
-
-VRX `WaveVisual + Gerstner` 已经是动态 visual-only ocean，`MotionProfile` 仍是唯一 vessel motion source。只有 Future Twist 因果可观测性被独立解决后，才可另起计划评审动态姿态控制或真实 sea-state → vessel-response 链。
+本计划不开放动态姿态下降、真实接触、NMPC、`NAV_LAND`、自动 Disarm、波浪驱动
+船体动力学或 Ground Truth 控制输入。GUI 外观检查等待有显示环境时补做，不阻塞离线
+根因分析。

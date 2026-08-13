@@ -182,19 +182,17 @@ GUI visual verification pending
 
 不得把 headless SDF 检查表述为已经完成肉眼 GUI 验收。
 
-## 10. 正式约 5 m 4×3 shadow
+## 10. 正式 local 7 m 4×3 shadow
 
 只有 smoke 完全通过后，才执行：
 
 ```bash
 python3 scripts/run_deck_motion_shadow_experiments.py \
   --environment marine \
-  --output results/deck_motion_shadow_planar_marine_5m_<date>
+  --output results/deck_motion_shadow_planar_marine_local7m_<date>
 ```
 
-该 runner 固定运行 `static / rollpitch / combined / rigid_body_motion × seed 1/2/3`，共 12 runs，并保持 `rendezvous_altitude=7.0 m`。`--environment` 默认仍为 `legacy`，因此历史调用语义不变。不得换 seed、放宽阈值、删除失败轮次或重挑结果。重点统计当前 deck pose coverage、position error、normal error、Board RMSE 和 pose flip；Future Twist 12/12 不是本阶段验收条件。
-
-若本轮不执行 12-run，下一步计划必须保留“Planar Board 正式 5 m safe-altitude 4×3 验证”，并使用上面的 Marine batch 命令直接续跑。
+该 runner 固定运行 `static / rollpitch / combined / rigid_body_motion × seed 1/2/3`，共 12 runs，并保持 `rendezvous_altitude=7.0 m`。Marine 模式自动启用 Planar Board evaluator，并在每轮保存 detector、controller 和 scenario 参数快照。`--environment` 默认仍为 `legacy`，因此历史调用语义不变。不得换 seed、放宽阈值、删除失败轮次或重挑结果。重点统计当前 deck pose coverage、position error、normal error、Board RMSE 和 pose flip；Future Twist 12/12 不是本阶段验收条件。
 
 ## 11. 2026-08-11 本地验证记录
 
@@ -252,4 +250,27 @@ WAYLAND_DISPLAY=
 GUI visual verification pending
 ```
 
-因此本次未伪造 GUI 人工检查。正式 Marine Planar Board 12-run 本轮未执行；runner 的 `--environment marine --dry-run` 已确认固定产生 `4 scenarios × seeds 1/2/3` 共 12 个 `rendezvous-altitude=7.0` episode。
+因此本次未伪造 GUI 人工检查。
+
+## 12. 2026-08-13 正式矩阵记录
+
+正式输出位于 `results/deck_motion_shadow_planar_marine_local7m_20260813`。原始 12 个
+Bag 全部保留，未替换 seed、删除失败轮次或调整 detector/shadow 门限。结果为：
+
+- 安全门 `12/12`：无下降、接触、穿透、`NAV_LAND`、Disarm、触地确认、实际
+  terminal stabilization、时间同步错误或非法输出。
+- Planar Board 门 `9/12`：9 个动态轮次通过；3 个 static seed 均仅因当前法向门
+  失败，法向 `RMSE=1.186–1.421°`、`P95=2.010–2.455°`。
+- 12 轮 ArUco 与 shadow 跟踪覆盖率均为 `100%`，有效视觉帧 multi 来源占比均为
+  `100%`。全矩阵观察到 2/3/4 Marker；8 个单 Marker 帧全部路由到 `FAR_SINGLE`。
+- multi pose reprojection RMSE P95 为 `0.584–0.913 px`、最大值为
+  `0.819–1.108 px`；12 轮 raw deck-normal `>=90°` flip 均为 `0`。
+- 当前水平/垂直位置 P95 为 `0.018–0.035 m / 0.005–0.011 m`；动态 9 轮当前
+  法向 `RMSE/P95` 为 `0.453–0.549° / 0.885–1.183°`。
+- `0.5 s` 预测水平/垂直位置与 yaw 门均为 `12/12`，法向、水平速度、垂直速度、
+  角速度门分别为 `0/12`、`0/12`、`3/12`、`0/12`；完整 shadow 硬门 `0/12`。
+- `rendezvous_altitude=7.0 m` 产生的实际相对高度总体为 `5.262–6.186 m`，不能与
+  旧非共面 Board 矩阵声明严格等高非劣效。
+
+因此 Board 正式验证尚未达到 `12/12`。下一步只定位 static 法向误差来源，不调
+Future Twist 或控制器；GUI 外观检查仍为 `GUI visual verification pending`。

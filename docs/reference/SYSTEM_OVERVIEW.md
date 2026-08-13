@@ -52,7 +52,7 @@ marine 中同一 `MotionProfile` 驱动与官方 `wamv/base_link` 对齐的 cano
 
 WAM-V / ocean 单模型通过 `gz sdf -k`，完整 marine world 在 `gz sdf -k` 中会触发 sdformat CLI 缺少 `model://` find callback 的已知限制；实际 `gz sim` server smoke 已成功解析 include，加载 `vrx::WaveVisual`、`vrx_wamv_landing` 的 VelocityControl / OdometryPublisher，并正确读取 CWR `amplitude=0.06 m`、`period=4.0 s` 等参数，未出现 missing plugin/mesh/shader/texture。当前全仓构建与测试为 `389 tests, 0 errors, 0 failures, 0 skipped`。
 
-Marine Planar Board 改造后，`static` 与 `rigid_body_motion` 又各完成一轮 headless PX4 SITL safe-altitude smoke。两轮都完成 GNSS rendezvous、Planar Board 捕获并进入 `WAIT_LANDING_WINDOW`，shadow 到 `UPDATED:TRUSTED`。static Bag 中 `/aruco/pose_source` 为 `401 PLANAR_BOARD_MULTI + 419 NONE`（NONE 均在视觉捕获前），Board 可见计数覆盖 2/3/4 Marker，401 个 multi pose 的 reprojection RMSE median/P95/max 为 `0.554/0.810/0.964 px`，连续 deck-normal `flip_count=0`；rigid-body 为 `435 PLANAR_BOARD_MULTI + 1 FAR_SINGLE + 430 NONE`，Board 可见计数覆盖 1/2/3/4 Marker，435 个 multi pose RMSE median/P95/max 为 `0.411/0.482/0.847 px`，436 个 pose 的 `flip_count=0`。现有 shadow evaluator 对两轮都给出 `valid_coverage=1.0`：static 当前水平/垂直位置 P95 为 `0.030/0.006 m`，但 normal RMSE/P95 为 `1.129°/1.929°`，超过旧非共面 hard gate 的 `1.0°/1.5°`；rigid-body 当前水平/垂直位置 P95 为 `0.048/0.011 m`，normal RMSE/P95 为 `0.364°/0.656°`，当前法向门通过。Future Twist/0.5 s 预测硬门仍有失败，不属于本阶段验收。两轮都记录 `NAV_LAND=0`、Disarm command=0、`touchdown_confirmed=false`、terminal stabilization=false；因此本阶段仍只有 safe-altitude 证据，且 static normal 仍需正式 4×3 判断是否为持续性 planar 可观测性代价。当前 shell 的 `DISPLAY` 与 `WAYLAND_DISPLAY` 都为空，所以 ID4/5/6/7 实际 GUI 视觉布置仍标记为 `GUI visual verification pending`。
+Marine Planar Board 改造后，`static` 与 `rigid_body_motion` 又各完成一轮 headless PX4 SITL safe-altitude smoke。两轮都完成 GNSS rendezvous、Planar Board 捕获并进入 `WAIT_LANDING_WINDOW`，shadow 到 `UPDATED:TRUSTED`。static Bag 中 `/aruco/pose_source` 为 `401 PLANAR_BOARD_MULTI + 419 NONE`（NONE 均在视觉捕获前），Board 可见计数覆盖 2/3/4 Marker，401 个 multi pose 的 reprojection RMSE median/P95/max 为 `0.554/0.810/0.964 px`，连续 deck-normal `flip_count=0`；rigid-body 为 `435 PLANAR_BOARD_MULTI + 1 FAR_SINGLE + 430 NONE`，Board 可见计数覆盖 1/2/3/4 Marker，435 个 multi pose RMSE median/P95/max 为 `0.411/0.482/0.847 px`，436 个 pose 的 `flip_count=0`。现有 shadow evaluator 对两轮都给出 `valid_coverage=1.0`：static 当前水平/垂直位置 P95 为 `0.030/0.006 m`，但 normal RMSE/P95 为 `1.129°/1.929°`，超过旧非共面 hard gate 的 `1.0°/1.5°`；rigid-body 当前水平/垂直位置 P95 为 `0.048/0.011 m`，normal RMSE/P95 为 `0.364°/0.656°`，当前法向门通过。Future Twist/0.5 s 预测硬门仍有失败，不属于本阶段验收。两轮都记录 `NAV_LAND=0`、Disarm command=0、`touchdown_confirmed=false`、terminal stabilization=false；后续正式 4×3 已确认 static normal 是跨 seed 持续失败项。当前 shell 的 `DISPLAY` 与 `WAYLAND_DISPLAY` 都为空，所以 ID4/5/6/7 实际 GUI 视觉布置仍标记为 `GUI visual verification pending`。
 
 ### 3.2 船舶 GNSS
 
@@ -274,6 +274,26 @@ INIT
   约 `5 m` 的当前位姿或未来位置，因此本轮未触发约 `3 m` 像素分辨率对照。
   结果不授权 NMPC、动态姿态下降或真实接触。
 
+Marine Planar Board 的正式矩阵见
+[`results/deck_motion_shadow_planar_marine_local7m_20260813`](../../results/deck_motion_shadow_planar_marine_local7m_20260813/manifest.json)。
+该矩阵固定运行 `static/rollpitch/combined/rigid_body_motion × seed 1/2/3`，没有替换
+seed、删除失败轮次或调整门限：
+
+- 安全门 `12/12`；Planar Board 门 `9/12`；完整 shadow 硬门 `0/12`。
+- ArUco 与 shadow 跟踪覆盖率均为 `100%`，multi 来源占比均为 `100%`；矩阵观察到
+  2/3/4 Marker，8 个单 Marker 帧全部路由到 `FAR_SINGLE`。
+- multi reprojection RMSE P95 为 `0.584–0.913 px`，最大值为 `0.819–1.108 px`；
+  raw deck-normal `>=90°` flip 为 `0/12`。
+- 当前水平/垂直位置 P95 为 `0.018–0.035 m / 0.005–0.011 m`。9 个动态轮次的
+  法向 `RMSE/P95` 为 `0.453–0.549° / 0.885–1.183°`，均通过；3 个 static seed
+  为 `1.186–1.421° / 2.010–2.455°`，均失败。
+- `0.5 s` 预测水平/垂直位置与 yaw 门为 `12/12`，预测法向、水平速度、垂直速度、
+  角速度门为 `0/12`、`0/12`、`3/12`、`0/12`。这些指标只作诊断，不参与本阶段
+  `planar_board_passed`。
+- 实际相对高度总体覆盖 `5.262–6.186 m`，不得与旧非共面矩阵声明严格等高非劣效。
+
+正式结果确认当前先处理 static 法向，不进入 Future Twist 调参或控制器集成。
+
 冻结数据的主要结论：
 
 - smoke：`20/27`，7 个失败均为 `SAFETY_GATE_FAILURE`。
@@ -290,7 +310,7 @@ INIT
 - 静止、水平匀速和升沉相对下降及真实接触。
 - 四状态相对 MPC 的安全高度、下降、接触与规则式回退。
 - 固定正 `+2° roll/pitch` 的终端接触稳定化和 10 秒保持。
-- 全工作区当前实现记录为 `389 tests, 0 errors, 0 failures, 0 skipped`；旧非共面 Board 相对 shadow 正式 12 轮的安全隔离为 `12/12`、全性能硬门为 `2/12`。新 Planar Board 的正式 Marine 4×3 尚未执行，当前只完成 static + rigid-body smoke。
+- 全工作区当前实现记录为 `389 tests, 0 errors, 0 failures, 0 skipped`；旧非共面 Board 相对 shadow 正式 12 轮的安全隔离为 `12/12`、全性能硬门为 `2/12`。Marine Planar Board 正式 4×3 为安全门 `12/12`、Board 门 `9/12`、完整 shadow 硬门 `0/12`，当前阻塞项为 static 法向精度。
 
 固定正倾角的成功不能外推到负倾角、动态 `rollpitch` 或 `combined`。
 

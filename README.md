@@ -6,9 +6,10 @@
 
 另有独立的甲板 6-DoF shadow 估计与 `0–1.0 s` 预测链路。当前位姿是
 `uav_centered_ned` 中的 `deck-uav`，预测轨迹相对发布时冻结的无人机原点；
-输入为时间对齐 ArUco 相对位姿和 PX4 NED 速度，不使用甲板 Ground Truth。约 `5 m`
-正式 SITL 的安全隔离为 `12/12`、全性能硬门为 `2/12`；当前位姿和未来位置已
-通过，失败集中在未来 twist，因此尚不能接入控制。
+输入为时间对齐 ArUco 相对位姿和 PX4 NED 速度，不使用甲板 Ground Truth。旧非共面
+Board 的约 `5 m` 正式 SITL 为安全隔离 `12/12`、全性能硬门 `2/12`。Marine
+Planar Board 的 `rendezvous-altitude=7.0` 正式矩阵为安全门 `12/12`、Board 门
+`9/12`、全性能硬门 `0/12`；3 个 static seed 均未通过当前法向门，因此尚不能接入控制。
 
 ```text
 船舶 GNSS 会合
@@ -82,9 +83,9 @@ marine 已切换到官方 VRX WAM-V base mesh/PBR 资产，并启用 `waterlow.d
 - 固定正倾角接触稳定化使用 Offboard position setpoint 内的法向整形、接触锚点顺应、切向阻尼和受限预压，不发送 PX4 attitude setpoint。
 - 负固定倾角、动态 `rollpitch`、`combined` 和 `rigid_body_motion` 仍只允许安全高度观察，下降和真实接触关闭。
 - 统一评测记录为 smoke `20/27`、正式基线 `40/40`、正式消融 `60/60`，另有 `30` 个 `NOT_APPLICABLE` 槽位。有限样本全成功不代表真实成功概率为 100%。
-- 6-DoF 相对 shadow 的约 `5 m` 正式矩阵为安全 `12/12`、全性能硬门
-  `2/12`；剩余限制是 ArUco-only 动态甲板 `0.5 s` 未来 twist 可观测性。
-- marine 已完成 WAM-V 视觉资产、固定 UAV landing platform、visual-only `WaveVisual` 动态 Gerstner 海面和可实船平贴部署的 Planar ArUco Board 实现；仍没有 wave-driven vessel dynamics、JONSWAP/PM 船体响应、RAO、浮力、水动力、洋流或风载。Planar Board 的正式约 `5 m` 4×3 safe-altitude 验证完成前，不进入 Future Twist 因果诊断。
+- 旧非共面 Board 的 6-DoF 相对 shadow 约 `5 m` 正式矩阵为安全 `12/12`、全性能硬门 `2/12`。
+- Marine Planar Board 正式 4×3 已完成：安全 `12/12`、Board `9/12`、全性能硬门 `0/12`。实际相对高度为 `5.262–6.186 m`，不是严格等高的旧结果对照；当前阻塞项是 static 法向精度，尚未进入 Future Twist 因果调参。
+- marine 已完成 WAM-V 视觉资产、固定 UAV landing platform、visual-only `WaveVisual` 动态 Gerstner 海面和可实船平贴部署的 Planar ArUco Board 实现；仍没有 wave-driven vessel dynamics、JONSWAP/PM 船体响应、RAO、浮力、水动力、洋流或风载。
 - 所有正式实验保持 `NAV_LAND / Disarm = 0 / 0`。
 
 ## 文档

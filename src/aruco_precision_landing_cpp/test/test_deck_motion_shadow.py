@@ -16,6 +16,7 @@ WORKSPACE_DIR = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(WORKSPACE_DIR / "scripts"))
 
 from evaluate_deck_motion_shadow import (  # noqa: E402
+    PlanarDiagnosticFrame,
     Q_BODY_DECK,
     Q_NED_ENU,
     RigidState,
@@ -23,8 +24,12 @@ from evaluate_deck_motion_shadow import (  # noqa: E402
     interpolate_truth,
     normal_and_yaw,
     normalize_quaternion,
+    pair_planar_diagnostics,
+    planar_reprojection_rmse_valid,
+    planar_source_route_valid,
     prediction_truth,
     quaternion_multiply,
+    raw_normal_jumps_deg,
     relative_truth,
     state_errors,
     summary,
@@ -107,6 +112,63 @@ class DeckMotionShadowTests(unittest.TestCase):
     def test_empty_metric_summary_is_strict_json(self) -> None:
         encoded = json.dumps(summary([]), allow_nan=False)
         self.assertEqual(json.loads(encoded), {"count": 0, "rmse": None, "p95": None, "max": None})
+
+    def test_planar_diagnostic_frames_pair_by_publish_order_and_time(self) -> None:
+        frames, unpaired = pair_planar_diagnostics(
+            [(1.000, "PLANAR_BOARD_MULTI")],
+            [(1.001, 3)],
+            [(1.002, 0.4)],
+            [(1.003, True)],
+        )
+        self.assertEqual(unpaired, 0)
+        self.assertEqual(
+            frames,
+            [PlanarDiagnosticFrame(1.000, "PLANAR_BOARD_MULTI", 3, 0.4, True)],
+        )
+
+        frames, unpaired = pair_planar_diagnostics(
+            [(2.000, "PLANAR_BOARD_MULTI")],
+            [(1.900, 0), (2.001, 4)],
+            [(1.901, math.nan), (2.002, 0.3)],
+            [(1.902, False), (2.003, True)],
+        )
+        self.assertEqual(unpaired, 0)
+        self.assertEqual(frames[0].marker_count, 4)
+
+        frames, unpaired = pair_planar_diagnostics(
+            [(1.0, "NONE")], [(1.0, 0)], [(1.0, math.nan)], [(1.02, False)]
+        )
+        self.assertEqual(frames, [])
+        self.assertGreater(unpaired, 0)
+
+    def test_planar_source_routing_and_reprojection_contract(self) -> None:
+        valid_frames = (
+            PlanarDiagnosticFrame(0.0, "PLANAR_BOARD_MULTI", 2, 0.5, True),
+            PlanarDiagnosticFrame(0.0, "FAR_SINGLE", 1, math.nan, True),
+            PlanarDiagnosticFrame(0.0, "NEAR_SINGLE", 0, math.nan, True),
+            PlanarDiagnosticFrame(0.0, "NONE", 0, math.nan, False),
+        )
+        self.assertTrue(all(planar_source_route_valid(frame) for frame in valid_frames))
+        self.assertTrue(
+            all(planar_reprojection_rmse_valid(frame) for frame in valid_frames)
+        )
+        self.assertFalse(planar_source_route_valid(
+            PlanarDiagnosticFrame(0.0, "NONE", 2, math.nan, False)
+        ))
+        self.assertFalse(planar_reprojection_rmse_valid(
+            PlanarDiagnosticFrame(0.0, "PLANAR_BOARD_MULTI", 4, 5.01, True)
+        ))
+        self.assertFalse(planar_reprojection_rmse_valid(
+            PlanarDiagnosticFrame(0.0, "FAR_SINGLE", 1, 0.1, True)
+        ))
+
+    def test_raw_normal_flip_ignores_quaternion_sign_but_detects_real_flip(self) -> None:
+        identity = (1.0, 0.0, 0.0, 0.0)
+        antipode = (-1.0, 0.0, 0.0, 0.0)
+        flipped = (0.0, 1.0, 0.0, 0.0)
+        jumps = raw_normal_jumps_deg((identity, antipode, flipped))
+        self.assertAlmostEqual(jumps[0], 0.0)
+        self.assertAlmostEqual(jumps[1], 180.0)
 
     def test_yaw_error_wraps_across_pi(self) -> None:
         def yaw_orientation(degrees: float) -> tuple[float, ...]:
@@ -197,7 +259,9 @@ class DeckMotionShadowTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        episodes = json.loads(completed.stdout)["episodes"]
+        legacy_output = json.loads(completed.stdout)
+        self.assertEqual(set(legacy_output), {"episodes"})
+        episodes = legacy_output["episodes"]
         self.assertEqual(len(episodes), 12)
         self.assertTrue(
             all(
@@ -233,7 +297,9 @@ class DeckMotionShadowTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(marine.returncode, 0, marine.stderr)
-        marine_episodes = json.loads(marine.stdout)["episodes"]
+        marine_output = json.loads(marine.stdout)
+        self.assertEqual(marine_output["evaluation_mode"], "planar_board")
+        marine_episodes = marine_output["episodes"]
         self.assertEqual(len(marine_episodes), 12)
         self.assertTrue(
             all(
@@ -242,6 +308,13 @@ class DeckMotionShadowTests(unittest.TestCase):
                 for episode in marine_episodes
             )
         )
+        for episode in marine_episodes:
+            for unsafe_flag in (
+                "--enable-relative-descent",
+                "--enable-final-descent",
+                "--enable-terminal-contact-stabilization",
+            ):
+                self.assertNotIn(unsafe_flag, episode["command"])
 
     def test_ground_truth_topic_exists_only_in_simulation_or_offline_evaluators(self) -> None:
         forbidden = "/simulation/deck/" + "ground_truth"
