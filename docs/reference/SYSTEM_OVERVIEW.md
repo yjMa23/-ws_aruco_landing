@@ -297,8 +297,23 @@ Planar Board 门为 `9/12`、完整 shadow 硬门为 `0/12`。失败只集中在
 - 全矩阵观察到 2/3/4 Marker；14 个单 Marker 帧全部路由到 `FAR_SINGLE`。
 - Future Twist/0.5 s 完整 shadow hard gate 仍未通过；本轮没有修改或调参这些通道。
 
-因此 Planar Board static 法向根因与最小修复已经完成正式验收；当前下一任务切换为
-Future Twist causal diagnosis，而不是继续修改 Board 或 shadow filter。
+随后基于同一固定 12 Bag 新增 `scripts/analyze_future_twist_causality.py` 做严格 publish-time
+`0.5 s` causal diagnosis。重新计算确认 future horizontal/vertical position、normal、yaw
+均为 `12/12`，真正阻塞项为 horizontal velocity `0/12`、vertical velocity `5/12`、angular
+velocity `3/12`。7333 个可评分 origin 的 observation age median/P95/max 约为
+`0.032/0.052/0.128 s`，与三类 future twist error 的相关性均接近 0；误差分解 closure
+在数值精度内闭合。全局 horizontal/vertical 的 `h * acceleration estimation error` P95
+约为 `0.170/0.070 m/s`，angular-vector 为 `1.340 deg/s`，且与最终误差高度相关；CA model
+residual 分别约为 `0.077/0.019 m/s` 与 `0.489 deg/s`。static 中 CV 明显优于 CA，而
+combined/rigid-body horizontal 又明显依赖 acceleration，因此全局永久切换 CV 已被固定 Bag
+证伪。当前结论是 acceleration estimate 缺少 causal confidence 时会把误差满幅外推到
+`0.5 s`；translation 与 rotation 共享 failure mechanism，但 acceleration 分别来自 quadratic
+fit 与 SO(3) error-state，不应先假设共享同一参数修复。完整证据见
+[`FUTURE_TWIST_CAUSAL_DIAGNOSIS.md`](FUTURE_TWIST_CAUSAL_DIAGNOSIS.md)。本轮未修改 production
+estimator，也未运行新的 SITL；下一任务是固定 Bag 的 offline estimator-confidence replay。
+
+因此 Planar Board static 法向根因与最小修复已经完成正式验收；当前仍保持 Future Twist
+为唯一阻塞任务，而不是继续修改 Board、下降控制或动态接触。
 
 冻结数据的主要结论：
 
@@ -316,7 +331,7 @@ Future Twist causal diagnosis，而不是继续修改 Board 或 shadow filter。
 - 静止、水平匀速和升沉相对下降及真实接触。
 - 四状态相对 MPC 的安全高度、下降、接触与规则式回退。
 - 固定正 `+2° roll/pitch` 的终端接触稳定化和 10 秒保持。
-- 全工作区当前实现记录为 `391 tests, 0 errors, 0 failures, 0 skipped`；旧非共面 Board 相对 shadow 正式 12 轮的安全隔离为 `12/12`、全性能硬门为 `2/12`。Marine Planar Board RefineLM 正式 4×3 为安全门 `12/12`、Board 门 `12/12`、完整 shadow 硬门 `0/12`；Board static 法向任务已完成，下一阻塞项是 Future Twist 因果诊断。
+- 全工作区当前实现记录为 `391 tests, 0 errors, 0 failures, 0 skipped`；旧非共面 Board 相对 shadow 正式 12 轮的安全隔离为 `12/12`、全性能硬门为 `2/12`。Marine Planar Board RefineLM 正式 4×3 为安全门 `12/12`、Board 门 `12/12`、完整 shadow 硬门 `0/12`；Board static 法向任务已完成，Future Twist 第一轮 causal diagnosis 也已完成，当前下一任务是固定 Bag 的 estimator-confidence replay。
 
 固定正倾角的成功不能外推到负倾角、动态 `rollpitch` 或 `combined`。
 

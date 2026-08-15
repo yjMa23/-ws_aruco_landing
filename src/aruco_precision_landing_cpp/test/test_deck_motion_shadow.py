@@ -45,6 +45,18 @@ from analyze_planar_board_orientation import (  # noqa: E402
     pearson_correlation,
     tilt_bin_label,
 )
+from analyze_future_twist_causality import (  # noqa: E402
+    ErrorDecomposition,
+    FrameDiagnostic,
+    aggregate_by_scenario,
+    aggregate_frames,
+    counterfactual_predictions,
+    decompose_error,
+    distribution_summary,
+    metric_summary,
+    nearest_state_sample_time,
+    time_semantics,
+)
 
 
 class DeckMotionShadowTests(unittest.TestCase):
@@ -114,6 +126,95 @@ class DeckMotionShadowTests(unittest.TestCase):
         self.assertIsNotNone(derivatives)
         self.assertAlmostEqual(derivatives[0][0], 2.0)
         self.assertAlmostEqual(derivatives[1][1], 3.0)
+
+    def test_future_twist_time_semantics_uses_publish_time_for_target(self) -> None:
+        semantics = time_semantics(10.00, 10.08, 0.50)
+        self.assertAlmostEqual(semantics["observation_age_s"], 0.08)
+        self.assertAlmostEqual(semantics["requested_horizon_s"], 0.50)
+        self.assertAlmostEqual(semantics["actual_target_time_s"], 10.58)
+        self.assertAlmostEqual(semantics["state_sample_to_target_horizon_s"], 0.58)
+
+    def test_future_twist_state_pairing_allows_cross_topic_receipt_order(self) -> None:
+        states = [(1.000, 10.00), (1.050, 10.04)]
+        self.assertAlmostEqual(nearest_state_sample_time(states, 1.001), 10.00)
+        self.assertAlmostEqual(nearest_state_sample_time(states, 1.049), 10.04)
+        self.assertIsNone(nearest_state_sample_time(states, 1.030, tolerance_s=0.005))
+
+    def test_future_twist_linear_error_decomposition_closes(self) -> None:
+        decomposition = decompose_error(
+            (1.2, -0.4, 0.3),
+            (0.4, 0.2, -0.1),
+            (1.0, -0.5, 0.2),
+            (0.2, 0.1, 0.0),
+            (1.15, -0.43, 0.21),
+            (1.4, -0.3, 0.25),
+            0.50,
+        )
+        self.assertLess(math.sqrt(sum(value * value for value in decomposition.closure)), 1.0e-12)
+
+    def test_future_twist_angular_error_decomposition_closes(self) -> None:
+        decomposition = decompose_error(
+            (0.10, -0.05, 0.02),
+            (0.04, 0.02, -0.01),
+            (0.08, -0.04, 0.01),
+            (0.02, 0.01, 0.00),
+            (0.09, -0.03, 0.01),
+            (0.12, -0.04, 0.015),
+            0.50,
+        )
+        self.assertLess(math.sqrt(sum(value * value for value in decomposition.closure)), 1.0e-12)
+
+    def test_future_twist_ca_and_cv_counterfactuals_use_only_origin_estimate(self) -> None:
+        ca, cv = counterfactual_predictions((1.0, 2.0, 3.0), (0.4, -0.2, 0.6), 0.50)
+        self.assertEqual(cv, (1.0, 2.0, 3.0))
+        self.assertEqual(ca, (1.2, 1.9, 3.3))
+
+    def test_future_twist_scenario_aggregate_keeps_scenarios_separate(self) -> None:
+        zero = (0.0, 0.0, 0.0)
+        decomposition = ErrorDecomposition(zero, zero, zero, zero, zero)
+
+        def frame(episode: str, scenario: str, horizontal_error: float) -> FrameDiagnostic:
+            linear = ErrorDecomposition(
+                (horizontal_error, 0.0, 0.0), zero, zero,
+                (horizontal_error, 0.0, 0.0), zero,
+            )
+            return FrameDiagnostic(
+                episode=episode,
+                scenario=scenario,
+                observation_age_s=0.02,
+                target_time_s=1.5,
+                actual_horizon_s=0.5,
+                state_sample_to_target_horizon_s=0.52,
+                linear=linear,
+                angular=decomposition,
+                ca_linear_error=(horizontal_error, 0.0, 0.0),
+                cv_linear_error=(horizontal_error, 0.0, 0.0),
+                ca_angular_error=zero,
+                cv_angular_error=zero,
+            )
+
+        grouped = aggregate_by_scenario(
+            [frame("static_s1", "static", 0.1), frame("rollpitch_s1", "rollpitch", 0.2)]
+        )
+        self.assertEqual(set(grouped), {"static", "rollpitch"})
+        self.assertEqual(grouped["static"]["frame_count"], 1)
+        self.assertAlmostEqual(
+            grouped["rollpitch"]["linear"]["horizontal"]["components"]["final_future_error"]["p95"],
+            0.2,
+        )
+
+    def test_future_twist_empty_and_nonfinite_metrics_are_strict_json(self) -> None:
+        metrics = {
+            "metric": metric_summary([math.nan, math.inf]),
+            "distribution": distribution_summary([]),
+            "aggregate": aggregate_frames([]),
+        }
+        encoded = json.dumps(metrics, allow_nan=False)
+        decoded = json.loads(encoded)
+        self.assertEqual(decoded["metric"]["count"], 0)
+        self.assertIsNone(decoded["metric"]["p95"])
+        self.assertEqual(decoded["distribution"]["count"], 0)
+        self.assertEqual(decoded["aggregate"]["frame_count"], 0)
 
     def test_empty_metric_summary_is_strict_json(self) -> None:
         encoded = json.dumps(summary([]), allow_nan=False)
