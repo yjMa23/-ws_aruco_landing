@@ -8,8 +8,9 @@
 `uav_centered_ned` 中的 `deck-uav`，预测轨迹相对发布时冻结的无人机原点；
 输入为时间对齐 ArUco 相对位姿和 PX4 NED 速度，不使用甲板 Ground Truth。旧非共面
 Board 的约 `5 m` 正式 SITL 为安全隔离 `12/12`、全性能硬门 `2/12`。Marine
-Planar Board 的 `rendezvous-altitude=7.0` 正式矩阵为安全门 `12/12`、Board 门
-`9/12`、全性能硬门 `0/12`；3 个 static seed 均未通过当前法向门，因此尚不能接入控制。
+Planar Board 在 IPPE 双解消歧后加入同帧全角点 `solvePnPRefineLM`，固定
+`rendezvous-altitude=7.0` 的 4×3 正式复验为安全门 `12/12`、Board 门 `12/12`、
+全性能硬门 `0/12`；Board static 法向阻塞已解决，当前下一任务是 Future Twist 因果诊断。
 
 ```text
 船舶 GNSS 会合
@@ -66,7 +67,7 @@ source install/setup.bash
 ./scripts/start_sitl.sh --environment marine --scenario rigid_body_motion --rendezvous-altitude 7.0
 ```
 
-marine 已切换到官方 VRX WAM-V base mesh/PBR 资产，并启用 `waterlow.dae + WaveVisual + Gerstner shader` 的动态 visual-only ocean；海面顶点与 bump-map UV 随 Gazebo simulation time 变化，但不产生 collision、浮力或波浪力。WAM-V 上增加 `2.4×2.4 m` UAV landing platform。Marine 远距视觉目标独立改为平贴甲板的 ID4/5/6/7 四 Marker Planar Board（均 `0.50 m`，中心 `(±0.78,±0.78,0.002) m`），使用 IPPE multi-marker pose、单远距 Marker deck-center fallback，并继续保留 ID0/1/2/3 近距 MarkerSelector；legacy 历史非共面几何不变。`MotionProfile` 仍是 `vessel_body` 唯一运动源，固定 `T_vessel_deck`（`r_VD=[0,0,1.8] m`）将 WAM-V canonical vessel state 转换成 landing deck center Ground Truth；neutral vessel z≈0.2 m 时 deck center 仍为 world z≈2.0 m。marine 仍只保持安全高度，会在启动前拒绝相对下降、最终下降和全部 terminal-contact 模式，`NAV_LAND` 与自动 Disarm 仍未启用。
+marine 已切换到官方 VRX WAM-V base mesh/PBR 资产，并启用 `waterlow.dae + WaveVisual + Gerstner shader` 的动态 visual-only ocean；海面顶点与 bump-map UV 随 Gazebo simulation time 变化，但不产生 collision、浮力或波浪力。WAM-V 上增加 `2.4×2.4 m` UAV landing platform。Marine 远距视觉目标独立改为平贴甲板的 ID4/5/6/7 四 Marker Planar Board（均 `0.50 m`，中心 `(±0.78,±0.78,0.002) m`），使用 IPPE multi-marker 双解消歧后 `solvePnPRefineLM` 精化、单远距 Marker deck-center fallback，并继续保留 ID0/1/2/3 近距 MarkerSelector；legacy 历史非共面几何不变。`MotionProfile` 仍是 `vessel_body` 唯一运动源，固定 `T_vessel_deck`（`r_VD=[0,0,1.8] m`）将 WAM-V canonical vessel state 转换成 landing deck center Ground Truth；neutral vessel z≈0.2 m 时 deck center 仍为 world z≈2.0 m。marine 仍只保持安全高度，会在启动前拒绝相对下降、最终下降和全部 terminal-contact 模式，`NAV_LAND` 与自动 Disarm 仍未启用。
 
 常用安全检查：
 
@@ -84,7 +85,7 @@ marine 已切换到官方 VRX WAM-V base mesh/PBR 资产，并启用 `waterlow.d
 - 负固定倾角、动态 `rollpitch`、`combined` 和 `rigid_body_motion` 仍只允许安全高度观察，下降和真实接触关闭。
 - 统一评测记录为 smoke `20/27`、正式基线 `40/40`、正式消融 `60/60`，另有 `30` 个 `NOT_APPLICABLE` 槽位。有限样本全成功不代表真实成功概率为 100%。
 - 旧非共面 Board 的 6-DoF 相对 shadow 约 `5 m` 正式矩阵为安全 `12/12`、全性能硬门 `2/12`。
-- Marine Planar Board 正式 4×3 已完成：安全 `12/12`、Board `9/12`、全性能硬门 `0/12`。实际相对高度为 `5.262–6.186 m`，不是严格等高的旧结果对照；当前阻塞项是 static 法向精度，尚未进入 Future Twist 因果调参。
+- Marine Planar Board RefineLM 正式 4×3 已完成：安全 `12/12`、Board `12/12`、全性能硬门 `0/12`。static seed1/2/3 current-normal `RMSE/P95` 为 `0.151°/0.291°`、`0.134°/0.252°`、`0.145°/0.288°`；Board static 法向任务已冻结，当前进入 Future Twist causal diagnosis。
 - marine 已完成 WAM-V 视觉资产、固定 UAV landing platform、visual-only `WaveVisual` 动态 Gerstner 海面和可实船平贴部署的 Planar ArUco Board 实现；仍没有 wave-driven vessel dynamics、JONSWAP/PM 船体响应、RAO、浮力、水动力、洋流或风载。
 - 所有正式实验保持 `NAV_LAND / Disarm = 0 / 0`。
 
@@ -101,6 +102,7 @@ marine 已切换到官方 VRX WAM-V base mesh/PBR 资产，并启用 `waterlow.d
 - [VRX WAM-V 构建说明](docs/guides/VRX_WAMV_BUILD.md)
 - [Marine Planar ArUco Board 理论](docs/reference/PLANAR_ARUCO_BOARD.md)
 - [Marine Planar ArUco Board 构建与验证](docs/guides/PLANAR_ARUCO_BOARD_BUILD.md)
+- [Marine Planar Board 法向误差诊断](docs/reference/PLANAR_BOARD_ORIENTATION_DIAGNOSIS.md)
 - [论文结果](docs/results/PAPER_RESULTS.md)
 - [数据来源与哈希](docs/results/DATA_PROVENANCE.md)
 - [下一步计划](docs/plans/NEXT_DEVELOPMENT_PLAN.md)

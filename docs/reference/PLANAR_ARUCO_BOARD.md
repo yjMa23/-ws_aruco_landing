@@ -102,6 +102,20 @@ t_camera_deck = t_camera_plane - R_camera_deck [0, 0, z_plane]^T
 
 这个内部数值归一化不改变 SDF/打印标定，也不会把 deck origin 错移到 Marker 表面。
 
+### 6.1 fronto-parallel 可观性与 IPPE 后最小非线性精化
+
+固定正式 Bag 的离线诊断表明，共面 Board 在真实甲板倾角接近 `0°` 时，法向误差会随很小的像素残差显著放大。这个现象不是平面位姿“完全不可解”，而是近 fronto-parallel 条件下法向方向的数值条件变差：角点的亚像素扰动可以由深度、微小倾角和投影尺度的组合部分吸收，因此 closed-form planar pose 对角点噪声更敏感。
+
+IPPE 仍负责显式生成平面双解和物理解消歧；当前实现会在候选通过正深度、法向方向、重投影门和时间连续性选择后，使用该候选作为初值，将**同一帧全部 Board corners**送入 `solvePnPRefineLM` 做最小的非线性重投影优化：
+
+```text
+(r*, t*) = arg min_(r,t) Σ_k ||u_k - project(K,D,r,t,P_k)||²
+```
+
+精化不得引入任何新观测，也不得读取 Ground Truth、场景名、运动相位或未来状态。精化后的结果必须再次满足 finite、全部点正深度、`deck normal faces camera` 和既有 reprojection hard gate；若精化失败、物理约束失效，或精化 RMSE 比已选 IPPE 候选更差，则回退到原 IPPE 候选。
+
+采用 LM 而不是直接改写 IPPE 双解逻辑的原因是：修复前正式数据中没有 `>=90°` normal flip，A/B 两层法向误差几乎一致，而误差与 reprojection RMSE 强相关。固定 Marine geometry、`5.5 m`、`σ=0.45 px`、500 trials 的 synthetic regression 中，0°/0.5°/2°/5° 的 raw IPPE normal RMSE 分别为 `3.338°/2.970°/2.350°/1.285°`，RefineLM 后为 `0.484°/0.490°/0.499°/0.463°`，且 reprojection RMS 同时下降。2026-08-15 固定 Marine 4×3 正式复验进一步达到 Safety `12/12`、Planar Board `12/12`。因此当前只引入 OpenCV 已有的 `solvePnPRefineLM`，不增加 scenario-specific 分支、GT tilt gate、额外滤波参数或新的在线状态。
+
 ## 7. IPPE 双解与消歧
 
 对 `solvePnPGeneric` 返回的每个候选 pose，依次执行：
@@ -111,8 +125,9 @@ t_camera_deck = t_camera_plane - R_camera_deck [0, 0, z_plane]^T
 3. **甲板法向**：`deck_landing_up` 的 +z 法向变换到 `camera_optical` 后必须指向相机一侧。对于当前下视相机契约，合法解满足 `n_camera.z < 0`；翻面解被拒绝。
 4. **重投影 RMSE**：计算全部参与角点的像素 RMSE，超过配置上限的候选无效。
 5. **时间连续性**：若上一帧有有效 planar board pose，在通过上述硬约束的候选中使用“RMSE + 平移变化 + 旋转变化”的代价选择更连续的解；若没有上一帧，则以 RMSE 为主选择。
+6. **LM 精化**：只对第 1–5 步选出的最佳 IPPE 候选执行 `solvePnPRefineLM`。refined pose 必须重新通过 finite、全部 object point 正深度、deck normal 方向、有限 reprojection RMSE 和既有最大 RMSE gate；并且 refined RMSE 不得比原候选差。任何 OpenCV refinement 异常或上述检查失败都回退原合法 IPPE pose。
 
-时间连续性只使用 detector 自己上一帧已发布的视觉位姿，不使用 Gazebo Ground Truth、`MotionProfile` phase 或未来轨迹。上一帧失效时不会发布陈旧 pose；它只作为下一次合法候选的消歧先验。
+时间连续性只使用 detector 自己上一帧已发布的视觉位姿，不使用 Gazebo Ground Truth、`MotionProfile` phase 或未来轨迹。上一帧失效时不会发布陈旧 pose；它只作为下一次合法候选的消歧先验。RefineLM 同样只消费当前图像已有 corners/K/D 和已选 IPPE 初值，不增加任何跨帧或仿真先验。
 
 ## 8. partial visibility 行为
 

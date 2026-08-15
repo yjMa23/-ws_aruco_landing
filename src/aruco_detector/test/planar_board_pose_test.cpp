@@ -8,8 +8,10 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <iostream>
 #include <limits>
 #include <numeric>
+#include <random>
 #include <vector>
 
 #include <opencv2/calib3d.hpp>
@@ -192,6 +194,100 @@ std::vector<cv::Point2f> flattenCorners(const SyntheticDetections & detections)
     image_points.insert(image_points.end(), corners.begin(), corners.end());
   }
   return image_points;
+}
+
+struct RawIppePose
+{
+  cv::Vec3d rvec;
+  cv::Vec3d tvec;
+  double reprojection_rmse_px;
+};
+
+double reprojectionRmse(
+  const std::vector<cv::Point3f> & object_points,
+  const std::vector<cv::Point2f> & image_points,
+  const cv::Vec3d & rvec,
+  const cv::Vec3d & tvec)
+{
+  std::vector<cv::Point2f> projected;
+  cv::projectPoints(
+    object_points, rvec, tvec, cameraMatrix(), zeroDistortion(), projected);
+  double squared_error = 0.0;
+  for (std::size_t index = 0; index < image_points.size(); ++index) {
+    const cv::Point2f residual = projected[index] - image_points[index];
+    squared_error += static_cast<double>(residual.dot(residual));
+  }
+  return std::sqrt(squared_error / static_cast<double>(image_points.size()));
+}
+
+std::optional<RawIppePose> estimateRawIppePose(const SyntheticDetections & detections)
+{
+  const auto object_points = allObjectPoints(marineCalibrations());
+  auto solver_object_points = object_points;
+  for (auto & point : solver_object_points) {
+    point.z -= 0.002F;
+  }
+  const auto image_points = flattenCorners(detections);
+
+  std::vector<cv::Mat> rvecs;
+  std::vector<cv::Mat> tvecs;
+  const int solution_count = cv::solvePnPGeneric(
+    solver_object_points, image_points, cameraMatrix(), zeroDistortion(),
+    rvecs, tvecs, false, cv::SOLVEPNP_IPPE);
+  if (solution_count <= 0) {
+    return std::nullopt;
+  }
+
+  std::optional<RawIppePose> best;
+  for (std::size_t index = 0; index < rvecs.size(); ++index) {
+    cv::Mat rvec_64f;
+    cv::Mat solver_tvec_64f;
+    rvecs[index].reshape(1, 3).convertTo(rvec_64f, CV_64F);
+    tvecs[index].reshape(1, 3).convertTo(solver_tvec_64f, CV_64F);
+    const cv::Vec3d rvec(
+      rvec_64f.at<double>(0, 0), rvec_64f.at<double>(1, 0), rvec_64f.at<double>(2, 0));
+    const cv::Vec3d solver_tvec(
+      solver_tvec_64f.at<double>(0, 0), solver_tvec_64f.at<double>(1, 0),
+      solver_tvec_64f.at<double>(2, 0));
+
+    cv::Mat rotation_mat;
+    cv::Rodrigues(rvec, rotation_mat);
+    const cv::Matx33d rotation(rotation_mat);
+    const cv::Vec3d tvec = solver_tvec - rotation * cv::Vec3d(0.0, 0.0, 0.002);
+    if (tvec[2] <= 0.0 || rotation(2, 2) >= 0.0) {
+      continue;
+    }
+    bool points_in_front = true;
+    for (const auto & point : object_points) {
+      const cv::Vec3d point_camera =
+        rotation * cv::Vec3d(point.x, point.y, point.z) + tvec;
+      points_in_front = points_in_front && point_camera[2] > 0.0;
+    }
+    if (!points_in_front) {
+      continue;
+    }
+
+    const double rmse = reprojectionRmse(object_points, image_points, rvec, tvec);
+    if (!best.has_value() || rmse < best->reprojection_rmse_px) {
+      best = RawIppePose{rvec, tvec, rmse};
+    }
+  }
+  return best;
+}
+
+double rmse(const std::vector<double> & values)
+{
+  const double squared_sum = std::inner_product(
+    values.begin(), values.end(), values.begin(), 0.0);
+  return std::sqrt(squared_sum / static_cast<double>(values.size()));
+}
+
+double p95(std::vector<double> values)
+{
+  std::sort(values.begin(), values.end());
+  const std::size_t index = static_cast<std::size_t>(
+    std::ceil(0.95 * static_cast<double>(values.size()))) - 1U;
+  return values[std::min(index, values.size() - 1U)];
 }
 
 TEST(PlanarBoardCalibration, AcceptsMarineCoplanarGeometry)
@@ -429,6 +525,126 @@ TEST(PlanarBoardPose, ResolvesIppeAmbiguityWithoutFrameToFrameFlip)
   EXPECT_LT(rotationErrorRad(second->rvec_camera_deck, first->rvec_camera_deck), 0.01);
   EXPECT_LT(normalErrorRad(second->rvec_camera_deck, expected_rvec), 0.01);
   EXPECT_TRUE(std::isfinite(second->reprojection_rmse_px));
+}
+
+TEST(PlanarBoardPose, RefinesNearFrontoParallelNoisyMarineBoard)
+{
+  const auto calibrations = marineCalibrations();
+  const cv::Vec3d expected_tvec(0.04, -0.03, 5.5);
+  const std::array<double, 4> tilts_deg{{0.0, 0.5, 2.0, 5.0}};
+  std::mt19937 random(20260815U);
+  std::normal_distribution<double> corner_noise_px(0.0, 0.45);
+
+  for (const double tilt_deg : tilts_deg) {
+    SCOPED_TRACE(::testing::Message() << "tilt_deg=" << tilt_deg);
+    const cv::Vec3d expected_rvec = cameraDeckRvec(0.0, tilt_deg * kPi / 180.0, 0.0);
+    const auto ideal = projectMarkers(
+      calibrations, {4, 5, 6, 7}, expected_rvec, expected_tvec);
+
+    std::vector<double> raw_normal_errors_deg;
+    std::vector<double> refined_normal_errors_deg;
+    std::vector<double> raw_reprojection_rmse_px;
+    std::vector<double> refined_reprojection_rmse_px;
+    int invalid_raw_count = 0;
+    int invalid_refined_count = 0;
+    int reprojection_worse_count = 0;
+
+    for (int trial = 0; trial < 500; ++trial) {
+      auto noisy = ideal;
+      for (auto & marker_corners : noisy.corners) {
+        for (auto & corner : marker_corners) {
+          corner.x += static_cast<float>(corner_noise_px(random));
+          corner.y += static_cast<float>(corner_noise_px(random));
+        }
+      }
+
+      const auto raw = estimateRawIppePose(noisy);
+      if (!raw.has_value()) {
+        ++invalid_raw_count;
+        continue;
+      }
+      const auto refined = estimate_planar_board_pose(
+        noisy.ids, noisy.corners, calibrations, cameraMatrix(), zeroDistortion());
+      if (!refined.has_value()) {
+        ++invalid_refined_count;
+        continue;
+      }
+
+      raw_normal_errors_deg.push_back(
+        normalErrorRad(raw->rvec, expected_rvec) * 180.0 / kPi);
+      refined_normal_errors_deg.push_back(
+        normalErrorRad(refined->rvec_camera_deck, expected_rvec) * 180.0 / kPi);
+      raw_reprojection_rmse_px.push_back(raw->reprojection_rmse_px);
+      refined_reprojection_rmse_px.push_back(refined->reprojection_rmse_px);
+      if (refined->reprojection_rmse_px > raw->reprojection_rmse_px + 1e-6) {
+        ++reprojection_worse_count;
+      }
+
+      cv::Mat refined_rotation_mat;
+      cv::Rodrigues(refined->rvec_camera_deck, refined_rotation_mat);
+      const cv::Matx33d refined_rotation(refined_rotation_mat);
+      EXPECT_LT(refined_rotation(2, 2), 0.0);
+      EXPECT_GT(refined->tvec_camera_deck[2], 0.0);
+      EXPECT_TRUE(std::isfinite(refined->reprojection_rmse_px));
+    }
+
+    ASSERT_EQ(invalid_raw_count, 0);
+    ASSERT_EQ(invalid_refined_count, 0);
+    ASSERT_EQ(raw_normal_errors_deg.size(), 500U);
+    ASSERT_EQ(refined_normal_errors_deg.size(), 500U);
+    EXPECT_EQ(reprojection_worse_count, 0);
+
+    const double raw_normal_rmse = rmse(raw_normal_errors_deg);
+    const double refined_normal_rmse = rmse(refined_normal_errors_deg);
+    const double raw_normal_p95 = p95(raw_normal_errors_deg);
+    const double refined_normal_p95 = p95(refined_normal_errors_deg);
+    std::cout << "synthetic tilt=" << tilt_deg << "deg raw normal RMSE/P95="
+              << raw_normal_rmse << "/" << raw_normal_p95
+              << "deg refined=" << refined_normal_rmse << "/" << refined_normal_p95
+              << "deg raw/refined reprojection RMS=" << rmse(raw_reprojection_rmse_px)
+              << "/" << rmse(refined_reprojection_rmse_px) << "px" << std::endl;
+    EXPECT_LT(refined_normal_rmse, 0.5 * raw_normal_rmse);
+    EXPECT_LT(refined_normal_p95, raw_normal_p95);
+    EXPECT_LT(rmse(refined_reprojection_rmse_px), rmse(raw_reprojection_rmse_px) + 1e-6);
+  }
+}
+
+TEST(PlanarBoardPose, FallsBackWhenRefinedPoseViolatesDeckNormalDirection)
+{
+  const auto calibrations = marineCalibrations();
+  SyntheticDetections detections{
+    {4, 5, 6, 7},
+    {
+      {{669.7396F, 89.3006F}, {212.6208F, 336.5889F}, {489.9025F, 493.8973F},
+        {424.1419F, 621.1867F}},
+      {{1026.4141F, 505.2187F}, {742.0280F, 463.3254F}, {370.9999F, 663.2423F},
+        {599.4517F, 407.2244F}},
+      {{643.9877F, 60.4481F}, {428.1008F, 72.7182F}, {681.9301F, 236.9781F},
+        {467.0085F, 251.3473F}},
+      {{693.6324F, 400.5563F}, {775.4152F, 539.3513F}, {852.1837F, 519.0226F},
+        {541.5914F, 485.0388F}},
+    }};
+
+  const auto raw = estimateRawIppePose(detections);
+  ASSERT_TRUE(raw.has_value());
+  ASSERT_GT(raw->reprojection_rmse_px, 600.0);
+
+  cv::Vec3d refined_rvec = raw->rvec;
+  cv::Vec3d refined_tvec = raw->tvec;
+  cv::solvePnPRefineLM(
+    allObjectPoints(calibrations), flattenCorners(detections),
+    cameraMatrix(), zeroDistortion(), refined_rvec, refined_tvec);
+  cv::Mat invalid_refined_rotation_mat;
+  cv::Rodrigues(refined_rvec, invalid_refined_rotation_mat);
+  ASSERT_GT(cv::Matx33d(invalid_refined_rotation_mat)(2, 2), 0.0);
+
+  const auto pose = estimate_planar_board_pose(
+    detections.ids, detections.corners, calibrations,
+    cameraMatrix(), zeroDistortion(), std::nullopt, 1000.0);
+  ASSERT_TRUE(pose.has_value());
+  EXPECT_NEAR(pose->reprojection_rmse_px, raw->reprojection_rmse_px, 1e-3);
+  EXPECT_LT(cv::norm(pose->tvec_camera_deck - raw->tvec), 1e-6);
+  EXPECT_LT(rotationErrorRad(pose->rvec_camera_deck, raw->rvec), 1e-6);
 }
 
 TEST(PlanarBoardPose, SingleMarkerFallbackReturnsUnifiedDeckCenter)

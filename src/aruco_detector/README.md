@@ -219,7 +219,7 @@ ROS_LOG_DIR=/tmp/ros_logs ros2 topic echo /aruco/pose
 
 legacy/default 继续把 ID0/4/5/6 作为 frozen 非共面目标，保留历史 primary-Marker 触发和 `SOLVEPNP_ITERATIVE` 路径。
 
-Marine 则使用独立的 ID4/5/6/7 共面 Board：四个 `0.50 m` Marker 平贴在 `deck_landing_up` 的 `(±0.78,±0.78,0.002) m`，rpy 全为零。Board 估计器不再依赖 `active_marker_id`；本帧只要有至少两个有效 Board Marker，就把全部可见角点送入 `solvePnPGeneric(..., SOLVEPNP_IPPE)`。真实标定平面保留 `z=0.002 m`，仅在 OpenCV IPPE 内部临时平移到 `z=0` 后再把结果变换回 deck origin。
+Marine 则使用独立的 ID4/5/6/7 共面 Board：四个 `0.50 m` Marker 平贴在 `deck_landing_up` 的 `(±0.78,±0.78,0.002) m`，rpy 全为零。Board 估计器不再依赖 `active_marker_id`；本帧只要有至少两个有效 Board Marker，就把全部可见角点送入 `solvePnPGeneric(..., SOLVEPNP_IPPE)` 生成并消歧平面候选，再以已选合法 IPPE pose 为初值对同一帧全部可见 Board corners 执行 `solvePnPRefineLM`。refined pose 只有重新通过有限性、全部点正深度、deck normal 方向、既有 reprojection hard gate 且 RMSE 不变差时才采用，否则回退原 IPPE pose。真实标定平面保留 `z=0.002 m`，仅在 OpenCV IPPE 内部临时平移到 `z=0` 后再把结果变换回 deck origin。
 
 Marine 路由为：`>=2` 个 Board Marker → `PLANAR_BOARD_MULTI`；恰好 `1` 个 → 单 Marker PnP 后用已知 `T_marker_deck` 转为统一 deck center (`FAR_SINGLE`)；没有远距 Marker → 原有 ID0/1/2/3 `MarkerSelector` (`NEAR_SINGLE`)；全部无效 → `NONE`。MarkerSelector 的 entry threshold、hold hysteresis、border margin、stable challenger 和 missing grace 没有重写。
 

@@ -161,12 +161,15 @@ python3 scripts/run_deck_motion_shadow_experiments.py \
   --output results/deck_motion_shadow_planar_marine_local7m_<date>
 ```
 
-2026-08-13 冻结结果位于
+2026-08-13 IPPE-only 冻结结果位于
 `results/deck_motion_shadow_planar_marine_local7m_20260813`：安全门 `12/12`、Planar
-Board 门 `9/12`、完整 shadow 硬门 `0/12`。3 个 static seed 均仅因当前法向
-`RMSE/P95` 超过 `1.0°/1.5°` 而未通过 Board 门；不进入 Future Twist 调参。
-命令中的 `7.0 m` 是本地高度目标，12 轮实际相对高度总体覆盖 `5.262–6.186 m`，
-不得将它表述为与旧矩阵严格等高的非劣效比较。
+Board 门 `9/12`、完整 shadow 硬门 `0/12`，作为 static 法向修复前基准保留。
+2026-08-15 RefineLM 后固定复验位于
+`results/deck_motion_shadow_planar_marine_refinelm_local7m_20260815`：安全门 `12/12`、
+Planar Board 门 `12/12`、完整 shadow 硬门仍为 `0/12`。后续新运行仍必须使用新目录，
+不得覆盖任一正式 Bag。当前下一阶段只做 Future Twist causal diagnosis，不回调 Board
+hard gate、SUBPIX 或 shadow current-pose filter。命令中的 `7.0 m` 是本地高度目标，
+不是相机到甲板的直接距离；不同正式矩阵不得未经证据声明严格等高非劣效。
 
 单 Bag 重新评测：
 
@@ -180,9 +183,9 @@ Marine Planar Board Bag 单独重评测时增加模式参数：
 
 ```bash
 python3 scripts/evaluate_deck_motion_shadow.py \
-  results/deck_motion_shadow_planar_marine_local7m_20260813/static_s1/bag \
+  results/deck_motion_shadow_planar_marine_refinelm_local7m_20260815/static_s1/bag \
   --planar-board \
-  --output results/deck_motion_shadow_planar_marine_local7m_20260813/static_s1/evaluation.json
+  --output results/deck_motion_shadow_planar_marine_refinelm_local7m_20260815/static_s1/evaluation.json
 ```
 
 `rendezvous_altitude_m` 是 PX4 local NED 原点上的高度目标，不是相机到甲板的直接距离；实际相对高度由 evaluator 报告。只有约 `5 m` 正式结果失败且证据明确指向视觉分辨率时，才以本地高度 `5.0 m` 运行同 seed 的约 `3 m` 无下降诊断：

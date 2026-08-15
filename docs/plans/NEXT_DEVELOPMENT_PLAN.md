@@ -1,48 +1,101 @@
-# 下一步计划：定位 Planar Board static 法向误差
+# 下一步计划：Future Twist causal diagnosis
 
-## 当前阻塞
+## 当前已冻结事实
 
-Marine Planar Board 正式 4×3 的安全门已通过 `12/12`，但 Board 门仅 `9/12`。
-失败严格集中在 `static seed 1/2/3` 的当前法向：
+Marine Planar Board static 法向根因已经完成修复与正式验收。固定
+`static/rollpitch/combined/rigid_body_motion × seed 1/2/3`、固定门限与 safe-altitude
+安全边界下，2026-08-15 RefineLM 复验达到：
 
 ```text
-RMSE = 1.186–1.421°  > 1.0°
-P95  = 2.010–2.455°  > 1.5°
+Safety gates       = 12/12
+Planar Board gates = 12/12
+Full shadow gates  = 0/12
 ```
 
-同三轮的水平/垂直位置、覆盖、来源路由、重投影 RMSE 和 raw normal flip 均通过。
-正式 Bag 固定在 `results/deck_motion_shadow_planar_marine_local7m_20260813`，不得替换
-seed、删除失败轮次或放宽门限。
+Board 当前位姿不再是阻塞项。不得继续为了 Future Twist 调整 Board estimator、
+`CORNER_REFINE_SUBPIX`、Board hard gate 或 shadow current-pose filter。
 
-## 下一目标：离线定位 static 法向误差来源
+## 下一目标
 
-只使用现有 12 个正式 Bag，按同一套固定分析方法完成：
+只诊断 `/landing/deck_motion_shadow/trajectory` 的 `0.5 s` Future Twist 因果误差，限定为：
 
-1. 分别计算 raw Planar pose 和 shadow current pose 的法向误差，区分误差来自 detector
-   还是 shadow 滤波/时间对齐。
-2. 在 static 与 9 个动态轮次间比较法向误差与 Marker 数、图像位置、Board
-   reprojection RMSE、pose source、相机—甲板距离和观测时序的关系。
-3. 检查 IPPE 候选选择、角点噪声、相机标定和位姿采样时刻是否能解释 static 的稳定
-   偏差；Ground Truth 只能在 pose 输出后离线评分，禁止用于候选选择、调参输入或控制。
-4. 形成唯一可证伪的根因结论和最小修复方案。若需要新模型或算法，先补理论文档和
-   构建说明，再编码；若证据不足，明确记录缺失观测，不猜测修复。
+```text
+prediction normal
+horizontal velocity
+vertical velocity
+angular velocity
+```
 
-验收标准：分析脚本或测试能够在固定 Bag 上复现 3 个 static 失败，并给出 detector、
-时间对齐和 shadow 三段的误差分解。任何修复必须使用预先固定的一套参数重新运行完整
-Marine 4×3；只有安全门与 Board 门都达到 `12/12`，才能冻结新结果。
+当前位置、当前法向、Board 路由和 Board reprojection 只作为已冻结输入质量证据，不再作为
+调参目标。
 
-## 暂缓：Future Twist 因果诊断
+## 数据与因果边界
 
-当前 `0.5 s` 预测法向、水平速度、垂直速度、角速度门分别为
-`0/12`、`0/12`、`3/12`、`0/12`。在 Board 门达到 `12/12` 前不分析或调优这些项，
-也不修改控制器。
+优先使用已经生成且安全门通过的固定 Marine 正式 Bag：
 
-Board 验收完成后，另行使用严格因果回放：时刻 `t` 的输出只能读取 `t` 及以前的
-ArUco、PX4 速度和估计器历史，Ground Truth 只在输出后评分。若跨 seed 固定参数仍
-失败，再评审甲板 IMU 或船舶 GNSS velocity 等最小附加观测；未经新计划不实现。
+```text
+results/deck_motion_shadow_planar_marine_refinelm_local7m_20260815
+```
+
+时刻 `t` 的任何回放估计只能读取 `t` 及以前实际可在线获得的：
+
+- ArUco/Planar Board pose 与时间戳；
+- PX4 UAV pose/velocity 与已建立的时间映射；
+- deck-motion estimator 自身历史状态；
+- 当前配置中的 prediction horizon 与采样周期。
+
+Ground Truth 只能在 Future Twist 已经生成后离线评分。禁止读取未来 Ground Truth、
+`MotionProfile` phase、scenario 名或仿真器内部未来轨迹来生成/修正预测。
+
+## 诊断顺序
+
+1. **先分离 current-state 与 extrapolation error**：证明 `t` 时刻 current pose/twist 的误差
+   与 `t+0.5 s` prediction error 各占多少，避免把未来外推失败误判为 Board current-pose
+   问题。
+2. **时间基准检查**：核对 image stamp、PX4 mapped time、estimator update time、trajectory
+   header time 和 `0.5 s` target time；量化 sample gap、age 与 horizon 实际偏差。
+3. **四个目标通道分别评分**：normal、horizontal velocity、vertical velocity、angular
+   velocity 不共享一个模糊总分；按 episode 与 scenario 输出 RMSE/P95/max 和失败帧比例。
+4. **检查因果运动学模型**：对比现有 estimator 的速度/角速度估计、有限差分/拟合窗口和
+   0.5 s 外推公式，定位误差来自 current twist 估计、加速度假设还是时间对齐。
+5. **按场景做可证伪对照**：static、rollpitch、combined、rigid-body 必须使用同一算法和
+   固定参数；不允许为单场景建立 phase-aware 分支。
+6. **只在证据支持后提出最小修复**：若需要改模型，先补理论与构建说明，再写 regression，
+   最后修改共享 estimator/predictor 根因位置。
+
+## 第一轮禁止项
+
+在因果回放给出明确根因前，不允许：
+
+- 调 Planar Board detector 或 RefineLM；
+- 放宽 Future Twist hard gate；
+- 为不同 scenario/seed 设不同参数；
+- 使用未来 Ground Truth 或已知 motion profile phase；
+- 开启动态姿态下降、真实接触、`NAV_LAND`、自动 Disarm；
+- 引入 NMPC、波浪船舶动力学或新的控制器调参。
+
+## 输出与验收
+
+第一轮必须形成可复现离线诊断，至少输出：
+
+```text
+per episode + aggregate
+current vs 0.5 s prediction error decomposition
+prediction normal RMSE/P95
+horizontal velocity RMSE/P95
+vertical velocity RMSE/P95
+angular velocity RMSE/P95
+actual prediction horizon/time-alignment statistics
+scenario comparison
+root-cause evidence
+next minimal falsifiable experiment
+```
+
+若仅靠现有 Bag 不能确认某一因素，必须明确记录缺失观测，不得通过换 seed 或调阈值
+制造结论。只有根因有足够证据支持后，才能进入对应最小模型修复和新的固定 4×3 复验。
 
 ## 安全边界
 
-本计划不开放动态姿态下降、真实接触、NMPC、`NAV_LAND`、自动 Disarm、波浪驱动
-船体动力学或 Ground Truth 控制输入。GUI 外观检查等待有显示环境时补做，不阻塞离线
-根因分析。
+本计划仍只允许 Marine safe-altitude GNSS rendezvous、视觉跟踪与 deck-motion shadow。
+relative descent、final descent、dynamic deck contact、terminal-contact stabilization、
+`NAV_LAND` 和 automatic disarm 继续禁止。Ground Truth 继续只用于离线评分。

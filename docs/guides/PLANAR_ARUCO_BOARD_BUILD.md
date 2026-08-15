@@ -96,6 +96,12 @@ invalid result    : NONE / visible=false
 
 Planar Board 使用上一帧有效视觉 pose 作为 IPPE 候选消歧先验；不读取 Ground Truth。
 
+### 5.1 Planar orientation refinement
+
+根因诊断确认近正视共面观测的法向敏感性后，可在 IPPE 完成候选选择后调用一次 `cv::solvePnPRefineLM`。它只使用当前帧已有的 Board 角点、CameraInfo K/D 和已选 IPPE 位姿；不能使用场景信息、Ground Truth 或未来状态。
+
+精化结果必须再次通过有限性、正深度、甲板法向方向和既有重投影阈值检查。只有重投影 RMSE 不比原候选差时才采用精化结果，否则保留原 IPPE 解。现有 `CORNER_REFINE_SUBPIX` 保持不变，也不修改 MarkerSelector、Board 阈值或 shadow 参数。单元测试需覆盖近正视亚像素扰动收益和倾斜姿态下的稳定性。
+
 ## 6. 构建
 
 ```bash
@@ -272,5 +278,69 @@ Bag 全部保留，未替换 seed、删除失败轮次或调整 detector/shadow 
 - `rendezvous_altitude=7.0 m` 产生的实际相对高度总体为 `5.262–6.186 m`，不能与
   旧非共面 Board 矩阵声明严格等高非劣效。
 
-因此 Board 正式验证尚未达到 `12/12`。下一步只定位 static 法向误差来源，不调
-Future Twist 或控制器；GUI 外观检查仍为 `GUI visual verification pending`。
+因此该 2026-08-13 结果作为 **IPPE-only 修复前基准** 保留；它没有达到 Board `12/12`，
+后续只据此定位 static 法向根因，没有调 Future Twist、shadow 或控制器。
+
+## 13. 2026-08-15 RefineLM 修复与正式复验
+
+固定历史 Bag 的 A/B/C 离线分解与 tilt-bin 诊断见
+[`PLANAR_BOARD_ORIENTATION_DIAGNOSIS.md`](../reference/PLANAR_BOARD_ORIENTATION_DIAGNOSIS.md)。
+证据支持 near-fronto-parallel 共面 Board orientation poor-conditioning 后，按本文第 5.1 节
+实现最小修复：IPPE 完成合法候选选择后，以该 pose 为初值，对同一帧全部可见 Board
+corners 调用 `solvePnPRefineLM`。refined pose 只有在 finite、全部点正深度、deck normal
+方向正确、既有 reprojection gate 通过且 RMSE 不比原 IPPE 差时才采用；否则回退原解。
+
+固定 synthetic regression 使用 Marine ID4/5/6/7 几何、`distance=5.5 m`、
+`Gaussian σ=0.45 px`、固定 seed、每个倾角 500 trials：
+
+```text
+tilt    raw IPPE normal RMSE/P95    IPPE+LM normal RMSE/P95
+0°      3.338° / 4.862°             0.484° / 0.831°
+0.5°    2.970° / 4.300°             0.490° / 0.862°
+2°      2.350° / 3.741°             0.499° / 0.820°
+5°      1.285° / 2.197°             0.463° / 0.821°
+```
+
+同时用固定恶劣 corners 验证：当 LM 收敛到 deck normal 方向非法的 refined pose 时，
+production estimator 保留原合法 IPPE pose。
+
+全仓普通测试为：
+
+```text
+391 tests, 0 errors, 0 failures, 0 skipped
+```
+
+原 389 项全部保留，新增 2 个 Planar Board C++ regression。
+
+随后重新运行 Marine safe-altitude smoke：
+
+```text
+static seed1:    current normal RMSE/P95 = 0.176° / 0.361°
+rollpitch seed1: current normal RMSE/P95 = 0.149° / 0.249°
+```
+
+两轮 Safety/Planar Board gate 均通过，且 descent/contact/penetration/`NAV_LAND`/
+Disarm/nonfinite 均为 0，touchdown confirmation 与 terminal stabilization 均未发生。
+
+固定正式新结果位于：
+
+```text
+results/deck_motion_shadow_planar_marine_refinelm_local7m_20260815
+```
+
+没有覆盖 2026-08-13 历史结果，也没有换 seed、删轮次或放宽门限。仍固定运行
+`static/rollpitch/combined/rigid_body_motion × seed 1/2/3`，结果为：
+
+- Safety gates `12/12`。
+- Planar Board gates `12/12`。
+- 完整 shadow/Future Twist hard gates `0/12`，本阶段不要求通过且未调参。
+- static seed1/2/3 current-normal `RMSE/P95` 从
+  `1.186°/2.010°`、`1.421°/2.455°`、`1.284°/2.303°` 降为
+  `0.151°/0.291°`、`0.134°/0.252°`、`0.145°/0.288°`。
+- 9 个动态 episode current-normal RMSE 为 `0.148–0.249°`、P95 为
+  `0.247–0.449°`。
+- 全矩阵观察到 2/3/4 Marker；14 个 single-marker frame 全部路由到 `FAR_SINGLE`。
+
+因此 Planar Board static 法向任务已经在固定 seed、固定 gate、固定安全边界下达到
+`12/12`，下一任务切换为 Future Twist causal diagnosis。GUI 外观检查仍为
+`GUI visual verification pending`，不影响本次 headless 算法验收。

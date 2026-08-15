@@ -22,6 +22,7 @@ namespace
 constexpr double kGeometryTolerance = 1e-6;
 constexpr double kMinimumDepthM = 1e-6;
 constexpr double kMinimumFacingNormalZ = 1e-6;
+constexpr double kRefinementReprojectionTolerancePx = 1e-6;
 
 bool finite(double value)
 {
@@ -434,10 +435,53 @@ std::optional<PlanarBoardPose> estimate_planar_board_pose(
       [](const PoseCandidate & lhs, const PoseCandidate & rhs) {
         return lhs.score < rhs.score;
       });
+
+    cv::Vec3d selected_rvec = best->rvec;
+    cv::Vec3d selected_tvec = best->tvec;
+    double selected_rmse = best->rmse_px;
+
+    // IPPE 继续负责平面双解与时间连续性消歧；LM 只用同一帧全部 Board corners
+    // 对已选合法候选做重投影精化。任何异常、物理约束失效或 RMSE 变差都保留原 IPPE。
+    try {
+      cv::Vec3d refined_rvec = selected_rvec;
+      cv::Vec3d refined_tvec = selected_tvec;
+      cv::solvePnPRefineLM(
+        object_points, image_points, camera_matrix, distortion_coefficients,
+        refined_rvec, refined_tvec);
+
+      cv::Mat refined_rotation_matrix;
+      cv::Rodrigues(refined_rvec, refined_rotation_matrix);
+      cv::Mat refined_rotation_64f;
+      refined_rotation_matrix.convertTo(refined_rotation_64f, CV_64F);
+      const cv::Matx33d refined_rotation_camera_deck(
+        refined_rotation_64f.at<double>(0, 0), refined_rotation_64f.at<double>(0, 1),
+        refined_rotation_64f.at<double>(0, 2), refined_rotation_64f.at<double>(1, 0),
+        refined_rotation_64f.at<double>(1, 1), refined_rotation_64f.at<double>(1, 2),
+        refined_rotation_64f.at<double>(2, 0), refined_rotation_64f.at<double>(2, 1),
+        refined_rotation_64f.at<double>(2, 2));
+      const double refined_rmse = reprojectionRmse(
+        object_points, image_points, refined_rvec, refined_tvec,
+        camera_matrix, distortion_coefficients);
+
+      if (finitePose(refined_rvec, refined_tvec) &&
+        allObjectPointsInFront(
+          object_points, refined_rotation_camera_deck, refined_tvec) &&
+        deckNormalFacesCamera(refined_rotation_camera_deck) && finite(refined_rmse) &&
+        refined_rmse <= max_reprojection_rmse_px &&
+        refined_rmse <= selected_rmse + kRefinementReprojectionTolerancePx)
+      {
+        selected_rvec = refined_rvec;
+        selected_tvec = refined_tvec;
+        selected_rmse = refined_rmse;
+      }
+    } catch (const cv::Exception &) {
+      // 原 IPPE 候选已经通过全部 hard checks；refinement 失败不能把有效观测变成无效。
+    }
+
     return PlanarBoardPose{
-      best->rvec,
-      best->tvec,
-      best->rmse_px,
+      selected_rvec,
+      selected_tvec,
+      selected_rmse,
       marker_count,
       use_previous ? "RMSE_AND_TEMPORAL_CONTINUITY" : "RMSE"};
   } catch (const cv::Exception &) {

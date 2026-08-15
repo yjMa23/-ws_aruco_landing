@@ -52,9 +52,10 @@ terminal contact stabilization: disabled
 当前 state 位姿使用 `uav_centered_ned`，trajectory 使用每条消息冻结的
 `uav_origin_ned`；两者的 twist 均为甲板自身 NED twist。旧非共面 Board 的约
 `5 m` 正式矩阵为安全隔离 `12/12`、冻结全性能硬门 `2/12`。Marine Planar
-Board 的 `rendezvous-altitude=7.0` 正式矩阵为安全门 `12/12`、Board 门 `9/12`、
-全性能硬门 `0/12`；3 个 static seed 均未通过当前法向门。Shadow 仍仅用于诊断，
-不授权 NMPC 或动态姿态下降。
+Board RefineLM 的 `rendezvous-altitude=7.0` 固定 4×3 正式复验为安全门 `12/12`、
+Board 门 `12/12`、全性能硬门 `0/12`；static current-normal 已通过冻结的
+`1.0° RMSE / 1.5° P95` 门。Shadow 仍仅用于诊断，当前下一任务只做 Future Twist
+causal diagnosis，不授权 NMPC 或动态姿态下降。
 
 ## 主要状态
 

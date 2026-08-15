@@ -55,7 +55,10 @@ std::size_t count_valid_board_markers(
  * 函数允许 object points 严格共面，至少需要两个有效 Board Marker。使用
  * `cv::solvePnPGeneric(..., cv::SOLVEPNP_IPPE)` 获取平面双解，再按有限性、全部点
  * 正深度、deck +z 法向朝向相机、重投影 RMSE 和可选上一帧视觉位姿连续性消歧。
- * Ground Truth、运动模型相位和未来轨迹均不参与。
+ * 选出合法最佳 IPPE 候选后，使用同一帧全部可见 Board corners 和该候选初值执行
+ * `cv::solvePnPRefineLM`；精化结果只有在重新通过物理约束、既有重投影 hard gate 且
+ * RMSE 不变差时才采用，否则安全回退到原 IPPE 候选。Ground Truth、运动模型相位和
+ * 未来轨迹均不参与。
  *
  * @param detected_ids 本帧 ArUco ID。
  * @param detected_corners 与 ID 对应的左上、右上、右下、左下四角点。

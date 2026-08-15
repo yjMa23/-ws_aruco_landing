@@ -39,6 +39,12 @@ from evaluate_horizontal_tracking import (  # noqa: E402
     local_enu_to_wgs84,
     world_enu_to_local_ned,
 )
+from analyze_planar_board_orientation import (  # noqa: E402
+    GeometryFrame,
+    aggregate_results,
+    pearson_correlation,
+    tilt_bin_label,
+)
 
 
 class DeckMotionShadowTests(unittest.TestCase):
@@ -112,6 +118,71 @@ class DeckMotionShadowTests(unittest.TestCase):
     def test_empty_metric_summary_is_strict_json(self) -> None:
         encoded = json.dumps(summary([]), allow_nan=False)
         self.assertEqual(json.loads(encoded), {"count": 0, "rmse": None, "p95": None, "max": None})
+
+    def test_planar_orientation_analyzer_uses_frozen_tilt_bins(self) -> None:
+        self.assertEqual(tilt_bin_label(0.0), "0-0.5 deg")
+        self.assertEqual(tilt_bin_label(0.4999), "0-0.5 deg")
+        self.assertEqual(tilt_bin_label(0.5), "0.5-1 deg")
+        self.assertEqual(tilt_bin_label(1.0), "1-2 deg")
+        self.assertEqual(tilt_bin_label(2.0), "2-3 deg")
+        self.assertEqual(tilt_bin_label(3.0), ">3 deg")
+        self.assertIsNone(tilt_bin_label(-0.1))
+
+    def test_planar_orientation_analyzer_reports_rollpitch_only_bins(self) -> None:
+        metric_keys = (
+            "raw_gt_attitude_normal_rmse_deg",
+            "raw_gt_attitude_normal_p95_deg",
+            "marker_pose_ned_normal_rmse_deg",
+            "marker_pose_ned_normal_p95_deg",
+            "shadow_normal_rmse_deg",
+            "shadow_normal_p95_deg",
+        )
+
+        def episode(name: str, value: float) -> dict[str, object]:
+            return {
+                "episode": name,
+                "normal_error_decomposition": {key: value for key in metric_keys},
+            }
+
+        frames = [
+            GeometryFrame(
+                episode="static_s1", scenario="static", true_tilt_deg=0.0,
+                estimated_tilt_deg=1.0, raw_gt_attitude_normal_error_deg=2.0,
+                marker_pose_ned_normal_error_deg=2.1, camera_to_board_distance_m=5.5,
+                board_center_x_normalized=0.0, board_center_y_normalized=0.0,
+                board_center_radius_normalized=0.0, marker_count=4,
+                reprojection_rmse_px=0.6,
+            ),
+            GeometryFrame(
+                episode="rollpitch_s1", scenario="rollpitch", true_tilt_deg=0.25,
+                estimated_tilt_deg=1.0, raw_gt_attitude_normal_error_deg=1.8,
+                marker_pose_ned_normal_error_deg=1.9, camera_to_board_distance_m=5.5,
+                board_center_x_normalized=0.0, board_center_y_normalized=0.0,
+                board_center_radius_normalized=0.0, marker_count=4,
+                reprojection_rmse_px=0.5,
+            ),
+            GeometryFrame(
+                episode="rollpitch_s1", scenario="rollpitch", true_tilt_deg=4.0,
+                estimated_tilt_deg=4.2, raw_gt_attitude_normal_error_deg=0.7,
+                marker_pose_ned_normal_error_deg=0.8, camera_to_board_distance_m=5.5,
+                board_center_x_normalized=0.0, board_center_y_normalized=0.0,
+                board_center_radius_normalized=0.0, marker_count=4,
+                reprojection_rmse_px=0.3,
+            ),
+        ]
+        aggregate = aggregate_results(
+            [episode("static_s1", 2.0), episode("rollpitch_s1", 1.0)], frames
+        )
+        rollpitch_bins = aggregate["rollpitch_only_tilt_bins_raw_gt_attitude"]
+        self.assertEqual(rollpitch_bins["0-0.5 deg"]["count"], 1)
+        self.assertEqual(rollpitch_bins[">3 deg"]["count"], 1)
+        self.assertAlmostEqual(rollpitch_bins["0-0.5 deg"]["rmse"], 1.8)
+        self.assertAlmostEqual(rollpitch_bins[">3 deg"]["rmse"], 0.7)
+
+    def test_planar_orientation_analyzer_pearson_correlation(self) -> None:
+        self.assertAlmostEqual(pearson_correlation([0.0, 1.0, 2.0], [3.0, 2.0, 1.0]), -1.0)
+        self.assertIsNone(pearson_correlation([1.0], [2.0]))
+        self.assertIsNone(pearson_correlation([1.0, 1.0], [2.0, 3.0]))
 
     def test_planar_diagnostic_frames_pair_by_publish_order_and_time(self) -> None:
         frames, unpaired = pair_planar_diagnostics(
