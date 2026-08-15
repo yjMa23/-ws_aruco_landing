@@ -11,6 +11,8 @@
 - [VRX WAM-V 集成契约](reference/VRX_WAMV_INTEGRATION.md)
 - [Marine 共面 ArUco Board 位姿模型](reference/PLANAR_ARUCO_BOARD.md)
 - [Marine Planar Board 法向误差诊断](reference/PLANAR_BOARD_ORIENTATION_DIAGNOSIS.md)
+- [Future Twist 因果误差诊断](reference/FUTURE_TWIST_CAUSAL_DIAGNOSIS.md)
+- [Future Twist estimator-confidence replay](reference/FUTURE_TWIST_ESTIMATOR_CONFIDENCE.md)
 - [ArUco 检测公式](reference/aruco_detector_formulas.md)
 - [安装、启动、实验和排障](guides/OPERATIONS.md)
 - [Marine scene 构建与验证](guides/MARINE_SCENE_BUILD.md)

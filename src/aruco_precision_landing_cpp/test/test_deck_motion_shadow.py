@@ -57,6 +57,18 @@ from analyze_future_twist_causality import (  # noqa: E402
     nearest_state_sample_time,
     time_semantics,
 )
+from replay_deck_motion_estimator import (  # noqa: E402
+    ArucoRecord,
+    ReplayPrediction,
+    TrajectoryOrigin,
+    accepted_sample_schedule,
+    bag_to_ros_time,
+    clamp_aruco_event_time,
+    compare_replay,
+    latest_landing_state,
+    match_accepted_aruco,
+    parse_replay_output,
+)
 
 
 class DeckMotionShadowTests(unittest.TestCase):
@@ -201,6 +213,68 @@ class DeckMotionShadowTests(unittest.TestCase):
         self.assertAlmostEqual(
             grouped["rollpitch"]["linear"]["horizontal"]["components"]["final_future_error"]["p95"],
             0.2,
+        )
+
+    def test_estimator_replay_accepted_schedule_keeps_only_state_stamp_changes(self) -> None:
+        self.assertEqual(
+            accepted_sample_schedule([0, 10, 10, 20, 20, 35]),
+            [10, 20, 35],
+        )
+
+    def test_estimator_replay_matches_accepted_stamp_to_causal_aruco(self) -> None:
+        records = [
+            ArucoRecord(1.0, 100, (0.0, 0.0, 1.0), (1.0, 0.0, 0.0, 0.0)),
+            ArucoRecord(1.1, 200, (0.0, 0.0, 1.0), (1.0, 0.0, 0.0, 0.0)),
+        ]
+        matched = match_accepted_aruco([100, 200], records)
+        self.assertEqual([record.sample_stamp_ns for record in matched], [100, 200])
+        with self.assertRaises(RuntimeError):
+            match_accepted_aruco([150], records)
+
+    def test_estimator_replay_clamps_aruco_before_first_reflecting_control_tick(self) -> None:
+        zero = (0.0, 0.0, 0.0)
+        trajectories = [
+            TrajectoryOrigin(0, 10.0, 1.0, 0.9, zero, zero, zero, zero),
+            TrajectoryOrigin(1, 10.05, 1.05, 1.0, zero, zero, zero, zero),
+        ]
+        self.assertLess(clamp_aruco_event_time(10.06, 1, trajectories), 10.05)
+        self.assertGreater(clamp_aruco_event_time(9.99, 1, trajectories), 10.0)
+        with self.assertRaises(ValueError):
+            clamp_aruco_event_time(10.0, 2, trajectories)
+
+    def test_estimator_replay_bag_to_ros_mapping_uses_robust_epoch_offset(self) -> None:
+        anchors = [(100.001, 10.0), (101.003, 11.0), (102.002, 12.0)]
+        # Offsets are 90.001, 90.003, 90.002 s; median is exactly 90.002 s.
+        self.assertAlmostEqual(bag_to_ros_time(101.502, anchors), 11.5)
+
+    def test_estimator_replay_parses_origin_and_rejects_missing_prediction(self) -> None:
+        line = "P\t4\t1\t1.0\t1\t2\t3\t4\t5\t6\t7\t8\t9\t10\t11\t12\nP\t5\t0\n"
+        predictions, updates = parse_replay_output(line)
+        self.assertEqual(updates, [])
+        self.assertTrue(predictions[4].valid)
+        self.assertEqual(predictions[4].linear_velocity, (1.0, 2.0, 3.0))
+        self.assertEqual(predictions[4].angular_acceleration, (10.0, 11.0, 12.0))
+        self.assertFalse(predictions[5].valid)
+
+    def test_estimator_replay_equivalence_fails_closed_on_origin_mismatch(self) -> None:
+        zero = (0.0, 0.0, 0.0)
+        production = [TrajectoryOrigin(0, 10.0, 1.0, 0.9, zero, zero, zero, zero)]
+        replay = {
+            0: ReplayPrediction(
+                0, True, 0.9, (0.01, 0.0, 0.0), zero, zero, zero
+            )
+        }
+        metrics, frames = compare_replay(production, replay)
+        self.assertEqual(len(frames), 1)
+        self.assertFalse(metrics["strict_equivalence_pass"])
+        self.assertAlmostEqual(metrics["linear_velocity_vector_error_mps"]["max"], 0.01)
+        exact = {0: ReplayPrediction(0, True, 0.9, zero, zero, zero, zero)}
+        exact_metrics, _ = compare_replay(production, exact)
+        self.assertTrue(exact_metrics["strict_equivalence_pass"])
+        self.assertIsNone(latest_landing_state([], 1.0))
+        self.assertEqual(
+            latest_landing_state([(1.0, "ACQUIRE_ARUCO"), (2.0, "TRACK_TARGET")], 1.5),
+            "ACQUIRE_ARUCO",
         )
 
     def test_future_twist_empty_and_nonfinite_metrics_are_strict_json(self) -> None:

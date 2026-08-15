@@ -63,6 +63,13 @@ add_executable(
 )
 target_compile_features(px4_aruco_landing_node PUBLIC cxx_std_17)
 target_link_libraries(px4_aruco_landing_node aruco_landing_math)
+
+add_executable(
+  deck_motion_estimator_replay
+  src/deck_motion_estimator_replay.cpp
+)
+target_compile_features(deck_motion_estimator_replay PUBLIC cxx_std_17)
+target_link_libraries(deck_motion_estimator_replay aruco_landing_math)
 target_include_directories(
   px4_aruco_landing_node
   PUBLIC
@@ -89,7 +96,7 @@ install(
 )
 
 install(
-  TARGETS px4_aruco_landing_node
+  TARGETS px4_aruco_landing_node deck_motion_estimator_replay
   DESTINATION lib/${PROJECT_NAME}
 )
 

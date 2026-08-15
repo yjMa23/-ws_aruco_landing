@@ -50,7 +50,7 @@ Marine 的独立 `aruco_marine_vessel.sdf` 已切换到 `vrx_wamv_landing`。wor
 
 marine 中同一 `MotionProfile` 驱动与官方 `wamv/base_link` 对齐的 canonical `vessel_body`，neutral reference 为 world z≈0.2 m；固定 `T_vessel_deck` 使用 `r_VD=[0,0,1.8] m`、`R_V_D=I`，把 raw vessel state 转为 landing deck center，neutral deck center 仍为 z≈2.0 m。`rigid_body_kinematics` 显式加入 `R(ω×r)` lever-arm 线速度，因此 roll/pitch 同时改变 deck orientation 与 deck-center position/velocity。`/simulation/deck/ground_truth_raw` 在 marine 表示 vessel raw state，最终 `/simulation/deck/ground_truth` 仍表示 deck center。
 
-WAM-V / ocean 单模型通过 `gz sdf -k`，完整 marine world 在 `gz sdf -k` 中会触发 sdformat CLI 缺少 `model://` find callback 的已知限制；实际 `gz sim` server smoke 已成功解析 include，加载 `vrx::WaveVisual`、`vrx_wamv_landing` 的 VelocityControl / OdometryPublisher，并正确读取 CWR `amplitude=0.06 m`、`period=4.0 s` 等参数，未出现 missing plugin/mesh/shader/texture。当前全仓构建与测试为 `391 tests, 0 errors, 0 failures, 0 skipped`。
+WAM-V / ocean 单模型通过 `gz sdf -k`，完整 marine world 在 `gz sdf -k` 中会触发 sdformat CLI 缺少 `model://` find callback 的已知限制；实际 `gz sim` server smoke 已成功解析 include，加载 `vrx::WaveVisual`、`vrx_wamv_landing` 的 VelocityControl / OdometryPublisher，并正确读取 CWR `amplitude=0.06 m`、`period=4.0 s` 等参数，未出现 missing plugin/mesh/shader/texture。当前全仓构建与测试为 `392 tests, 0 errors, 0 failures, 0 skipped`。
 
 Marine Planar Board 初版 IPPE-only 改造后的 2026-08-11 headless smoke 与 2026-08-13 正式矩阵保留为修复前证据；它们确认 static current-normal 跨 seed 持续失败，并用于后续离线根因诊断。2026-08-15 在保持同一 Board geometry、SUBPIX、候选连续性权重、shadow 参数与 hard gate 不变的前提下，detector 在合法最佳 IPPE 候选之后加入全可见 Board corners 的 `solvePnPRefineLM`，并在 refined pose 非有限、点落到相机后方、deck normal 翻面、超过既有 reprojection gate 或 RMSE 变差时安全回退原 IPPE pose。修复后的 `static seed1` 与 `rollpitch seed1` headless smoke 均完成 GNSS rendezvous、Planar Board 捕获并达到 `WAIT_LANDING_WINDOW`；两轮 Safety/Planar Board gate 均通过，static current-normal 为 `0.176°/0.361° RMSE/P95`，rollpitch 为 `0.149°/0.249°`，且 descent/contact/penetration/`NAV_LAND`/Disarm/nonfinite 均为 0、`touchdown_confirmed=false`、terminal stabilization 未应用。Future Twist/0.5 s 完整 shadow hard gate 仍失败，不属于本次修复验收。当前 shell 的 `DISPLAY` 与 `WAYLAND_DISPLAY` 都为空，所以 ID4/5/6/7 实际 GUI 视觉布置仍标记为 `GUI visual verification pending`。
 
@@ -310,7 +310,21 @@ combined/rigid-body horizontal 又明显依赖 acceleration，因此全局永久
 `0.5 s`；translation 与 rotation 共享 failure mechanism，但 acceleration 分别来自 quadratic
 fit 与 SO(3) error-state，不应先假设共享同一参数修复。完整证据见
 [`FUTURE_TWIST_CAUSAL_DIAGNOSIS.md`](FUTURE_TWIST_CAUSAL_DIAGNOSIS.md)。本轮未修改 production
-estimator，也未运行新的 SITL；下一任务是固定 Bag 的 offline estimator-confidence replay。
+estimator，也未运行新的 SITL。
+
+随后对同一固定 12 Bag 实现 production-math offline replay：C++ harness 直接复用
+`DeckMotionEstimator`、`VehiclePoseHistory` 与 `transform_marker_to_uav_centered_ned()`，Python 只做
+Bag 读取、causal event 编排和 origin equivalence 评分。全部 `7464/7464` trajectory origin
+均可配对，sample time 全矩阵精确一致；但 linear velocity/acceleration 的 worst-episode P95
+仍为约 `0.0193 m/s / 0.0715 m/s²`，angular velocity/angular acceleration 为约
+`0.00217 / 0.00310 rad/s`，未达到预注册 `1e-6` P95 equivalence gate。固定 Bag 还证明
+20 Hz shadow state header 不能完整编码 30 Hz estimator update history；补回 visual-state 中间
+ArUco 后，剩余分叉主要来自 Bag 未记录 `vehicle_odometry_callback()` 内部 ROS receipt time，
+该量进入 PX4→ROS filtered clock offset 和 `VehiclePoseHistory` 插值。统一毫秒级 timing shift
+能显著降低四类 replay error，但不能达到冻结门，因此没有合法放宽 tolerance，也没有读取/
+解释 covariance 或进行 GT confidence correlation。详见
+[`FUTURE_TWIST_ESTIMATOR_CONFIDENCE.md`](FUTURE_TWIST_ESTIMATOR_CONFIDENCE.md)。当前下一任务改为
+先补齐 replay timing provenance，再重新进入 covariance confidence 验证。
 
 因此 Planar Board static 法向根因与最小修复已经完成正式验收；当前仍保持 Future Twist
 为唯一阻塞任务，而不是继续修改 Board、下降控制或动态接触。
@@ -331,7 +345,7 @@ estimator，也未运行新的 SITL；下一任务是固定 Bag 的 offline esti
 - 静止、水平匀速和升沉相对下降及真实接触。
 - 四状态相对 MPC 的安全高度、下降、接触与规则式回退。
 - 固定正 `+2° roll/pitch` 的终端接触稳定化和 10 秒保持。
-- 全工作区当前实现记录为 `391 tests, 0 errors, 0 failures, 0 skipped`；旧非共面 Board 相对 shadow 正式 12 轮的安全隔离为 `12/12`、全性能硬门为 `2/12`。Marine Planar Board RefineLM 正式 4×3 为安全门 `12/12`、Board 门 `12/12`、完整 shadow 硬门 `0/12`；Board static 法向任务已完成，Future Twist 第一轮 causal diagnosis 也已完成，当前下一任务是固定 Bag 的 estimator-confidence replay。
+- 全工作区当前实现记录为 `392 tests, 0 errors, 0 failures, 0 skipped`；原冻结 `391` 项全部保留，本阶段新增 1 个 C++ replay-origin test。旧非共面 Board 相对 shadow 正式 12 轮的安全隔离为 `12/12`、全性能硬门为 `2/12`。Marine Planar Board RefineLM 正式 4×3 为安全门 `12/12`、Board 门 `12/12`、完整 shadow 硬门 `0/12`；Board static 法向与 Future Twist 第一轮 causal diagnosis 已完成，estimator-confidence replay 因 timing provenance 不足被 equivalence gate 阻塞，当前下一任务是 replay timing provenance closure。
 
 固定正倾角的成功不能外推到负倾角、动态 `rollpitch` 或 `combined`。
 

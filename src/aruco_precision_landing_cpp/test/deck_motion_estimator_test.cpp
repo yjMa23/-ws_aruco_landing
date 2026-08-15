@@ -313,6 +313,48 @@ TEST(DeckMotionEstimatorTest, ReinitializesAfterLongGapAndLimitsTrustedHorizon)
   EXPECT_FALSE(estimator.predict(4.2).has_value());
 }
 
+TEST(DeckMotionEstimatorTest, ProducesDeterministicReplayOriginAndFiniteCovariance)
+{
+  DeckMotionEstimator estimator(precise_parameters());
+  const Eigen::Vector3d initial_position{0.5, -0.25, 2.0};
+  const Eigen::Vector3d velocity{0.15, -0.08, 0.03};
+  const Eigen::Vector3d acceleration{0.04, 0.02, -0.01};
+  for (int sample = 0; sample <= 8; ++sample) {
+    const double time_s = 1.0 + 0.04 * sample;
+    const auto result = estimator.update(
+      constant_acceleration_pose(
+        time_s, initial_position, velocity, acceleration, 0.03, 0.01),
+      Eigen::Vector3d::Zero(), 3, time_s);
+    ASSERT_TRUE(
+      result.status == DeckMotionUpdateStatus::kInitialized ||
+      result.status == DeckMotionUpdateStatus::kUpdated);
+  }
+
+  const auto estimate = estimator.estimate();
+  ASSERT_TRUE(estimate.has_value());
+  const double publish_time_s = estimate->sample_time_s + 0.02;
+  const auto prediction = estimator.predict(publish_time_s);
+  ASSERT_TRUE(prediction.has_value());
+  ASSERT_FALSE(prediction->points.empty());
+  const auto & origin = prediction->points.front();
+  EXPECT_TRUE(origin.velocity_ned_mps.isApprox(
+    estimate->velocity_ned_mps + 0.02 * estimate->acceleration_ned_mps2, 1.0e-12));
+  EXPECT_TRUE(origin.angular_velocity_ned_radps.isApprox(
+    estimate->angular_velocity_ned_radps +
+    0.02 * estimate->angular_acceleration_ned_radps2, 1.0e-12));
+  EXPECT_TRUE(estimate->translation_covariance.allFinite());
+  EXPECT_TRUE(estimate->rotation_covariance.allFinite());
+
+  const Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 9, 9>>
+  translation_solver(estimate->translation_covariance);
+  const Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 9, 9>>
+  rotation_solver(estimate->rotation_covariance);
+  ASSERT_EQ(translation_solver.info(), Eigen::Success);
+  ASSERT_EQ(rotation_solver.info(), Eigen::Success);
+  EXPECT_GE(translation_solver.eigenvalues().minCoeff(), -1.0e-12);
+  EXPECT_GE(rotation_solver.eigenvalues().minCoeff(), -1.0e-12);
+}
+
 TEST(DeckMotionEstimatorTest, KeepsCovariancesFiniteAndPositiveSemidefinite)
 {
   DeckMotionEstimator estimator(precise_parameters());

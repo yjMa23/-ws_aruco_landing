@@ -1,4 +1,4 @@
-# 下一步计划：Future Twist estimator-confidence replay
+# 下一步计划：Future Twist replay timing provenance closure
 
 ## 当前已冻结事实
 
@@ -53,83 +53,86 @@ docs/reference/FUTURE_TWIST_CAUSAL_DIAGNOSIS.md
 
 因此当前根因归类为 **Case A 为主，伴随不可忽略的 current-twist baseline error**。现有证据足以定位 failure mechanism，但还不足以证明某个 production confidence law、blend 或 threshold。
 
+## estimator-confidence replay 已执行但被 equivalence gate 阻塞
+
+完整证据见：
+
+```text
+docs/reference/FUTURE_TWIST_ESTIMATOR_CONFIDENCE.md
+```
+
+固定 12 Bag 已经成功用 production C++ `DeckMotionEstimator`、`VehiclePoseHistory` 和 coordinate transform 重放到全部 `7464/7464` trajectory origin，sample-time 也达到全矩阵精确一致；但 origin 数值仍不能达到预注册 equivalence tolerance：
+
+```text
+linear velocity worst episode P95       0.019300 m/s
+linear acceleration worst episode P95   0.071471 m/s²
+angular velocity worst episode P95      0.002175 rad/s
+angular acceleration worst episode P95  0.003104 rad/s²
+```
+
+已确认两项 replay 关键事实：
+
+1. 20 Hz shadow state header 的唯一变化不能完整恢复 30 Hz estimator update history；两个 control tick 之间会有中间 ArUco sample 被 production estimator 消费。
+2. 补回所有 visual-state causal ArUco 后，剩余误差由 fixed Bag 中未记录的 `vehicle_odometry_callback()` ROS-time receipt history 主导。该 receipt time 参与 PX4→ROS filtered clock offset，并进一步决定 `VehiclePoseHistory` sample time/interpolation。
+
+统一 `+1–3 ms` receipt-time sensitivity scan 能同步显著降低 linear/angular replay error，但即使最有利 shift 仍远高于预注册 `1e-6` P95 门；因此这不是可以通过放宽 floating-point tolerance 合法忽略的 serialization 误差。
+
+按预注册停止规则，本轮没有提取/解释 covariance，没有做 Ground Truth correlation、quintile 或 tail capture，translation/rotation confidence hypothesis 均为 `NOT TESTED`。
+
 ## 当前唯一下一任务
 
-只做 **offline estimator-confidence replay**。第一目标不是让 hard gate 变成 `12/12`，而是证伪或支持：
+先做 **replay timing provenance closure**，而不是 covariance-derived confidence A/B。
 
-> estimator 自身的 acceleration uncertainty 是否能够识别会在 `0.5 s` Future Twist 中造成大尾部误差的 acceleration estimate。
+### 1. 让 estimator 真正消费的 timing/input 可观测
 
-### 1. 固定数据
-
-仍只使用现有 2026-08-15 12 Bag。禁止：
-
-- 换 seed 或重新跑更好数据；
-- 修改旧 `evaluation.json`；
-- 读取 scenario/motion phase 生成候选预测；
-- Ground Truth 进入 estimator 或 candidate generation。
-
-### 2. deterministic causal replay
-
-用 Bag 中当时在线可获得的输入重放 `DeckMotionEstimator`，首先证明 replay origin：
+只允许 shadow-only diagnostic，不改变 production estimator 或 controller。优先记录：
 
 ```text
-velocity
-acceleration
-angular velocity
-angular acceleration
-sample time
+image sample time
+relative_deck_pose_ned
+image-time uav_velocity_ned
+marker_id
+vehicle_odometry callback ROS receipt time
+VehiclePoseHistory mapped odometry sample time
 ```
 
-与已发布 shadow trajectory 的 `time_from_start=0` 一致到预先定义的数值容差。
+可以使用现有标准消息组合；不要为了本任务创建复杂新框架。若只需验证 clock provenance，至少必须记录 `/clock` 或等价的 callback receipt/mapped sample-time 诊断。
 
-若无法复现，不允许继续 confidence 实验，先定位 replay 数据流缺口。
+### 2. 先做最小 replay-observability smoke
 
-### 3. 只读取 estimator 自身 uncertainty
-
-replay 成功后离线记录：
+新增诊断本身不允许接入控制路径。完成 build/test 后，仅用最小：
 
 ```text
-translation fitted velocity/acceleration covariance
-rotation angular velocity/angular acceleration covariance
+static seed1
+combined 或 rigid_body_motion seed1
 ```
 
-这些量必须来自 estimator 当时内部 causal state。Ground Truth 仍只能在记录完成后评分。
+验证新记录能否让 offline production replay 达到冻结 equivalence gate。这个阶段的目的只是证明 replay input 完整，不评 Future Twist hard gate，不调 estimator 参数。
 
-### 4. 单一可证伪问题
+### 3. equivalence 通过后再决定正式数据
 
-分别对 translation 与 rotation 检查：
+若最小 smoke replay 可以达到：
 
 ```text
-estimator acceleration uncertainty
-vs
-h * acceleration estimation error
-vs
-final Future Twist error
+coverage >= 99%
+sample time max <= 1e-6 s
+state vector P95 <= 1e-6
+state vector max <= 1e-5
 ```
 
-输出 episode / scenario / global 的 correlation、分位 bins 和 tail capture ratio。
+再冻结一套 replay-observable 正式 Marine 4×3 数据；不得把 2026-08-15 缺失 timing provenance 的旧 Bag 当成 covariance ground truth replay。
 
-不得直接调：
+只有新正式数据的 replay equivalence 先通过，才恢复上一轮尚未执行的：
 
 ```text
-kinematic_fit_window_s
-linear/angular jerk std
-measurement noise
-process noise
+covariance extraction
+→ uncertainty vs acceleration-error correlation
+→ equal-count quintiles
+→ tail capture
+→ Confidence-Supported / Confidence-Rejected decision
 ```
 
-### 5. 决策规则
-
-如果 estimator uncertainty 对 acceleration-error tail 有稳定单调关系，下一阶段才允许预注册一个 covariance-derived causal confidence law，并在固定 12 Bag 上离线 A/B。
-
-如果没有稳定关系，则拒绝“现有 covariance 足以做 confidence gating”假设，随后分开诊断：
-
-```text
-translation: quadratic-fit derivative quality
-rotation: SO(3) angular acceleration state quality
-```
-
-不得为了获得改善引入 scenario-specific threshold。
+不得先实现 confidence law，也不得用 scenario-specific threshold。
 
 ## production 与安全边界
 

@@ -54,8 +54,10 @@ terminal contact stabilization: disabled
 `5 m` 正式矩阵为安全隔离 `12/12`、冻结全性能硬门 `2/12`。Marine Planar
 Board RefineLM 的 `rendezvous-altitude=7.0` 固定 4×3 正式复验为安全门 `12/12`、
 Board 门 `12/12`、全性能硬门 `0/12`；static current-normal 已通过冻结的
-`1.0° RMSE / 1.5° P95` 门。Shadow 仍仅用于诊断，当前下一任务只做 Future Twist
-causal diagnosis，不授权 NMPC 或动态姿态下降。
+`1.0° RMSE / 1.5° P95` 门。Shadow 仍仅用于诊断。Future Twist causal diagnosis 已完成；
+固定 Bag 的 production-math estimator replay 可覆盖全部 origin，但因缺失 odometry callback
+ROS receipt-time provenance 未通过冻结 equivalence gate，所以 covariance confidence 尚未评分，
+也不授权 NMPC 或动态姿态下降。
 
 ## 主要状态
 
@@ -94,6 +96,8 @@ python3 scripts/evaluate_relative_descent.py bags/<bag>
 python3 scripts/evaluate_final_descent_touchdown.py bags/<bag>
 python3 scripts/evaluate_tilted_deck.py bags/<bag> --scenario tilt_roll_pos_2deg
 python3 scripts/evaluate_deck_motion_shadow.py bags/<bag>
+python3 scripts/replay_deck_motion_estimator.py \
+  --matrix-dir results/deck_motion_shadow_planar_marine_refinelm_local7m_20260815
 ```
 
 完整架构、参数语义和安全边界见：

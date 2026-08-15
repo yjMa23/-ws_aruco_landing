@@ -167,8 +167,9 @@ Board 门 `9/12`、完整 shadow 硬门 `0/12`，作为 static 法向修复前�
 2026-08-15 RefineLM 后固定复验位于
 `results/deck_motion_shadow_planar_marine_refinelm_local7m_20260815`：安全门 `12/12`、
 Planar Board 门 `12/12`、完整 shadow 硬门仍为 `0/12`。后续新运行仍必须使用新目录，
-不得覆盖任一正式 Bag。当前下一阶段只做 Future Twist causal diagnosis，不回调 Board
-hard gate、SUBPIX 或 shadow current-pose filter。命令中的 `7.0 m` 是本地高度目标，
+不得覆盖任一正式 Bag。Future Twist causal diagnosis 已完成；固定 Bag production-math replay
+因缺失 odometry callback ROS receipt-time provenance 未通过 equivalence gate。当前先补 replay
+timing provenance，不回调 Board hard gate、SUBPIX 或 shadow current-pose filter。命令中的 `7.0 m` 是本地高度目标，
 不是相机到甲板的直接距离；不同正式矩阵不得未经证据声明严格等高非劣效。
 
 单 Bag 重新评测：
@@ -198,6 +199,18 @@ python3 scripts/evaluate_deck_motion_shadow.py \
 `3 m` 不替代 `5 m` 失败。当前相对方案在 `5 m` 的当前位姿和未来位置门已
 `12/12` 通过，失败集中在未来 twist，因此没有触发新的 `3 m` 分辨率对照。
 不要修改 `deck_motion_shadow.*` 门限后重跑正式 Bag。
+
+固定 12 Bag 的 estimator replay 可运行：
+
+```bash
+python3 scripts/replay_deck_motion_estimator.py \
+  --matrix-dir results/deck_motion_shadow_planar_marine_refinelm_local7m_20260815
+```
+
+该脚本直接调用 C++ `deck_motion_estimator_replay`，复用 production `DeckMotionEstimator`、
+`VehiclePoseHistory` 和 coordinate transform。当前固定 Bag 预期会因 replay equivalence 未通过而
+返回非零；这是 fail-closed，不应通过放宽 tolerance 或读取 covariance 绕过。完整诊断见
+[`FUTURE_TWIST_ESTIMATOR_CONFIDENCE.md`](../reference/FUTURE_TWIST_ESTIMATOR_CONFIDENCE.md)。
 
 ## 4. 跟踪模式
 
